@@ -29,7 +29,7 @@
   - keep `data:`, `blob:`, and relative/local image sources renderable
   - covered by unit tests so the V1 privacy toggle has a real architecture exit
 - URL fetch is browser CORS-only, credentialless, and no-referrer. There is no server proxy.
-- `public/_headers` provides the Cloudflare Pages CSP/referrer baseline.
+- `public/_headers` provides the Cloudflare Workers Static Assets CSP/referrer baseline.
 
 ## Customization Architecture Baseline
 
