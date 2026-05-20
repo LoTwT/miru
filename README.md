@@ -27,6 +27,7 @@ Deferred to V1+: in-app customization UI, presets, edit mode, multi-tab, collabo
 
 - Product requirements: [`docs/product/product-spec-v0.3.md`](docs/product/product-spec-v0.3.md)
 - UX design: [`docs/ux/design-v0.3.md`](docs/ux/design-v0.3.md)
+- Cloudflare Pages deploy runbook: [`docs/ops/cloudflare-pages-deploy.md`](docs/ops/cloudflare-pages-deploy.md)
 
 ## Tech (V0)
 
@@ -34,4 +35,4 @@ TypeScript · Vite · markdown-it · Shiki · DOMPurify · Fontsource (Newsreade
 
 ## Status
 
-Pre-scaffold. v0.3 specs locked; genesis docs landing first, then repo scaffold.
+V0 scaffold and typography pass are on `main`. Remaining V0 work: reading-state affordance decision, release-readiness evidence, R-PERF-1 mobile reading validation, and Cloudflare Pages deployment wiring.
