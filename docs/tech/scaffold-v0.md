@@ -43,7 +43,7 @@
 ## Component Map
 
 - `App.vue`: app shell, document state orchestration, global paste/drop events, theme/font bootstrap.
-- `InputToolbar.vue`: paste/open-file/URL/sample input affordances. Props down, events up.
+- `FloatingInputMenu.vue`: bottom-right FAB, paste/open-file/URL/clear menu, scroll opacity decay, scroll-to-top brand affordance. Props down, events up.
 - `ReaderSurface.vue`: sanitized reading HTML display. Receives `TrustedHtml`; does not render raw markdown.
 - `useDocumentInput.ts`: input side effects and error state.
 - `useRenderedMarkdown.ts`: async markdown rendering state; lazy-loads the markdown renderer so Shiki is kept out of the initial shell.

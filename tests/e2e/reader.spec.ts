@@ -4,6 +4,7 @@ test('renders the sample document and supports paste input', async ({ page }) =>
   await page.goto('/')
 
   await expect(page.getByRole('heading', { name: 'miru' })).toBeVisible()
+  await expect(page.getByTestId('floating-affordance-button')).toBeVisible()
 
   await page.evaluate(() => {
     const event = new ClipboardEvent('paste', {
@@ -17,6 +18,48 @@ test('renders the sample document and supports paste input', async ({ page }) =>
 
   await expect(page.getByRole('heading', { name: 'Pasted doc' })).toBeVisible()
   await expect(page.getByText('Hello miru.')).toBeVisible()
+})
+
+test('exposes document input through the floating affordance', async ({ page }) => {
+  await page.goto('/')
+
+  const affordance = page.getByTestId('floating-affordance')
+  const button = page.getByTestId('floating-affordance-button')
+
+  await button.click()
+  await expect(page.getByTestId('floating-affordance-menu')).toBeVisible()
+  await expect(page.getByRole('button', { name: /粘贴/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /打开文件/ })).toBeVisible()
+  await expect(page.getByLabel('URL')).toBeVisible()
+  await expect(page.getByRole('button', { name: /清空/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /粘贴/ })).toBeFocused()
+
+  await page.keyboard.press('ArrowDown')
+  await expect(page.getByRole('button', { name: /打开文件/ })).toBeFocused()
+
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('floating-affordance-menu')).not.toBeVisible()
+  await expect(button).toBeFocused()
+
+  await button.click()
+  await expect(page.getByRole('button', { name: /粘贴/ })).toBeFocused()
+  await page.mouse.click(24, 24)
+  await expect(page.getByTestId('floating-affordance-menu')).not.toBeVisible()
+  await expect(button).toBeFocused()
+
+  await button.click()
+  await expect(page.getByRole('button', { name: /粘贴/ })).toBeFocused()
+  await button.click()
+  await expect(page.getByTestId('floating-affordance-menu')).not.toBeVisible()
+  await expect(button).toBeFocused()
+
+  await button.evaluate(element => (element as HTMLElement).blur())
+  await page.mouse.move(20, 20)
+  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
+  await expect.poll(async () => Number.parseFloat(await affordance.evaluate(element => getComputedStyle(element).opacity))).toBeLessThan(0.5)
+
+  await page.evaluate(() => window.scrollTo(0, 360))
+  await expect(page.getByTestId('scroll-top-button')).toBeVisible()
 })
 
 test('follows OS color scheme changes for reading and code surfaces', async ({ page }) => {
