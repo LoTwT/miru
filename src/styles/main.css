@@ -178,7 +178,7 @@ a:focus-visible {
 
 .reader-surface__content .task-list-item {
   display: grid;
-  grid-template-columns: 1.1rem minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr);
   column-gap: 0.58rem;
   align-items: baseline;
 }
@@ -198,17 +198,17 @@ a:focus-visible {
 }
 
 .reader-surface__content .task-list-item-checkbox:checked {
-  border-color: color-mix(in srgb, var(--reading-accent) 68%, var(--reading-rule));
-  background: color-mix(in srgb, var(--reading-accent) 14%, var(--reading-bg));
+  border-color: var(--reading-accent);
+  background: color-mix(in srgb, var(--reading-accent) 18%, var(--reading-bg));
 }
 
 .reader-surface__content .task-list-item-checkbox:checked::before {
   content: "";
-  inline-size: 0.48rem;
-  block-size: 0.28rem;
+  inline-size: 0.5rem;
+  block-size: 0.3rem;
   border: solid currentColor;
-  border-width: 0 0 2px 2px;
-  transform: rotate(-45deg) translate(0.02rem, -0.03rem);
+  border-width: 0 0 2.4px 2.4px;
+  transform: rotate(-45deg) translate(0.03rem, -0.04rem);
 }
 
 .reader-surface__content .task-list-item-checkbox:disabled {
