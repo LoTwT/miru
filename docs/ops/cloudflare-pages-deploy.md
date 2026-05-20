@@ -13,6 +13,7 @@ miru is a static Vite SPA with no backend, Pages Functions, or server-side rende
 | Install command | `pnpm install --frozen-lockfile` |
 | Build command | `pnpm run build` |
 | Build output directory | `dist` |
+| Deploy command | **leave blank** |
 | Static headers source | `public/_headers` |
 | Static headers artifact | `dist/_headers` |
 
@@ -54,10 +55,12 @@ Use this path once lo-user connects the Cloudflare Pages project to GitHub.
    | Production branch | `main` |
    | Build command | `pnpm run build` |
    | Build output directory | `dist` |
+   | Deploy command | leave blank / unset |
    | Environment variable | `PNPM_VERSION=10.25.0` |
 
-3. Keep preview deployments enabled for pull request branches if Cloudflare comments are useful for QA/UX screenshot review.
-4. After the first successful deploy, record the production URL in this runbook or the release issue/task.
+3. Do **not** configure `npx wrangler deploy` as a deploy command. Git-integrated Pages deploys the `dist` output automatically after a successful build; `wrangler deploy` is the Workers/Static Assets path and can trigger unrelated Workers setup.
+4. Keep preview deployments enabled for pull request branches if Cloudflare comments are useful for QA/UX screenshot review.
+5. After the first successful deploy, record the production URL in this runbook or the release issue/task.
 
 ## Option B: Wrangler Direct Upload
 
@@ -68,6 +71,8 @@ Prerequisites:
 - Cloudflare Pages project exists, or the deploy command is allowed to create one interactively.
 - Operator is authenticated with Wrangler (`wrangler login`) or has CI secrets configured.
 - Build output is already present in `dist`.
+
+Important: the Pages direct-upload command is `wrangler pages deploy dist`, not `wrangler deploy`. `wrangler deploy` deploys a Worker and requires a Workers assets configuration; it is not the Git-integrated Pages deploy command.
 
 Manual production deploy:
 
