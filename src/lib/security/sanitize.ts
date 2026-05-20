@@ -10,6 +10,17 @@ const htmlConfig: Config = {
   ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|data|blob):|[./#]|\/|[^a-z])/i,
 }
 
+DOMPurify.addHook('uponSanitizeAttribute', (node, data) => {
+  if (
+    node.tagName === 'INPUT'
+    && data.attrName === 'type'
+    && data.attrValue === 'checkbox'
+    && node.classList.contains('task-list-item-checkbox')
+  ) {
+    data.forceKeepAttr = true
+  }
+})
+
 export function toTrustedHtml(value: string): TrustedHtml {
   return {
     value: String(DOMPurify.sanitize(value, htmlConfig)),

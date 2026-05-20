@@ -204,7 +204,8 @@ a:focus-visible {
 
 .reader-surface__content .task-list-item-checkbox:checked {
   border-color: var(--reading-accent);
-  background: color-mix(in srgb, var(--reading-accent) 18%, var(--reading-bg));
+  background: var(--reading-accent);
+  color: var(--reading-bg);
 }
 
 .reader-surface__content .task-list-item-checkbox:checked::before {

@@ -81,4 +81,18 @@ describe('markdown renderer security baseline', () => {
     expect(html.value).toContain('data-src="https://example.com/diagram.png"')
     expect(html.value).toContain('远程图片待加载')
   })
+
+  it('keeps task-list checkboxes as disabled checkbox inputs', async () => {
+    const html = await renderMarkdown('- [x] Done\n- [ ] Todo')
+    const document = new DOMParser().parseFromString(html.value, 'text/html')
+    const inputs = Array.from(document.querySelectorAll<HTMLInputElement>('.task-list-item-checkbox'))
+
+    expect(inputs).toHaveLength(2)
+    expect(inputs[0].type).toBe('checkbox')
+    expect(inputs[0].checked).toBe(true)
+    expect(inputs[0].disabled).toBe(true)
+    expect(inputs[1].type).toBe('checkbox')
+    expect(inputs[1].checked).toBe(false)
+    expect(inputs[1].disabled).toBe(true)
+  })
 })
