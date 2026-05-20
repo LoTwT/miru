@@ -248,7 +248,7 @@ UX-owned interaction/visual criteria that @QA validates. (Mirrors req §5; this 
 **Resolved during implementation (2026-05-20):**
 - OQ-UX1 default Shiki code theme pairing = `github-light` / `github-dark`.
 - OQ-UX2 user-cleared empty state = return to sample.
-- V0 input affordance = product §2.1 floating immersive affordance (lo-user chose B): bottom-right FAB + menu + scroll opacity + brand scroll-to-top. Top-chrome action toolbar is retired; top chrome keeps only the non-sticky brand mark.
+- V0 input affordance = product §2.1 floating immersive affordance (lo-user chose B): bottom-right FAB + menu + scroll opacity + brand scroll-to-top. Top-chrome action toolbar is retired; top chrome keeps only the non-sticky brand mark. **Implemented** in PR #6 (`28c0388`, merged 2026-05-20) and live on `miru.ayingott.me`; §4.3 describes the shipped behavior.
 
 **Deferred → V1+ (req §4):** in-app customization UI / preset switcher / 5-dial customization / line-height & spacing dials / accent picker / user-uploaded fonts / custom syntax colors / URL-fragment share / edit mode / multi-tab / collaboration / cloud sync / AI assist / PWA-offline / KaTeX / mermaid / **bare-URL-paste auto-fetch** (see §5 — V0 paste always renders as markdown; URL fetch via explicit URL field only).
 
