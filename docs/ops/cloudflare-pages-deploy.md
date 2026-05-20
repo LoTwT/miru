@@ -135,7 +135,7 @@ Verify:
   - `referrer-policy: no-referrer`
   - `x-content-type-options: nosniff`
 - Refreshing a deep SPA URL returns the app shell (`200`) rather than a blank page.
-- A missing static asset still returns a real `404`, not the app shell.
+- Missing asset paths return the app shell (`200`) under Workers Static Assets SPA fallback. This is the selected V0 behavior; miru does not add a Worker script just to special-case static-asset `404`s.
 - First paint shows the self-dogfood sample doc.
 - Four input paths still work on the deployed URL: paste, drag-drop, open-file, URL fetch.
 - CORS-blocked URL fetch shows the graceful inline error and fallback copy.
@@ -159,7 +159,7 @@ For the V0 release gate, attach or link:
 - Build transcript for the local release smoke.
 - Deploy transcript or Cloudflare deployment/version ID.
 - Header evidence (`curl -I` output).
-- SPA fallback and missing-asset evidence.
+- SPA fallback and missing-asset SPA-fallback evidence.
 - Browser screenshots or trace for desktop/mobile and light/dark.
 - R-PERF-1 mobile 1k/3k markdown reading evidence.
 - Known non-blocking risks, including the Shiki lazy renderer chunk monitor item.
