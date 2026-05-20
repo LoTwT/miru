@@ -1,0 +1,53 @@
+import { computed, readonly, shallowRef, watch } from 'vue'
+
+import type { RemoteImageMode, TrustedHtml } from '@/types/reader'
+
+interface UseRenderedMarkdownOptions {
+  markdown: () => string
+  remoteImageMode: () => RemoteImageMode
+}
+
+export function useRenderedMarkdown(options: UseRenderedMarkdownOptions) {
+  const html = shallowRef<TrustedHtml>({ value: '' } as TrustedHtml)
+  const isRendering = shallowRef(false)
+  const error = shallowRef<string | null>(null)
+  const colorScheme = computed(() => getColorScheme())
+
+  watch(
+    () => [options.markdown(), options.remoteImageMode(), colorScheme.value] as const,
+    async ([markdown, remoteImageMode]) => {
+      isRendering.value = true
+      error.value = null
+
+      try {
+        const { renderMarkdown } = await import('@/lib/markdown/renderer')
+
+        html.value = await renderMarkdown(markdown, {
+          colorScheme: colorScheme.value,
+          remoteImageMode,
+        })
+      }
+      catch {
+        error.value = '渲染 markdown 时出错。'
+      }
+      finally {
+        isRendering.value = false
+      }
+    },
+    { immediate: true },
+  )
+
+  return {
+    html: readonly(html),
+    isRendering: readonly(isRendering),
+    error: readonly(error),
+  }
+}
+
+function getColorScheme(): 'light' | 'dark' {
+  if (typeof window === 'undefined') {
+    return 'light'
+  }
+
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
