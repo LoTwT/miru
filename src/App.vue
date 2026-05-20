@@ -66,12 +66,24 @@ async function onDocumentLoaded(source: ReaderDocument['source']): Promise<void>
 }
 
 function onPaste(event: ClipboardEvent): void {
+  if (isEditablePasteTarget(event.target)) {
+    return
+  }
+
   const text = event.clipboardData?.getData('text/plain')
 
   if (text?.trim()) {
     event.preventDefault()
     loadFromText(text, 'paste', 'Pasted markdown')
   }
+}
+
+function isEditablePasteTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) {
+    return false
+  }
+
+  return target.closest('input, textarea, [contenteditable]:not([contenteditable="false"])') !== null
 }
 
 function onDragOver(event: DragEvent): void {
