@@ -7,7 +7,7 @@ import sampleMarkdown from '@/content/sample.md?raw'
 import { useDocumentInput } from '@/features/input/useDocumentInput'
 import { useRenderedMarkdown } from '@/features/reader/useRenderedMarkdown'
 import { loadDefaultReadingFonts } from '@/lib/theme/fonts'
-import { applyPersistedReadingSettings, applyReadingTheme, darkReadingTheme, defaultReadingTheme, readPersistedReadingSettings } from '@/lib/theme/tokens'
+import { applyPersistedReadingSettings, readPersistedReadingSettings } from '@/lib/theme/tokens'
 import type { ReaderDocument, RemoteImageMode } from '@/types/reader'
 
 const documentState = reactive<ReaderDocument>({
@@ -36,7 +36,6 @@ const status = computed(() => rendered.error.value ?? error.value?.detail ?? '')
 
 onMounted(async () => {
   await loadDefaultReadingFonts()
-  applyReadingTheme(window.matchMedia('(prefers-color-scheme: dark)').matches ? darkReadingTheme : defaultReadingTheme)
   applyPersistedReadingSettings(persistedSettings)
 })
 

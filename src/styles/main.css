@@ -4,6 +4,26 @@
 
 :root {
   color-scheme: light dark;
+  --reading-bg: #fbf8f1;
+  --reading-fg: #24211d;
+  --reading-fg-muted: #6f685f;
+  --reading-link: #275f71;
+  --reading-link-hover: #1d4f60;
+  --reading-accent: #9d5f34;
+  --reading-rule: #ded3c4;
+  --reading-code-fg: #24211d;
+  --reading-code-bg: #f0eadf;
+  --reading-measure: 65ch;
+  --reading-font-size: 18px;
+  --reading-line-height: 1.7;
+  --reading-font-body: Newsreader, Georgia, serif;
+  --reading-font-heading: Newsreader, Georgia, serif;
+  --reading-font-mono: "Space Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --reading-paragraph-gap: 1.12em;
+  --reading-scale-h1: 3.6rem;
+  --reading-scale-h2: 2.2rem;
+  --reading-scale-h3: 1.35rem;
+  --reading-scale-h4: 1.125rem;
   background: var(--reading-bg);
   color: var(--reading-fg);
   font-family: system-ui, sans-serif;

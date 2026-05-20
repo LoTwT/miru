@@ -15,8 +15,9 @@ import githubDark from 'shiki/themes/github-dark.mjs'
 import githubLight from 'shiki/themes/github-light.mjs'
 
 import { toTrustedHtml } from '@/lib/security/sanitize'
-import { isSafeImageUrl, isSafeLinkUrl } from '@/lib/security/urlPolicy'
+import { isRemoteImageUrl, isSafeImageUrl, isSafeLinkUrl } from '@/lib/security/urlPolicy'
 import type { RemoteImageMode, TrustedHtml } from '@/types/reader'
+import type Token from 'markdown-it/lib/token.mjs'
 
 interface RenderMarkdownOptions {
   colorScheme?: 'light' | 'dark'
@@ -42,22 +43,33 @@ const md = MarkdownIt({
     permalink: anchor.permalink.headerLink(),
   })
 
-md.validateLink = isSafeLinkUrl
+md.validateLink = (url) => isSafeLinkUrl(url) || isSafeImageUrl(url)
 
 const defaultLinkOpen = md.renderer.rules.link_open
 md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
   const href = tokens[idx]?.attrGet('href')
 
   if (!href || !isSafeLinkUrl(href)) {
+    env.miruBlockedLinkCloseCount = (env.miruBlockedLinkCloseCount ?? 0) + 1
     return ''
   }
 
-  if (/^https?:/i.test(href)) {
+  if (/^(?:https?:)?\/\//i.test(href)) {
     tokens[idx]?.attrSet('target', '_blank')
     tokens[idx]?.attrSet('rel', 'noopener noreferrer')
   }
 
   return defaultLinkOpen?.(tokens, idx, options, env, self) ?? self.renderToken(tokens, idx, options)
+}
+
+const defaultLinkClose = md.renderer.rules.link_close
+md.renderer.rules.link_close = (tokens, idx, options, env, self) => {
+  if (env.miruBlockedLinkCloseCount > 0) {
+    env.miruBlockedLinkCloseCount -= 1
+    return ''
+  }
+
+  return defaultLinkClose?.(tokens, idx, options, env, self) ?? self.renderToken(tokens, idx, options)
 }
 
 md.renderer.rules.image = (tokens, idx) => {
@@ -72,12 +84,13 @@ md.renderer.rules.image = (tokens, idx) => {
 
   const escapedSrc = md.utils.escapeHtml(src)
   const escapedAlt = md.utils.escapeHtml(alt)
+  const isRemoteImage = isRemoteImageUrl(src)
 
-  if (mode === 'block') {
+  if (mode === 'block' && isRemoteImage) {
     return `<span class="markdown-image-placeholder" role="note">远程图片已屏蔽：<a href="${escapedSrc}" target="_blank" rel="noopener noreferrer">${escapedAlt || escapedSrc}</a></span>`
   }
 
-  if (mode === 'prompt') {
+  if (mode === 'prompt' && isRemoteImage) {
     return `<span class="markdown-image-placeholder" role="note" data-src="${escapedSrc}">远程图片待加载：${escapedAlt || escapedSrc}</span>`
   }
 
@@ -109,11 +122,7 @@ export async function renderMarkdown(markdown: string, options: RenderMarkdownOp
     highlightedFences.set(index, html)
   }))
 
-  tokens.forEach((token) => {
-    if (token.type === 'image') {
-      token.meta = { ...token.meta, remoteImageMode }
-    }
-  })
+  applyRemoteImageMode(tokens, remoteImageMode)
 
   const defaultFence = md.renderer.rules.fence
   md.renderer.rules.fence = (renderTokens, idx, renderOptions, env, self) => {
@@ -139,4 +148,16 @@ function normalizeLanguage(info: string): string {
   }
 
   return 'text'
+}
+
+function applyRemoteImageMode(tokens: Token[], remoteImageMode: RemoteImageMode): void {
+  for (const token of tokens) {
+    if (token.type === 'image') {
+      token.meta = { ...token.meta, remoteImageMode }
+    }
+
+    if (token.children) {
+      applyRemoteImageMode(token.children, remoteImageMode)
+    }
+  }
 }

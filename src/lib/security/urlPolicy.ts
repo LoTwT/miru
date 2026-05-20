@@ -9,7 +9,11 @@ export function getUrlProtocol(value: string): string | 'relative' | 'invalid' {
     return 'invalid'
   }
 
-  if (trimmed.startsWith('#') || trimmed.startsWith('/') || trimmed.startsWith('./') || trimmed.startsWith('../')) {
+  if (trimmed.startsWith('//')) {
+    return 'https:'
+  }
+
+  if (trimmed.startsWith('#') || !/^[a-z][a-z\d+.-]*:/i.test(trimmed)) {
     return 'relative'
   }
 
@@ -51,4 +55,8 @@ export function isSafeImageUrl(value: string): boolean {
   }
 
   return allowedRemoteProtocols.has(protocol) || allowedLocalProtocols.has(protocol)
+}
+
+export function isRemoteImageUrl(value: string): boolean {
+  return allowedRemoteProtocols.has(getUrlProtocol(value))
 }

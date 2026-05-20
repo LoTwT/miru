@@ -24,12 +24,18 @@
   - `loading="lazy"`
   - `decoding="async"`
   - strict scheme allowlist
+- Future `prompt` / `block` remote-image modes are renderer-real, not UI-only placeholders:
+  - apply only to remote `http(s)` image sources
+  - keep `data:`, `blob:`, and relative/local image sources renderable
+  - covered by unit tests so the V1 privacy toggle has a real architecture exit
 - URL fetch is browser CORS-only, credentialless, and no-referrer. There is no server proxy.
 - `public/_headers` provides the Cloudflare Pages CSP/referrer baseline.
 
 ## Customization Architecture Baseline
 
 - `src/lib/theme/tokens.ts` defines the V0 theme registry, runtime CSS variable mutation API, and localStorage read-path schema.
+- Default light/dark reading tokens live in CSS media queries to keep OS switching native and flash-free.
+- Runtime token APIs are override-only in V0; persisted overrides replay on top of CSS defaults rather than rewriting the base theme.
 - `src/lib/theme/fonts.ts` implements lazy font loading from `@ayingott/theme/fonts.css`.
 - `src/App.vue` includes the V1 settings drawer mount comment.
 - V0 has no settings UI; the API surface is present for V1.
