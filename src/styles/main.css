@@ -115,6 +115,10 @@ a:focus-visible {
   background: transparent;
 }
 
+.reader-surface__content .shiki {
+  background: var(--reading-code-bg) !important;
+}
+
 .reader-surface__content img {
   display: block;
   max-width: 100%;
@@ -175,6 +179,11 @@ a:focus-visible {
     --reading-rule: #3b352f;
     --reading-code-fg: #ebe4d7;
     --reading-code-bg: #22201e;
+  }
+
+  .reader-surface__content .shiki,
+  .reader-surface__content .shiki span {
+    color: var(--shiki-dark) !important;
   }
 }
 

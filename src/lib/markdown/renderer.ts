@@ -23,11 +23,6 @@ interface RenderMarkdownOptions {
   remoteImageMode?: RemoteImageMode
 }
 
-const codeThemeByScheme = {
-  light: 'github-light',
-  dark: 'github-dark',
-} as const
-
 const highlighterPromise = createHighlighterCore({
   engine: createJavaScriptRegexEngine(),
   themes: [githubLight, githubDark],
@@ -102,10 +97,13 @@ export async function renderMarkdown(markdown: string, options: RenderMarkdownOp
     }
 
     const language = normalizeLanguage(token.info)
-    const theme = codeThemeByScheme[colorScheme]
     const html = highlighter.codeToHtml(token.content, {
       lang: language,
-      theme,
+      themes: {
+        light: 'github-light',
+        dark: 'github-dark',
+      },
+      defaultColor: 'light',
     })
 
     highlightedFences.set(index, html)
