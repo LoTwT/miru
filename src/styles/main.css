@@ -177,14 +177,19 @@ a:focus-visible {
 }
 
 .reader-surface__content .task-list-item {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  column-gap: 0.58rem;
+  display: block;
+}
+
+.reader-surface__content .task-list-item > label {
+  display: inline-flex;
+  gap: 0.58rem;
   align-items: baseline;
+  max-inline-size: 100%;
 }
 
 .reader-surface__content .task-list-item-checkbox {
   appearance: none;
+  flex: 0 0 auto;
   display: grid;
   place-content: center;
   inline-size: 0.95rem;
