@@ -93,6 +93,10 @@ a:focus-visible {
   margin: var(--reading-paragraph-gap) 0;
 }
 
+.reader-surface__content li + li {
+  margin-block-start: 0.28em;
+}
+
 .reader-surface__content p {
   text-wrap: pretty;
 }
@@ -168,12 +172,47 @@ a:focus-visible {
 }
 
 .reader-surface__content .contains-task-list {
-  padding-left: 1.2rem;
+  padding-inline-start: 0;
   list-style: none;
 }
 
+.reader-surface__content .task-list-item {
+  display: grid;
+  grid-template-columns: 1.1rem minmax(0, 1fr);
+  column-gap: 0.58rem;
+  align-items: baseline;
+}
+
 .reader-surface__content .task-list-item-checkbox {
-  margin-right: 0.5rem;
+  appearance: none;
+  display: grid;
+  place-content: center;
+  inline-size: 0.95rem;
+  block-size: 0.95rem;
+  margin: 0.16em 0 0;
+  border: 1.5px solid var(--reading-rule);
+  border-radius: 0.22rem;
+  background: var(--reading-bg);
+  color: var(--reading-accent);
+  cursor: default;
+}
+
+.reader-surface__content .task-list-item-checkbox:checked {
+  border-color: color-mix(in srgb, var(--reading-accent) 68%, var(--reading-rule));
+  background: color-mix(in srgb, var(--reading-accent) 14%, var(--reading-bg));
+}
+
+.reader-surface__content .task-list-item-checkbox:checked::before {
+  content: "";
+  inline-size: 0.48rem;
+  block-size: 0.28rem;
+  border: solid currentColor;
+  border-width: 0 0 2px 2px;
+  transform: rotate(-45deg) translate(0.02rem, -0.03rem);
+}
+
+.reader-surface__content .task-list-item-checkbox:disabled {
+  opacity: 1;
 }
 
 .markdown-image-placeholder {
