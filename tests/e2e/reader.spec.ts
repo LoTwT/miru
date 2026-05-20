@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test'
 
+const fetchedMarkdown = '# Remote doc\n\nLoaded from URL.'
+
 test('renders the sample document and supports paste input', async ({ page }) => {
   await page.goto('/')
 
@@ -60,6 +62,71 @@ test('exposes document input through the floating affordance', async ({ page }) 
 
   await page.evaluate(() => window.scrollTo(0, 360))
   await expect(page.getByTestId('scroll-top-button')).toBeVisible()
+})
+
+test('collapses the floating menu and focuses the reader after URL fetch success', async ({ page }) => {
+  await page.route('https://example.com/readme.md', async route => route.fulfill({
+    contentType: 'text/markdown',
+    body: fetchedMarkdown,
+  }))
+
+  await page.goto('/')
+
+  const button = page.getByTestId('floating-affordance-button')
+
+  await button.click()
+  await page.getByLabel('URL').fill('https://example.com/readme.md')
+  await page.getByRole('button', { name: '拉取' }).click()
+
+  await expect(page.getByRole('heading', { name: 'Remote doc' })).toBeVisible()
+  await expect(page.getByTestId('floating-affordance-menu')).not.toBeVisible()
+  await expect(page.locator('.reader-surface')).toBeFocused()
+
+  await button.click()
+  await expect(page.getByTestId('floating-affordance-menu')).toBeVisible()
+  await expect(page.getByRole('button', { name: /粘贴/ })).toBeFocused()
+})
+
+test('collapses the floating menu and focuses the reader after menu paste success', async ({ page }) => {
+  await page.addInitScript((markdown) => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        readText: async () => markdown,
+      },
+    })
+  }, fetchedMarkdown)
+
+  await page.goto('/')
+
+  const button = page.getByTestId('floating-affordance-button')
+
+  await button.click()
+  await page.getByRole('button', { name: /粘贴/ }).click()
+
+  await expect(page.getByRole('heading', { name: 'Remote doc' })).toBeVisible()
+  await expect(page.getByTestId('floating-affordance-menu')).not.toBeVisible()
+  await expect(page.locator('.reader-surface')).toBeFocused()
+})
+
+test('collapses the floating menu and focuses the reader after open-file success', async ({ page }) => {
+  await page.goto('/')
+
+  const button = page.getByTestId('floating-affordance-button')
+
+  await button.click()
+  const fileChooserPromise = page.waitForEvent('filechooser')
+  await page.getByRole('button', { name: /打开文件/ }).click()
+  const fileChooser = await fileChooserPromise
+  await fileChooser.setFiles({
+    name: 'remote-doc.md',
+    mimeType: 'text/markdown',
+    buffer: Buffer.from(fetchedMarkdown),
+  })
+
+  await expect(page.getByRole('heading', { name: 'Remote doc' })).toBeVisible()
+  await expect(page.getByTestId('floating-affordance-menu')).not.toBeVisible()
+  await expect(page.locator('.reader-surface')).toBeFocused()
 })
 
 test('follows OS color scheme changes for reading and code surfaces', async ({ page }) => {

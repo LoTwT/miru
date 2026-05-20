@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { useTemplateRef } from 'vue'
+
 import type { ReaderDocument, TrustedHtml } from '@/types/reader'
 
 const props = defineProps<{
@@ -6,10 +8,21 @@ const props = defineProps<{
   html: TrustedHtml
   isRendering: boolean
 }>()
+
+const articleRef = useTemplateRef<HTMLElement>('article')
+
+defineExpose({
+  focus: () => articleRef.value?.focus(),
+})
 </script>
 
 <template>
-  <article class="reader-surface" :aria-busy="props.isRendering ? 'true' : 'false'">
+  <article
+    ref="article"
+    class="reader-surface"
+    :aria-busy="props.isRendering ? 'true' : 'false'"
+    tabindex="-1"
+  >
     <p class="reader-surface__meta">
       {{ props.document.label }}
     </p>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, shallowRef, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, shallowRef, useTemplateRef, watch } from 'vue'
 
 import FloatingInputMenu from '@/components/FloatingInputMenu.vue'
 import ReaderSurface from '@/components/ReaderSurface.vue'
@@ -17,6 +17,7 @@ const documentState = reactive<ReaderDocument>({
 })
 const isDragging = shallowRef(false)
 const isInputMenuOpen = shallowRef(false)
+const readerRef = useTemplateRef<InstanceType<typeof ReaderSurface>>('reader')
 const persistedSettings = readPersistedReadingSettings()
 const remoteImageMode = shallowRef<RemoteImageMode>(persistedSettings?.remoteImageMode ?? 'auto')
 
@@ -25,6 +26,7 @@ const { error, isFetchingUrl, loadFromClipboard, loadFromFile, loadFromText, loa
     documentState.source = document.source
     documentState.label = document.label
     documentState.markdown = document.markdown
+    void onDocumentLoaded(document.source)
   },
 })
 
@@ -48,6 +50,19 @@ onMounted(async () => {
 
 function resetToSample(): void {
   loadFromText(sampleMarkdown, 'sample', 'miru sample')
+}
+
+async function onDocumentLoaded(source: ReaderDocument['source']): Promise<void> {
+  if (source === 'sample') {
+    return
+  }
+
+  if (isInputMenuOpen.value) {
+    isInputMenuOpen.value = false
+  }
+
+  await nextTick()
+  readerRef.value?.focus()
 }
 
 function onPaste(event: ClipboardEvent): void {
@@ -96,6 +111,7 @@ async function onDrop(event: DragEvent): Promise<void> {
     </header>
 
     <ReaderSurface
+      ref="reader"
       :document="documentState"
       :html="rendered.html.value"
       :is-rendering="rendered.isRendering.value"
