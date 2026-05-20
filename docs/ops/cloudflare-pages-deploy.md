@@ -17,6 +17,7 @@ miru is a static Vite SPA with no backend, Pages Functions, Worker script, or se
 | Static headers source | `public/_headers` |
 | Static headers artifact | `dist/_headers` |
 | Worker name | `miru` |
+| Canonical domain | `miru.ayingott.me` |
 | SPA fallback | `assets.not_found_handling = "single-page-application"` |
 
 The repository `wrangler.jsonc` is the source of truth for deploy configuration:
@@ -31,7 +32,13 @@ The repository `wrangler.jsonc` is the source of truth for deploy configuration:
   "assets": {
     "directory": "./dist",
     "not_found_handling": "single-page-application"
-  }
+  },
+  "routes": [
+    {
+      "pattern": "miru.ayingott.me",
+      "custom_domain": true
+    }
+  ]
 }
 ```
 
@@ -45,10 +52,10 @@ lo-user needs to provide or confirm:
 
 1. Cloudflare account/project access for the agent or a human deploy operator.
 2. Worker/project name. Default: `miru`.
-3. Production domain:
-   - default `miru.<account>.workers.dev`, or
-   - custom domain to attach after first production deploy.
+3. Production domain: `miru.ayingott.me`.
 4. Whether Cloudflare Git deploys should run automatically from `main`, or whether deploy remains manual via an authenticated operator.
+
+`ayingott.me` must be available in the same Cloudflare account as the deploy operator. The checked-in custom-domain route should provision `miru.ayingott.me` during `wrangler deploy`.
 
 ## Cloudflare Git Deploy
 
@@ -110,13 +117,13 @@ sed -n '1,120p' dist/_headers
 
 ## Post-deploy Smoke
 
-Replace `https://<DEPLOY_URL>` with the actual Workers deployment URL.
+The canonical production URL is `https://miru.ayingott.me`.
 
 ```sh
-curl -I https://<DEPLOY_URL>/
-curl -I https://<DEPLOY_URL>/assets/<known-built-asset>
-curl -I -H 'Sec-Fetch-Mode: navigate' https://<DEPLOY_URL>/reader/deep-link
-curl -I https://<DEPLOY_URL>/assets/definitely-missing.js
+curl -I https://miru.ayingott.me/
+curl -I https://miru.ayingott.me/assets/<known-built-asset>
+curl -I -H 'Sec-Fetch-Mode: navigate' https://miru.ayingott.me/reader/deep-link
+curl -I https://miru.ayingott.me/assets/definitely-missing.js
 ```
 
 Verify:
