@@ -68,7 +68,7 @@ Four entries, equal first-class (aligned to product req §2 V0 scope — reconci
 1. **Paste** markdown text (Cmd/Ctrl+V anywhere, or a paste target)
 2. **Drag-drop** a `.md` file onto the surface
 3. **Open file** — a file-picker button (keyboard/touch-accessible alternative to drag-drop)
-4. **URL fetch** (paste a URL → fetch + render; browser-local, CORS-only, no proxy)
+4. **URL fetch** (enter/paste a URL **into the URL field** → fetch + render; browser-local, CORS-only, no proxy). Note: pasting a URL into the document body renders it as text per §5 — fetch is the URL field only.
 
 Affordance design:
 - A persistent, quiet entry point in chrome ("paste / drop / open URL"); full-surface drop zone activates on drag-enter with a calm overlay (not a jarring modal).
