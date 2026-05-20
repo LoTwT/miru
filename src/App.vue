@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, shallowRef } from 'vue'
+import { computed, onMounted, reactive, shallowRef, watch } from 'vue'
 
-import InputToolbar from '@/components/InputToolbar.vue'
+import FloatingInputMenu from '@/components/FloatingInputMenu.vue'
 import ReaderSurface from '@/components/ReaderSurface.vue'
 import sampleMarkdown from '@/content/sample.md?raw'
 import { useDocumentInput } from '@/features/input/useDocumentInput'
@@ -16,6 +16,7 @@ const documentState = reactive<ReaderDocument>({
   markdown: sampleMarkdown,
 })
 const isDragging = shallowRef(false)
+const isInputMenuOpen = shallowRef(false)
 const persistedSettings = readPersistedReadingSettings()
 const remoteImageMode = shallowRef<RemoteImageMode>(persistedSettings?.remoteImageMode ?? 'auto')
 
@@ -33,6 +34,12 @@ const rendered = useRenderedMarkdown({
 })
 
 const status = computed(() => rendered.error.value ?? error.value?.detail ?? '')
+
+watch(status, (value) => {
+  if (value) {
+    isInputMenuOpen.value = true
+  }
+})
 
 onMounted(async () => {
   await loadDefaultReadingFonts()
@@ -86,23 +93,23 @@ async function onDrop(event: DragEvent): Promise<void> {
   >
     <header class="app-shell__header">
       <a class="app-shell__mark" href="/" aria-label="miru home">miru</a>
-      <InputToolbar
-        :is-fetching-url="isFetchingUrl"
-        @paste="loadFromClipboard"
-        @open-file="loadFromFile"
-        @fetch-url="loadFromUrl"
-        @clear="resetToSample"
-      />
     </header>
-
-    <p v-if="status" class="app-shell__status" role="status">
-      {{ status }}
-    </p>
 
     <ReaderSurface
       :document="documentState"
       :html="rendered.html.value"
       :is-rendering="rendered.isRendering.value"
+    />
+
+    <FloatingInputMenu
+      :is-open="isInputMenuOpen"
+      :is-fetching-url="isFetchingUrl"
+      :status="status"
+      @update:is-open="isInputMenuOpen = $event"
+      @paste="loadFromClipboard"
+      @open-file="loadFromFile"
+      @fetch-url="loadFromUrl"
+      @clear="resetToSample"
     />
 
     <!-- V1 settings drawer mount point: customization UI calls runtime token mutation APIs. -->
@@ -123,10 +130,6 @@ async function onDrop(event: DragEvent): Promise<void> {
 }
 
 .app-shell__header {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 1rem;
-  align-items: start;
   max-width: 78rem;
   margin: 0 auto;
   padding-top: 1rem;
@@ -140,19 +143,4 @@ async function onDrop(event: DragEvent): Promise<void> {
   text-decoration: none;
 }
 
-.app-shell__status {
-  width: min(100%, var(--reading-measure));
-  margin: 1.5rem auto 0;
-  padding: 0.75rem 1rem;
-  border: 1px solid var(--reading-rule);
-  border-radius: 8px;
-  background: var(--reading-code-bg);
-  color: var(--reading-fg-muted);
-}
-
-@media (max-width: 760px) {
-  .app-shell__header {
-    grid-template-columns: 1fr;
-  }
-}
 </style>

@@ -39,7 +39,7 @@ Single surface. One column of content, minimal chrome.
 
 ```
 ┌─────────────────────────────────────────────┐
-│  [chrome: minimal — app mark + input entry]   │  ← recedes after load
+│  [chrome: app mark only]                       │  ← scrolls away
 ├─────────────────────────────────────────────┤
 │                                               │
 │        rendered markdown (reading column)     │  ← the product
@@ -49,7 +49,7 @@ Single surface. One column of content, minimal chrome.
 ```
 
 - **No** sidebar, no file tree, no tab bar, no split editor (all V1+/deferred).
-- Chrome = app identity + the three input entries (paste / drop / URL). On load of content, chrome demotes to a quiet top affordance; it never competes with the reading column.
+- Chrome = app identity + a floating input affordance. The top mark scrolls away; the fixed affordance recedes visually during reading and returns on intent.
 - Reading column is horizontally centered; content measure is capped (see §6) regardless of viewport width.
 
 ---
@@ -65,20 +65,27 @@ Single surface. One column of content, minimal chrome.
 
 ### 4.3 Input affordances
 Four entries, equal first-class (aligned to product req §2 V0 scope — reconciled from earlier 3-input draft; open-file added for discoverability/a11y since drag-drop alone excludes keyboard/touch users):
-1. **Paste** markdown text (Cmd/Ctrl+V anywhere, or a paste target)
+1. **Paste** markdown text (Cmd/Ctrl+V anywhere, or the floating menu paste action). The menu paste action is best-effort: it may try `navigator.clipboard.readText()`, but clipboard permission/secure-context failure is a normal path. On failure, show calm inline guidance to press Cmd/Ctrl+V; global paste remains available.
 2. **Drag-drop** a `.md` file onto the surface
 3. **Open file** — a file-picker button (keyboard/touch-accessible alternative to drag-drop)
 4. **URL fetch** (enter/paste a URL **into the URL field** → fetch + render; browser-local, CORS-only, no proxy). Note: pasting a URL into the document body renders it as text per §5 — fetch is the URL field only.
 
 Affordance design:
-- A persistent, quiet entry point in chrome ("paste / drop / open URL"); full-surface drop zone activates on drag-enter with a calm overlay (not a jarring modal).
+- V0 uses a fixed bottom-right floating action button (FAB), 48×48 minimum, respecting mobile safe areas. The FAB is the primary visible input affordance after first paint.
+- Collapsed FAB is quiet and on-brand; it never covers the reading column. On scroll-down reading idle it fades to roughly 0.3 opacity, never fully disappearing. Hover, pointer movement, tap, focus, or scroll-up restores full opacity. Reduced-motion disables fade animation and keeps the control stable.
+- Expand behavior: desktop hover or click; mobile tap. Expanded menu contains paste, open file, URL, and clear. Dismiss on outside click, Esc, or toggling the FAB. After dismiss, focus returns to the FAB.
+- URL fetch is only through the URL field in the expanded menu. The field shows inline fetching/error states and keeps paste/drop fallback visible.
+- Clear returns to the sample document (OQ-UX2 resolved); there is no separate "example" item.
+- Top-left `miru` mark is non-sticky: visible on load, scrolls away while reading. After scrolling down, upward scroll reveals a small brand/scroll-to-top affordance; click scrolls to top. Reduced-motion makes scroll-to-top instant.
+- Global paste (Cmd/Ctrl+V) and drag-enter drop overlay remain ambient inputs outside the FAB.
 - Drag-over: surface shows a subtle bordered drop affordance + one line of copy (中文 chrome): 「拖放 .md 文件到这里」.
+- A11y: FAB is a real button with `aria-label` and `aria-expanded`; menu items are keyboard reachable (Tab/arrow keys), Esc closes, focus-visible is clear, and opacity fade never removes controls from the tab order or screen reader tree.
 
 ### 4.4 Empty / loading / error states
 | State | Trigger | Treatment |
 |---|---|---|
 | Empty (initial) | first open | auto sample doc (never a blank screen) |
-| Empty (user cleared) | user removes content | gentle return to sample, or a quiet "粘贴或拖放 markdown 开始阅读" prompt — UX to finalize during Phase 2 |
+| Empty (user cleared) | user clears content | return to sample (OQ-UX2 resolved) |
 | Loading (URL fetch) | URL submitted | inline calm progress on the affordance, not a full-screen spinner; target < perceptible delay |
 | Error — bad file | non-md / oversized | inline, non-blocking, 中文: 「无法读取这个文件，请确认是 .md 或纯文本。」 |
 | Error — URL fetch fail | network / CORS / 404 | inline, actionable, 中文: 「拉取失败 — 可能是跨域限制或链接失效。可以改用粘贴或拖放。」 + offers paste fallback |
@@ -216,7 +223,7 @@ UX-owned interaction/visual criteria that @QA validates. (Mirrors req §5; this 
 - AC-U4 OS dark/light switch → auto-follow, no flash
 - AC-U5 measure capped ≤ 65ch (default); prose never runs full-width on wide screens
 - AC-U6 Shiki highlight works; 中英混排 doesn't break layout
-- AC-U7 (UX-add) every input entry (paste/drop/URL) is discoverable within 5s by a first-time user without instruction
+- AC-U7 (UX-add) every input entry is discoverable within 5s by a first-time user without instruction: 48×48 FAB, four-item menu (paste/open-file/URL/clear), scroll opacity decay, scroll-to-top brand mark, mobile tap, keyboard access, and ambient paste/drop all work.
 - AC-U8 (UX-add) every error state is inline, calm, names the cause, and offers a paste/drop fallback (no dead-ends, no red modals)
 
 **Architecture readiness** (AC-A1..A7 per req §5 / §8)
@@ -238,9 +245,10 @@ UX-owned interaction/visual criteria that @QA validates. (Mirrors req §5; this 
 
 **Resolved (lo-user 2026-05-20):** font = Newsreader serif (OQ-miru-4) · token ownership = design-system (OQ-miru-1) · remote images = (a) hardened auto (OQ-miru-5) · V0 scope = v0.3 baseline (OQ-miru-3) · Phase 0 genesis commit = go (OQ-miru-5... P3-5).
 
-**UX open (for Phase 2 finalize, non-blocking):**
-- OQ-UX1 default Shiki code theme single pairing (light+dark) — UX picks in Phase 2 once Default theme colors are tuned.
-- OQ-UX2 user-cleared empty state exact treatment (return-to-sample vs quiet prompt) — finalize with sample-doc design.
+**Resolved during implementation (2026-05-20):**
+- OQ-UX1 default Shiki code theme pairing = `github-light` / `github-dark`.
+- OQ-UX2 user-cleared empty state = return to sample.
+- V0 input affordance = product §2.1 floating immersive affordance (lo-user chose B): bottom-right FAB + menu + scroll opacity + brand scroll-to-top. Top-chrome action toolbar is retired; top chrome keeps only the non-sticky brand mark.
 
 **Deferred → V1+ (req §4):** in-app customization UI / preset switcher / 5-dial customization / line-height & spacing dials / accent picker / user-uploaded fonts / custom syntax colors / URL-fragment share / edit mode / multi-tab / collaboration / cloud sync / AI assist / PWA-offline / KaTeX / mermaid / **bare-URL-paste auto-fetch** (see §5 — V0 paste always renders as markdown; URL fetch via explicit URL field only).
 
