@@ -74,6 +74,7 @@ Affordance design:
 - V0 uses a fixed bottom-right floating action button (FAB), 48×48 minimum, respecting mobile safe areas. The FAB is the primary visible input affordance after first paint.
 - Collapsed FAB is quiet and on-brand; it never covers the reading column. On scroll-down reading idle it fades to roughly 0.3 opacity, never fully disappearing. Hover, pointer movement, tap, focus, or scroll-up restores full opacity. Reduced-motion disables fade animation and keeps the control stable.
 - Expand behavior: desktop hover or click; mobile tap. Expanded menu contains paste, open file, URL, and clear. Dismiss on outside click, Esc, or toggling the FAB. After dismiss, focus returns to the FAB.
+- Successful content load (any source — global/menu paste, drop, open-file, URL fetch): the menu, if open, collapses, and focus moves to the reader surface (a `tabindex="-1"` reading container), so keyboard/screen-reader users land on the freshly loaded content rather than a removed control. This unifies all four inputs' success behavior. Exceptions: URL fetch *failure* keeps the menu open with inline guidance (§4.4); clear / return-to-sample returns focus to the FAB (a reset, not a content load). (Resolved during #19 implementation, 2026-05-20.)
 - URL fetch is only through the URL field in the expanded menu. The field shows inline fetching/error states and keeps paste/drop fallback visible.
 - Clear returns to the sample document (OQ-UX2 resolved); there is no separate "example" item.
 - Top-left `miru` mark is non-sticky: visible on load, scrolls away while reading. After scrolling down, upward scroll reveals a small brand/scroll-to-top affordance; click scrolls to top. Reduced-motion makes scroll-to-top instant.
@@ -105,6 +106,7 @@ URL field → fetch  → (success) render / (fail) inline error + fallback
 ```
 
 - **V0 paste behavior**: pasted content is **always rendered as markdown text**. URL fetch is reached only through the explicit URL field, not by auto-detecting a pasted bare URL.
+- **Post-load focus handoff**: on any successful load (paste / drop / open-file / URL), the affordance menu (if open) collapses and focus moves to the reader surface; clear / sample returns focus to the FAB. Keeps keyboard / screen-reader users on the new content and prevents focus loss to `<body>`. (See §4.3.)
 - **Deferred to V1+** (decision 2026-05-20, PM+UX): *bare-URL-paste auto-fetch* — detecting that pasted body content is a bare URL and routing it to fetch. Deferred because (a) the explicit URL field already covers fetch intent, and (b) auto-detecting "bare URL = fetch vs. a document that happens to start with a link = render" carries a false-positive mis-routing risk (a real document fetched as a URL). V0 keeps the predictable, safe behavior: paste → render. (See §13 deferred list.)
 - All processing is 100% browser-local (req §3.5 privacy: no server, no third-party tracking).
 
