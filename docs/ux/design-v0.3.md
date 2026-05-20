@@ -68,7 +68,7 @@ Four entries, equal first-class (aligned to product req §2 V0 scope — reconci
 1. **Paste** markdown text (Cmd/Ctrl+V anywhere, or a paste target)
 2. **Drag-drop** a `.md` file onto the surface
 3. **Open file** — a file-picker button (keyboard/touch-accessible alternative to drag-drop)
-4. **URL fetch** (paste a URL → fetch + render; browser-local, CORS-only, no proxy)
+4. **URL fetch** (enter/paste a URL **into the URL field** → fetch + render; browser-local, CORS-only, no proxy). Note: pasting a URL into the document body renders it as text per §5 — fetch is the URL field only.
 
 Affordance design:
 - A persistent, quiet entry point in chrome ("paste / drop / open URL"); full-surface drop zone activates on drag-enter with a calm overlay (not a jarring modal).
@@ -91,12 +91,14 @@ Principle: errors are **inline, calm, and always offer a fallback path** (paste/
 ## 5. Input flows
 
 ```
-Paste text     → parse → render (< 100ms, AC-U2)
-Drop .md file  → read → parse → render (AC-U3)
-Paste URL      → detect URL → fetch → (success) render / (fail) inline error + fallback
+Paste text         → parse → render (< 100ms, AC-U2)   [V0: always rendered as markdown]
+Drop .md file      → read → parse → render (AC-U3)
+Open file (picker) → read → parse → render
+URL field → fetch  → (success) render / (fail) inline error + fallback
 ```
 
-- URL detection: if pasted content is a bare URL, treat as fetch intent; otherwise treat as markdown text. (Edge: a markdown doc that is *only* a link — UX rule: a single bare URL = fetch; anything with markdown syntax or multiple lines = render as text.)
+- **V0 paste behavior**: pasted content is **always rendered as markdown text**. URL fetch is reached only through the explicit URL field, not by auto-detecting a pasted bare URL.
+- **Deferred to V1+** (decision 2026-05-20, PM+UX): *bare-URL-paste auto-fetch* — detecting that pasted body content is a bare URL and routing it to fetch. Deferred because (a) the explicit URL field already covers fetch intent, and (b) auto-detecting "bare URL = fetch vs. a document that happens to start with a link = render" carries a false-positive mis-routing risk (a real document fetched as a URL). V0 keeps the predictable, safe behavior: paste → render. (See §13 deferred list.)
 - All processing is 100% browser-local (req §3.5 privacy: no server, no third-party tracking).
 
 ---
@@ -240,7 +242,7 @@ UX-owned interaction/visual criteria that @QA validates. (Mirrors req §5; this 
 - OQ-UX1 default Shiki code theme single pairing (light+dark) — UX picks in Phase 2 once Default theme colors are tuned.
 - OQ-UX2 user-cleared empty state exact treatment (return-to-sample vs quiet prompt) — finalize with sample-doc design.
 
-**Deferred → V1+ (req §4):** in-app customization UI / preset switcher / 5-dial customization / line-height & spacing dials / accent picker / user-uploaded fonts / custom syntax colors / URL-fragment share / edit mode / multi-tab / collaboration / cloud sync / AI assist / PWA-offline / KaTeX / mermaid.
+**Deferred → V1+ (req §4):** in-app customization UI / preset switcher / 5-dial customization / line-height & spacing dials / accent picker / user-uploaded fonts / custom syntax colors / URL-fragment share / edit mode / multi-tab / collaboration / cloud sync / AI assist / PWA-offline / KaTeX / mermaid / **bare-URL-paste auto-fetch** (see §5 — V0 paste always renders as markdown; URL fetch via explicit URL field only).
 
 ---
 

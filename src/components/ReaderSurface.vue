@@ -20,9 +20,10 @@ const props = defineProps<{
 
 <style scoped>
 .reader-surface {
-  width: min(100%, var(--reading-measure));
-  margin: 0 auto;
-  padding: clamp(2rem, 6vw, 5rem) 0;
+  inline-size: 100%;
+  max-inline-size: min(100%, var(--reading-measure));
+  margin-inline: auto;
+  padding-block: clamp(2rem, 6vw, 5rem);
 }
 
 .reader-surface__meta {
