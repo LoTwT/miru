@@ -15,6 +15,7 @@ export function useRenderedMarkdown(options: UseRenderedMarkdownOptions) {
   const mediaQuery = typeof window === 'undefined'
     ? null
     : window.matchMedia('(prefers-color-scheme: dark)')
+  let renderRequestId = 0
 
   function onColorSchemeChange(event: MediaQueryListEvent): void {
     colorScheme.value = event.matches ? 'dark' : 'light'
@@ -29,22 +30,32 @@ export function useRenderedMarkdown(options: UseRenderedMarkdownOptions) {
   watch(
     () => [options.markdown(), options.remoteImageMode(), colorScheme.value] as const,
     async ([markdown, remoteImageMode]) => {
+      const requestId = ++renderRequestId
+
       isRendering.value = true
       error.value = null
 
       try {
         const { renderMarkdown } = await import('@/lib/markdown/renderer')
 
-        html.value = await renderMarkdown(markdown, {
+        const nextHtml = await renderMarkdown(markdown, {
           colorScheme: colorScheme.value,
           remoteImageMode,
         })
+
+        if (requestId === renderRequestId) {
+          html.value = nextHtml
+        }
       }
       catch {
-        error.value = '渲染 markdown 时出错。'
+        if (requestId === renderRequestId) {
+          error.value = '渲染 markdown 时出错。'
+        }
       }
       finally {
-        isRendering.value = false
+        if (requestId === renderRequestId) {
+          isRendering.value = false
+        }
       }
     },
     { immediate: true },

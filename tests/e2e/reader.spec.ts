@@ -103,6 +103,71 @@ test('keeps URL field paste inside the URL input', async ({ page, context }) => 
   await expect(page.getByRole('heading', { name: 'miru' })).toBeVisible()
 })
 
+test('collapses H1 sections while preserving heading permalinks', async ({ page }) => {
+  await page.goto('/')
+
+  await page.evaluate(() => {
+    const event = new ClipboardEvent('paste', {
+      clipboardData: new DataTransfer(),
+      bubbles: true,
+      cancelable: true,
+    })
+    event.clipboardData?.setData('text/plain', [
+      '# First section',
+      '',
+      'First body.',
+      '',
+      '## Nested topic',
+      '',
+      'Nested body.',
+      '',
+      '# Second section',
+      '',
+      'Second body.',
+    ].join('\n'))
+    document.querySelector('main')?.dispatchEvent(event)
+  })
+
+  const firstHeading = page.getByRole('heading', { name: 'First section' })
+  const firstToggle = page.locator('[data-reader-heading-toggle]').first()
+
+  await expect(page.locator('h1#first-section a.header-anchor')).toHaveAttribute('href', '#first-section')
+  await expect(page.getByRole('button', { name: '折叠「First section」章节' })).toBeVisible()
+  await expect(firstToggle).toHaveAttribute('aria-expanded', 'true')
+
+  await firstToggle.click()
+
+  await expect(firstToggle).toHaveAttribute('aria-expanded', 'false')
+  await expect(page.getByRole('button', { name: '展开「First section」章节' })).toBeVisible()
+  await expect(page.getByText('First body.')).not.toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Nested topic' })).not.toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Second section' })).toBeVisible()
+  await expect(page.getByText('Second body.')).toBeVisible()
+
+  await firstToggle.focus()
+  await page.keyboard.press('Enter')
+
+  await expect(firstToggle).toHaveAttribute('aria-expanded', 'true')
+  await expect(page.getByText('First body.')).toBeVisible()
+
+  await page.locator('h1#first-section a.header-anchor').click()
+  await expect(page).toHaveURL(/#first-section$/)
+})
+
+test('does not persist collapsed H1 state after reload', async ({ page }) => {
+  await page.goto('/')
+
+  const firstToggle = page.locator('[data-reader-heading-toggle]').first()
+
+  await firstToggle.click()
+  await expect(page.getByText('打开 miru，像翻开一本排版精良的小册子。')).not.toBeVisible()
+
+  await page.reload()
+
+  await expect(page.locator('[data-reader-heading-toggle]').first()).toHaveAttribute('aria-expanded', 'true')
+  await expect(page.getByText('打开 miru，像翻开一本排版精良的小册子。')).toBeVisible()
+})
+
 test('collapses the floating menu and focuses the reader after menu paste success', async ({ page }) => {
   await page.addInitScript((markdown) => {
     Object.defineProperty(navigator, 'clipboard', {

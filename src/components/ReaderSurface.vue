@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { useTemplateRef } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, useTemplateRef, watch } from 'vue'
 
+import { enhanceCollapsibleHeadings } from '@/features/reader/collapsibleHeadings'
 import type { ReaderDocument, TrustedHtml } from '@/types/reader'
 
 const props = defineProps<{
@@ -10,10 +11,35 @@ const props = defineProps<{
 }>()
 
 const articleRef = useTemplateRef<HTMLElement>('article')
+const contentRef = useTemplateRef<HTMLElement>('content')
+let cleanupCollapsibleHeadings: (() => void) | undefined
+
+onMounted(() => {
+  void enhanceCurrentContent()
+})
+
+watch(() => props.html.value, () => {
+  void enhanceCurrentContent()
+})
+
+onBeforeUnmount(() => {
+  cleanupCollapsibleHeadings?.()
+})
 
 defineExpose({
   focus: () => articleRef.value?.focus(),
 })
+
+async function enhanceCurrentContent(): Promise<void> {
+  cleanupCollapsibleHeadings?.()
+  cleanupCollapsibleHeadings = undefined
+
+  await nextTick()
+
+  if (contentRef.value) {
+    cleanupCollapsibleHeadings = enhanceCollapsibleHeadings(contentRef.value)
+  }
+}
 </script>
 
 <template>
@@ -27,7 +53,7 @@ defineExpose({
       {{ props.document.label }}
     </p>
     <!-- v-html is restricted to TrustedHtml returned by the markdown sanitizer pipeline. -->
-    <div class="reader-surface__content" v-html="props.html.value" />
+    <div ref="content" class="reader-surface__content" v-html="props.html.value" />
   </article>
 </template>
 
@@ -47,6 +73,7 @@ defineExpose({
 }
 
 .reader-surface__content {
+  --reader-heading-gutter: 3.55rem;
   font-family: var(--reading-font-body);
   font-size: var(--reading-font-size);
   line-height: var(--reading-line-height);
