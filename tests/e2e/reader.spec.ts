@@ -87,6 +87,22 @@ test('collapses the floating menu and focuses the reader after URL fetch success
   await expect(page.getByRole('button', { name: /粘贴/ })).toBeFocused()
 })
 
+test('keeps URL field paste inside the URL input', async ({ page, context }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: 'http://127.0.0.1:4173' })
+  await page.goto('/')
+
+  const button = page.getByTestId('floating-affordance-button')
+  const urlInput = page.getByLabel('URL')
+
+  await button.click()
+  await urlInput.focus()
+  await page.evaluate(() => navigator.clipboard.writeText('https://example.com/readme.md'))
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+V' : 'Control+V')
+
+  await expect(urlInput).toHaveValue('https://example.com/readme.md')
+  await expect(page.getByRole('heading', { name: 'miru' })).toBeVisible()
+})
+
 test('collapses the floating menu and focuses the reader after menu paste success', async ({ page }) => {
   await page.addInitScript((markdown) => {
     Object.defineProperty(navigator, 'clipboard', {
