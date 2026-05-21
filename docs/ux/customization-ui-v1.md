@@ -39,7 +39,7 @@
 - **reduced-motion**: panel open/close no slide (instant/fade); live-preview token changes apply without animated reflow.
 
 ## 7. Themes + sepia
-- 4 themes. light/dark via existing semantic layer + `.dark`; **跟随系统** = follow OS (default, = V0). **sepia = explicit preset token override** on the semantic layer (NOT JS-writing base); cleared when switching away (no residue).
+- 4 themes. **Explicit light / dark / sepia via `:root[data-reading-theme=light|dark|sepia]` token override** (NOT JS-writing base). **跟随系统** = no `data-reading-theme` attr set → falls back to existing `prefers-color-scheme` media-query path (default, = V0). sepia = a `data-reading-theme=sepia` preset; switching away clears the attr/override (no residue). (Impl mechanism per PR #12.)
 - **Sepia palette (UX; QA AA-confirmed)**: `--reading-bg #f4ecd8` · `--reading-fg #463b29` · `--reading-fg-muted #6f6149` · `--reading-code-bg #ece1c4` · `--reading-link #66569d`. UX WCAG pre-check on `#f4ecd8`: fg **9.30:1**, link **5.27:1** (no swap needed), code-fg **8.41:1**, muted **5.12:1** (darkened from #8a7d63 which was 3.43 fail) — all ≥4.5 AA. QA authoritative confirm: PASS.
 
 ## 8. Acceptance (AC-C* + e2e)
