@@ -1,13 +1,15 @@
 export interface ReadingTheme {
   id: string
   label: string
-  tokens: Record<`--reading-${string}`, string>
+  tokens: Record<ReadingTokenName, string>
 }
+
+export type ReadingTokenName = `--reading-${string}`
 
 export interface PersistedReadingSettings {
   version: 1
   presetId?: string
-  tokenOverrides?: Record<`--reading-${string}`, string>
+  tokenOverrides?: Record<ReadingTokenName, string>
   fontBody?: string
   remoteImageMode?: 'auto' | 'prompt' | 'block'
 }
@@ -70,6 +72,21 @@ export function setReadingToken(token: `--reading-${string}`, value: string, roo
   root.style.setProperty(token, value)
 }
 
+export function clearReadingToken(token: ReadingTokenName, root: HTMLElement = document.documentElement): void {
+  root.style.removeProperty(token)
+}
+
+export function writePersistedReadingSettings(
+  settings: PersistedReadingSettings,
+  storage: Storage = localStorage,
+): void {
+  storage.setItem(storageKey, JSON.stringify(settings))
+}
+
+export function clearPersistedReadingSettings(storage: Storage = localStorage): void {
+  storage.removeItem(storageKey)
+}
+
 export function readPersistedReadingSettings(storage: Storage = localStorage): PersistedReadingSettings | null {
   const raw = storage.getItem(storageKey)
 
@@ -113,16 +130,16 @@ export function applyPersistedReadingSettings(settings: PersistedReadingSettings
   }
 }
 
-function sanitizeTokenOverrides(value: unknown): Record<`--reading-${string}`, string> | undefined {
+function sanitizeTokenOverrides(value: unknown): Record<ReadingTokenName, string> | undefined {
   if (!value || typeof value !== 'object') {
     return undefined
   }
 
-  const result: Record<`--reading-${string}`, string> = {}
+  const result: Record<ReadingTokenName, string> = {}
 
   for (const [key, tokenValue] of Object.entries(value)) {
     if (key.startsWith('--reading-') && typeof tokenValue === 'string') {
-      result[key as `--reading-${string}`] = tokenValue
+      result[key as ReadingTokenName] = tokenValue
     }
   }
 

@@ -252,6 +252,27 @@ a:focus-visible {
   }
 }
 
+:root[data-reading-theme="dark"] {
+  color-scheme: dark;
+}
+
+:root[data-reading-theme="light"],
+:root[data-reading-theme="sepia"] {
+  color-scheme: light;
+}
+
+:root[data-reading-theme="dark"] .reader-surface__content .shiki,
+:root[data-reading-theme="dark"] .reader-surface__content .shiki span {
+  color: var(--shiki-dark) !important;
+}
+
+:root[data-reading-theme="light"] .reader-surface__content .shiki,
+:root[data-reading-theme="light"] .reader-surface__content .shiki span,
+:root[data-reading-theme="sepia"] .reader-surface__content .shiki,
+:root[data-reading-theme="sepia"] .reader-surface__content .shiki span {
+  color: var(--shiki-light) !important;
+}
+
 @media (max-width: 700px) {
   :root {
     --reading-font-size: 17px;

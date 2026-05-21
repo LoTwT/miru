@@ -2,12 +2,14 @@
 import { computed, nextTick, onMounted, reactive, shallowRef, useTemplateRef, watch } from 'vue'
 
 import FloatingInputMenu from '@/components/FloatingInputMenu.vue'
+import ReadingSettingsControl from '@/components/ReadingSettingsControl.vue'
 import ReaderSurface from '@/components/ReaderSurface.vue'
 import sampleMarkdown from '@/content/sample.md?raw'
 import { useDocumentInput } from '@/features/input/useDocumentInput'
 import { useRenderedMarkdown } from '@/features/reader/useRenderedMarkdown'
+import { useReadingSettings } from '@/features/settings/useReadingSettings'
 import { loadDefaultReadingFonts } from '@/lib/theme/fonts'
-import { applyPersistedReadingSettings, readPersistedReadingSettings } from '@/lib/theme/tokens'
+import { readPersistedReadingSettings } from '@/lib/theme/tokens'
 import type { ReaderDocument, RemoteImageMode } from '@/types/reader'
 
 const documentState = reactive<ReaderDocument>({
@@ -20,6 +22,7 @@ const isInputMenuOpen = shallowRef(false)
 const readerRef = useTemplateRef<InstanceType<typeof ReaderSurface>>('reader')
 const persistedSettings = readPersistedReadingSettings()
 const remoteImageMode = shallowRef<RemoteImageMode>(persistedSettings?.remoteImageMode ?? 'auto')
+const readingSettings = useReadingSettings()
 
 const { error, isFetchingUrl, loadFromClipboard, loadFromFile, loadFromText, loadFromUrl } = useDocumentInput({
   onDocument(document) {
@@ -45,7 +48,7 @@ watch(status, (value) => {
 
 onMounted(async () => {
   await loadDefaultReadingFonts()
-  applyPersistedReadingSettings(persistedSettings)
+  readingSettings.applyCurrent()
 })
 
 function resetToSample(): void {
@@ -140,7 +143,16 @@ async function onDrop(event: DragEvent): Promise<void> {
       @clear="resetToSample"
     />
 
-    <!-- V1 settings drawer mount point: customization UI calls runtime token mutation APIs. -->
+    <ReadingSettingsControl
+      :settings="readingSettings.state"
+      :is-default="readingSettings.isDefault.value"
+      @update-font-size="readingSettings.updateFontSize"
+      @update-measure="readingSettings.updateMeasure"
+      @update-line-height="readingSettings.updateLineHeight"
+      @update-font-family="readingSettings.updateFontFamily"
+      @update-theme="readingSettings.updateTheme"
+      @reset="readingSettings.reset"
+    />
   </main>
 </template>
 

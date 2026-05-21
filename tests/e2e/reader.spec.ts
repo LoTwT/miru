@@ -145,6 +145,105 @@ test('collapses the floating menu and focuses the reader after open-file success
   await expect(page.locator('.reader-surface')).toBeFocused()
 })
 
+test('customizes reading settings, persists them, and resets to defaults', async ({ page }) => {
+  await page.goto('/')
+
+  const settingsButton = page.getByTestId('reading-settings-button')
+
+  await settingsButton.click()
+  await expect(page.getByTestId('reading-settings-panel')).toBeVisible()
+  await expect(page.getByRole('radio', { name: '字号 很小' })).toBeFocused()
+
+  await page.getByRole('radio', { name: '字号 大' }).click()
+  await page.getByRole('radio', { name: '行宽 宽' }).click()
+  await page.getByRole('radio', { name: '主题 Sepia' }).click()
+  await page.getByRole('radio', { name: '正文字体 无衬线' }).click()
+
+  await expect.poll(() => readInlineReadingTokens(page)).toMatchObject({
+    fontSize: '20px',
+    measure: '75ch',
+    bg: '#f4ecd8',
+    fgMuted: '#6f6149',
+    fontBody: '-apple-system, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif',
+    readingTheme: 'sepia',
+  })
+
+  await page.reload()
+  await expect.poll(() => readInlineReadingTokens(page)).toMatchObject({
+    fontSize: '20px',
+    measure: '75ch',
+    bg: '#f4ecd8',
+    fgMuted: '#6f6149',
+    readingTheme: 'sepia',
+  })
+
+  await page.getByTestId('reading-settings-button').click()
+  await page.getByRole('button', { name: '恢复默认' }).click()
+
+  await expect.poll(() => readInlineReadingTokens(page)).toMatchObject({
+    fontSize: '',
+    measure: '',
+    bg: '',
+    fontBody: '',
+    readingTheme: '',
+  })
+  await expect.poll(() => readThemeSnapshot(page)).toMatchObject({
+    readingBg: '#fbf8f1',
+    appBg: 'rgb(251, 248, 241)',
+  })
+  expect(await page.evaluate(() => localStorage.getItem('miru:reading-settings:v1'))).toBeNull()
+})
+
+test('system theme clears explicit theme overrides and keeps OS dark following', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'light' })
+  await page.goto('/')
+
+  await page.getByTestId('reading-settings-button').click()
+  await page.getByRole('radio', { name: '主题 深色' }).click()
+  await expect.poll(() => readThemeSnapshot(page)).toMatchObject({
+    readingBg: '#171615',
+    appBg: 'rgb(23, 22, 21)',
+    codeBg: 'rgb(34, 32, 30)',
+  })
+
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await page.getByRole('radio', { name: '主题 Sepia' }).click()
+  await expect.poll(() => readInlineReadingTokens(page)).toMatchObject({
+    bg: '#f4ecd8',
+    readingTheme: 'sepia',
+  })
+
+  await page.getByRole('radio', { name: '主题 跟随系统' }).click()
+
+  await expect.poll(() => readInlineReadingTokens(page)).toMatchObject({
+    bg: '',
+    readingTheme: '',
+  })
+  await expect.poll(() => readThemeSnapshot(page)).toMatchObject({
+    readingBg: '#171615',
+    appBg: 'rgb(23, 22, 21)',
+  })
+})
+
+test('reading settings use a bottom sheet on narrow screens', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/')
+
+  await page.getByTestId('reading-settings-button').click()
+
+  const panel = page.getByTestId('reading-settings-panel')
+  await expect(panel).toBeVisible()
+
+  const box = await panel.boundingBox()
+  expect(box?.width).toBeGreaterThan(360)
+  expect(box?.y).toBeGreaterThan(250)
+  await expect(page.getByRole('radio', { name: '字号 很小' })).toBeFocused()
+
+  await page.keyboard.press('Escape')
+  await expect(panel).not.toBeVisible()
+  await expect(page.getByTestId('reading-settings-button')).toBeFocused()
+})
+
 test('follows OS color scheme changes for reading and code surfaces', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'light' })
   await page.goto('/')
@@ -178,6 +277,21 @@ async function readThemeSnapshot(page: import('@playwright/test').Page) {
       appBg: app ? getComputedStyle(app).backgroundColor : '',
       codeBg: code ? getComputedStyle(code).backgroundColor : '',
       shikiColor: shikiToken ? getComputedStyle(shikiToken).color : '',
+    }
+  })
+}
+
+async function readInlineReadingTokens(page: import('@playwright/test').Page) {
+  return page.evaluate(() => {
+    const root = document.documentElement
+
+    return {
+      fontSize: root.style.getPropertyValue('--reading-font-size').trim(),
+      measure: root.style.getPropertyValue('--reading-measure').trim(),
+      bg: root.style.getPropertyValue('--reading-bg').trim(),
+      fgMuted: root.style.getPropertyValue('--reading-fg-muted').trim(),
+      fontBody: root.style.getPropertyValue('--reading-font-body').trim(),
+      readingTheme: root.dataset.readingTheme ?? '',
     }
   })
 }
