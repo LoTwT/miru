@@ -359,8 +359,26 @@ test('collapses the floating menu and focuses the reader after open-file success
 
 test('customizes reading settings, persists them, and resets to defaults', async ({ page }) => {
   await page.goto('/')
+  await pasteText(page, [
+    '# Heading one',
+    '',
+    'Body copy.',
+    '',
+    '## Heading two',
+    '',
+    'Second section.',
+    '',
+    '### Heading three',
+    '',
+    'Third section.',
+    '',
+    '#### Heading four',
+    '',
+    'Fourth section.',
+  ].join('\n'))
 
   const settingsButton = page.getByTestId('reading-settings-button')
+  const defaultTypography = await readReadingTypography(page)
 
   await settingsButton.click()
   await expect(page.getByTestId('reading-settings-panel')).toBeVisible()
@@ -379,6 +397,15 @@ test('customizes reading settings, persists them, and resets to defaults', async
     fontBody: '-apple-system, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif',
     readingTheme: 'sepia',
   })
+  await expect.poll(() => readReadingTypography(page)).toMatchObject({
+    body: 20,
+  })
+  const enlargedTypography = await readReadingTypography(page)
+
+  expect(enlargedTypography.h1).toBeGreaterThan(defaultTypography.h1)
+  expect(enlargedTypography.h2).toBeGreaterThan(defaultTypography.h2)
+  expect(enlargedTypography.h3).toBeGreaterThan(defaultTypography.h3)
+  expect(enlargedTypography.h4).toBeGreaterThan(defaultTypography.h4)
 
   await page.reload()
   await expect.poll(() => readInlineReadingTokens(page)).toMatchObject({
@@ -387,6 +414,9 @@ test('customizes reading settings, persists them, and resets to defaults', async
     bg: '#f4ecd8',
     fgMuted: '#6f6149',
     readingTheme: 'sepia',
+  })
+  await expect.poll(() => readReadingTypography(page)).toMatchObject({
+    body: 20,
   })
 
   await page.getByTestId('reading-settings-button').click()
@@ -504,6 +534,23 @@ async function readInlineReadingTokens(page: import('@playwright/test').Page) {
       fgMuted: root.style.getPropertyValue('--reading-fg-muted').trim(),
       fontBody: root.style.getPropertyValue('--reading-font-body').trim(),
       readingTheme: root.dataset.readingTheme ?? '',
+    }
+  })
+}
+
+async function readReadingTypography(page: import('@playwright/test').Page) {
+  return page.evaluate(() => {
+    const readPx = (selector: string) => {
+      const element = document.querySelector(selector)
+      return element ? Number.parseFloat(getComputedStyle(element).fontSize) : 0
+    }
+
+    return {
+      body: readPx('.reader-surface__content'),
+      h1: readPx('.reader-surface__content h1'),
+      h2: readPx('.reader-surface__content h2'),
+      h3: readPx('.reader-surface__content h3'),
+      h4: readPx('.reader-surface__content h4'),
     }
   })
 }

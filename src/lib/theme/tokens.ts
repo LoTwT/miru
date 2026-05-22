@@ -36,10 +36,10 @@ export const defaultReadingTheme: ReadingTheme = {
     '--reading-font-heading': 'Newsreader, Georgia, serif',
     '--reading-font-mono': '"Space Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
     '--reading-paragraph-gap': '1.12em',
-    '--reading-scale-h1': '3.6rem',
-    '--reading-scale-h2': '2.2rem',
-    '--reading-scale-h3': '1.35rem',
-    '--reading-scale-h4': '1.125rem',
+    '--reading-scale-h1': 'calc(var(--reading-font-size) * 3.2)',
+    '--reading-scale-h2': 'calc(var(--reading-font-size) * 1.95)',
+    '--reading-scale-h3': 'calc(var(--reading-font-size) * 1.2)',
+    '--reading-scale-h4': 'var(--reading-font-size)',
   },
 }
 

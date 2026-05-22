@@ -21,6 +21,7 @@
 | 重置 Reset | action | — | clears all overrides |
 
 - **字号 labels**: ascending "A" size glyphs (small→large A), language-neutral (fits miru's 中英 readers); px maps internally.
+- **字号 applies to reading typography as a system**: body text writes `--reading-font-size`; heading scale tokens derive from that same value so H1/H2/H3/H4 move with the selected reading size while preserving hierarchy.
 - **Body font stacks**: serif (default) = `"Newsreader", Georgia, "Songti SC", "Noto Serif CJK SC", serif`; sans = neutral system humanist `-apple-system, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif` (NOT DS Space Grotesk — that's display/grotesk, heavy for long-form; DS consistency stays in chrome/headings).
 
 ## 4. Live preview
