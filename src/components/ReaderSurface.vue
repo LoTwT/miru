@@ -316,7 +316,7 @@ function prefersReducedMotion(): boolean {
 .reader-footer__link {
   display: inline-flex;
   align-items: center;
-  min-block-size: 2rem;
+  min-block-size: 44px;
   padding: 0;
   border: 0;
   background: transparent;

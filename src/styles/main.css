@@ -334,7 +334,7 @@ a:focus-visible {
 
 @media (max-width: 700px) {
   :root {
-    --reading-font-size: 17px;
+    --reading-font-size: 18px;
     --reading-measure: 100%;
   }
 
