@@ -103,7 +103,7 @@ a:focus-visible {
   background: transparent;
   color: var(--reading-accent);
   cursor: pointer;
-  opacity: 0.22;
+  opacity: 0.42;
   transform: translateY(-50%);
   transition: opacity 160ms ease, background-color 160ms ease;
 }
@@ -124,8 +124,8 @@ a:focus-visible {
 }
 
 .reader-heading-toggle__icon {
-  inline-size: 10px;
-  block-size: 10px;
+  inline-size: 13px;
+  block-size: 13px;
   fill: currentColor;
   transform-origin: 50% 50%;
   transition: transform 160ms ease;
