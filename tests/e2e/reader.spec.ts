@@ -372,6 +372,42 @@ test('activates the final outline item near the page bottom', async ({ page }) =
     .toBe('location')
 })
 
+test('persists desktop outline position and hides the control on narrow screens', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto('/')
+
+  await expect(page.getByTestId('reader-outline-rail')).toBeVisible()
+  const rightLayout = await readOutlineLayout(page)
+  expect(rightLayout.railLeft).toBeGreaterThan(rightLayout.contentRight)
+
+  await page.getByTestId('reading-settings-button').click()
+  await expect(page.getByRole('radio', { name: '大纲位置 右' })).toHaveAttribute('aria-checked', 'true')
+  await page.getByRole('radio', { name: '大纲位置 左' }).click()
+  await expect(page.getByRole('radio', { name: '大纲位置 左' })).toHaveAttribute('aria-checked', 'true')
+
+  const leftLayout = await readOutlineLayout(page)
+  expect(leftLayout.railRight).toBeLessThan(leftLayout.contentLeft)
+  expect(leftLayout.contentLeft - leftLayout.railRight).toBeGreaterThan(56)
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('miru:reading-settings:v1') ?? '{}').outlinePosition)).toBe('left')
+
+  await page.reload()
+  await expect(page.getByTestId('reader-outline-rail')).toBeVisible()
+  const persistedLeftLayout = await readOutlineLayout(page)
+  expect(persistedLeftLayout.railRight).toBeLessThan(persistedLeftLayout.contentLeft)
+
+  await page.getByTestId('reading-settings-button').click()
+  await page.getByRole('button', { name: '恢复默认' }).click()
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('miru:reading-settings:v1'))).toBeNull()
+  const resetLayout = await readOutlineLayout(page)
+  expect(resetLayout.railLeft).toBeGreaterThan(resetLayout.contentRight)
+
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.reload()
+  await page.getByTestId('reading-settings-button').click()
+  await expect(page.getByRole('radio', { name: '大纲位置 左' })).toHaveCount(0)
+  await expect(page.getByTestId('reader-outline-button')).toBeVisible()
+})
+
 test('collapses the floating menu and focuses the reader after menu paste success', async ({ page }) => {
   await page.addInitScript((markdown) => {
     Object.defineProperty(navigator, 'clipboard', {
@@ -608,6 +644,32 @@ async function readReadingTypography(page: import('@playwright/test').Page) {
       h2: readPx('.reader-surface__content h2'),
       h3: readPx('.reader-surface__content h3'),
       h4: readPx('.reader-surface__content h4'),
+    }
+  })
+}
+
+async function readOutlineLayout(page: import('@playwright/test').Page) {
+  return page.evaluate(() => {
+    const content = document.querySelector<HTMLElement>('.reader-surface__content')
+    const rail = document.querySelector<HTMLElement>('[data-testid="reader-outline-rail"]')
+
+    if (!content || !rail) {
+      return {
+        contentLeft: 0,
+        contentRight: 0,
+        railLeft: 0,
+        railRight: 0,
+      }
+    }
+
+    const contentRect = content.getBoundingClientRect()
+    const railRect = rail.getBoundingClientRect()
+
+    return {
+      contentLeft: contentRect.left,
+      contentRight: contentRect.right,
+      railLeft: railRect.left,
+      railRight: railRect.right,
     }
   })
 }

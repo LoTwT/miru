@@ -176,6 +176,7 @@ async function onDrop(event: DragEvent): Promise<void> {
     <ReaderOutlineNavigation
       :items="outlineItems"
       :active-id="activeOutlineId"
+      :position="readingSettings.state.outlinePosition"
       @navigate="navigateToOutlineItem"
     />
 
@@ -197,11 +198,13 @@ async function onDrop(event: DragEvent): Promise<void> {
     <ReadingSettingsControl
       :settings="readingSettings.state"
       :is-default="readingSettings.isDefault.value"
+      :show-outline-position-control="outlineItems.length > 0"
       @update-font-size="readingSettings.updateFontSize"
       @update-measure="readingSettings.updateMeasure"
       @update-line-height="readingSettings.updateLineHeight"
       @update-font-family="readingSettings.updateFontFamily"
       @update-theme="readingSettings.updateTheme"
+      @update-outline-position="readingSettings.updateOutlinePosition"
       @reset="readingSettings.reset"
     />
   </main>

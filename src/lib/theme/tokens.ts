@@ -12,6 +12,7 @@ export interface PersistedReadingSettings {
   tokenOverrides?: Record<ReadingTokenName, string>
   fontBody?: string
   remoteImageMode?: 'auto' | 'prompt' | 'block'
+  outlinePosition?: 'left' | 'right'
 }
 
 const storageKey = 'miru:reading-settings:v1'
@@ -107,6 +108,7 @@ export function readPersistedReadingSettings(storage: Storage = localStorage): P
       tokenOverrides: sanitizeTokenOverrides(parsed.tokenOverrides),
       fontBody: typeof parsed.fontBody === 'string' ? parsed.fontBody : undefined,
       remoteImageMode: isRemoteImageMode(parsed.remoteImageMode) ? parsed.remoteImageMode : undefined,
+      outlinePosition: isOutlinePosition(parsed.outlinePosition) ? parsed.outlinePosition : undefined,
     }
   }
   catch {
@@ -148,4 +150,8 @@ function sanitizeTokenOverrides(value: unknown): Record<ReadingTokenName, string
 
 function isRemoteImageMode(value: unknown): value is PersistedReadingSettings['remoteImageMode'] {
   return value === 'auto' || value === 'prompt' || value === 'block'
+}
+
+function isOutlinePosition(value: unknown): value is PersistedReadingSettings['outlinePosition'] {
+  return value === 'left' || value === 'right'
 }

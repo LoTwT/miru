@@ -6,6 +6,7 @@ export type ReadingMeasureId = '55' | '65' | '75'
 export type ReadingLineHeightId = '1.5' | '1.7' | '1.9'
 export type ReadingFontFamilyId = 'serif' | 'sans'
 export type ReadingThemeChoice = 'system' | 'light' | 'dark' | 'sepia'
+export type ReadingOutlinePositionId = 'left' | 'right'
 
 export interface ReadingSettingOption<T extends string> {
   id: T
@@ -49,12 +50,18 @@ export const readingThemeOptions = [
   { id: 'sepia', label: 'Sepia', ariaLabel: '主题 Sepia' },
 ] as const
 
+export const readingOutlinePositionOptions = [
+  { id: 'left', label: '左', ariaLabel: '大纲位置 左' },
+  { id: 'right', label: '右', ariaLabel: '大纲位置 右' },
+] as const
+
 export const defaultReadingSettings = {
   fontSize: '18',
   measure: '65',
   lineHeight: '1.7',
   fontFamily: 'serif',
   theme: 'system',
+  outlinePosition: 'right',
 } as const
 
 export const customizableTypographyTokens = [
