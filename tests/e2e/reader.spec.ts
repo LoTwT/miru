@@ -488,8 +488,9 @@ test('customizes reading settings, persists them, and resets to defaults', async
   await expect.poll(() => readInlineReadingTokens(page)).toMatchObject({
     fontSize: '20px',
     measure: '75ch',
-    bg: '#f4ecd8',
-    fgMuted: '#6f6149',
+    bg: '#efe1bd',
+    fgMuted: '#64553e',
+    codeBg: '#e2cb99',
     fontBody: '-apple-system, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif',
     readingTheme: 'sepia',
   })
@@ -507,8 +508,9 @@ test('customizes reading settings, persists them, and resets to defaults', async
   await expect.poll(() => readInlineReadingTokens(page)).toMatchObject({
     fontSize: '20px',
     measure: '75ch',
-    bg: '#f4ecd8',
-    fgMuted: '#6f6149',
+    bg: '#efe1bd',
+    fgMuted: '#64553e',
+    codeBg: '#e2cb99',
     readingTheme: 'sepia',
   })
   await expect.poll(() => readReadingTypography(page)).toMatchObject({
@@ -547,7 +549,7 @@ test('system theme clears explicit theme overrides and keeps OS dark following',
   await page.emulateMedia({ colorScheme: 'dark' })
   await page.getByRole('radio', { name: '主题 Sepia' }).click()
   await expect.poll(() => readInlineReadingTokens(page)).toMatchObject({
-    bg: '#f4ecd8',
+    bg: '#efe1bd',
     readingTheme: 'sepia',
   })
 
@@ -632,6 +634,7 @@ async function readInlineReadingTokens(page: import('@playwright/test').Page) {
       measure: root.style.getPropertyValue('--reading-measure').trim(),
       bg: root.style.getPropertyValue('--reading-bg').trim(),
       fgMuted: root.style.getPropertyValue('--reading-fg-muted').trim(),
+      codeBg: root.style.getPropertyValue('--reading-code-bg').trim(),
       fontBody: root.style.getPropertyValue('--reading-font-body').trim(),
       readingTheme: root.dataset.readingTheme ?? '',
     }
