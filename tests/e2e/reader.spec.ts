@@ -315,6 +315,50 @@ test('navigates from the outline and expands a collapsed parent section first', 
   }
 })
 
+test('activates the final outline item near the page bottom', async ({ page }) => {
+  await page.goto('/')
+
+  await pasteText(page, [
+    '# Overview',
+    '',
+    'Start here.',
+    '',
+    '## Details',
+    '',
+    Array.from({ length: 36 }, (_, index) => `Long paragraph ${index + 1}.`).join('\n\n'),
+    '',
+    '# Table',
+    '',
+    'A short section.',
+    '',
+    '# Privacy',
+    '',
+    'Another short section.',
+    '',
+    '# Now try',
+    '',
+    'The last section is intentionally short.',
+  ].join('\n'))
+
+  await expect(page.getByTestId('reader-outline')).toBeVisible()
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
+
+  if (!isWideViewport(page)) {
+    await page.getByTestId('reader-outline-button').click()
+    await expect(page.getByTestId('reader-outline-panel')).toBeVisible()
+  }
+
+  await expect
+    .poll(async () =>
+      page
+        .getByTestId('reader-outline')
+        .getByRole('link', { name: 'Now try' })
+        .first()
+        .getAttribute('aria-current'),
+    )
+    .toBe('location')
+})
+
 test('collapses the floating menu and focuses the reader after menu paste success', async ({ page }) => {
   await page.addInitScript((markdown) => {
     Object.defineProperty(navigator, 'clipboard', {
