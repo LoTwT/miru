@@ -114,7 +114,7 @@ function onFocusOut(event: FocusEvent): void {
 function onDocumentPointerDown(event: PointerEvent): void {
   const target = event.target
 
-  if (!(target instanceof Node) || !rootRef.value?.contains(target)) {
+  if (props.isOpen && (!(target instanceof Node) || !rootRef.value?.contains(target))) {
     closeMenu({ restoreFocus: true })
   }
 }
