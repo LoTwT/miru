@@ -30,6 +30,9 @@ test('renders the reader footer with privacy copy and safe links', async ({ page
   await expect(footer).toContainText('安静地读 Markdown · 文档留在本机 · 隐私是默认')
   await expect(footer.getByRole('link', { name: '源码 (GitHub)' })).toHaveAttribute('rel', 'noreferrer')
   await expect(footer.getByRole('link', { name: 'CommonMark' })).toHaveAttribute('rel', 'noreferrer')
+  await expect.poll(() =>
+    footer.getByRole('link', { name: '源码 (GitHub)' }).evaluate((link) => link.getBoundingClientRect().height),
+  ).toBeGreaterThanOrEqual(44)
 
   await footer.getByRole('button', { name: '↑ 回到顶部' }).click()
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBeLessThan(24)
@@ -527,6 +530,10 @@ test('system theme clears explicit theme overrides and keeps OS dark following',
 test('reading settings use a bottom sheet on narrow screens', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/')
+
+  await expect.poll(() => readReadingTypography(page)).toMatchObject({
+    body: 18,
+  })
 
   await page.getByTestId('reading-settings-button').click()
 
