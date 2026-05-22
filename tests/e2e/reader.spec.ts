@@ -204,6 +204,117 @@ test('does not persist collapsed H1 state after reload', async ({ page }) => {
   await expect(page.getByText('打开 miru，像翻开一本排版精良的小册子。')).toBeVisible()
 })
 
+test('shows quiet outline navigation only for heading-rich documents', async ({ page }) => {
+  await page.goto('/')
+
+  await pasteText(page, [
+    '# One',
+    '',
+    'One body.',
+    '',
+    '## Two',
+    '',
+    'Two body.',
+    '',
+    '## Three',
+    '',
+    'Three body.',
+  ].join('\n'))
+  await expect(page.getByTestId('reader-outline')).toHaveCount(0)
+
+  await pasteText(page, [
+    '# One',
+    '',
+    'One body.',
+    '',
+    '## Two',
+    '',
+    'Two body.',
+    '',
+    '## Three',
+    '',
+    'Three body.',
+    '',
+    '# Four',
+    '',
+    'Four body.',
+  ].join('\n'))
+
+  await expect(page.getByTestId('reader-outline')).toBeVisible()
+
+  if (isWideViewport(page)) {
+    await expect(page.getByTestId('reader-outline-rail')).toBeVisible()
+  }
+  else {
+    await expect(page.getByTestId('reader-outline-button')).toBeVisible()
+  }
+})
+
+test('navigates from the outline and expands a collapsed parent section first', async ({ page }) => {
+  await page.goto('/')
+
+  await pasteText(page, [
+    '# First section',
+    '',
+    'First body.',
+    '',
+    '## Nested topic',
+    '',
+    'Nested body.',
+    '',
+    '# Second section',
+    '',
+    'Second body.',
+    '',
+    '# Third section',
+    '',
+    'Third body.',
+  ].join('\n'))
+
+  const firstToggle = page.locator('[data-reader-heading-toggle]').first()
+  await firstToggle.click()
+  await expect(firstToggle).toHaveAttribute('aria-expanded', 'false')
+  await expect(page.getByRole('heading', { name: 'Nested topic' })).not.toBeVisible()
+
+  if (!isWideViewport(page)) {
+    const outlineButton = page.getByTestId('reader-outline-button')
+    const panel = page.getByTestId('reader-outline-panel')
+    const firstOutlineItem = panel.getByRole('link', { name: 'First section' })
+
+    await outlineButton.click()
+    await expect(panel).toBeVisible()
+    await expect(firstOutlineItem).toBeFocused()
+
+    await page.keyboard.press('Escape')
+    await expect(panel).not.toBeVisible()
+    await expect(outlineButton).toBeFocused()
+
+    await outlineButton.click()
+    await expect(panel).toBeVisible()
+    await expect(firstOutlineItem).toBeFocused()
+
+    await page.mouse.click(12, 12)
+    await expect(panel).not.toBeVisible()
+    await expect(outlineButton).toBeFocused()
+
+    await outlineButton.click()
+    await expect(panel).toBeVisible()
+    await expect(firstOutlineItem).toBeFocused()
+  }
+
+  await page.getByTestId('reader-outline').getByRole('link', { name: 'Nested topic' }).click()
+
+  await expect(firstToggle).toHaveAttribute('aria-expanded', 'true')
+  await expect(page.getByRole('heading', { name: 'Nested topic' })).toBeVisible()
+  await expect(page).toHaveURL(/#nested-topic$/)
+  await expect(page.getByRole('heading', { name: 'Nested topic' })).toBeFocused()
+
+  if (!isWideViewport(page)) {
+    await expect(page.getByTestId('reader-outline-panel')).not.toBeVisible()
+    await expect(page.getByTestId('reader-outline-button')).toBeVisible()
+  }
+})
+
 test('collapses the floating menu and focuses the reader after menu paste success', async ({ page }) => {
   await page.addInitScript((markdown) => {
     Object.defineProperty(navigator, 'clipboard', {
@@ -407,4 +518,8 @@ async function pasteText(page: import('@playwright/test').Page, text: string) {
     event.clipboardData?.setData('text/plain', value)
     document.querySelector('main')?.dispatchEvent(event)
   }, text)
+}
+
+function isWideViewport(page: import('@playwright/test').Page): boolean {
+  return (page.viewportSize()?.width ?? 0) >= 1100
 }

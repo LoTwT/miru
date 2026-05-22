@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, reactive, shallowRef, useTemplateRef, watch } from 'vue'
 
 import FloatingInputMenu from '@/components/FloatingInputMenu.vue'
+import ReaderOutlineNavigation from '@/components/ReaderOutlineNavigation.vue'
 import ReadingSettingsControl from '@/components/ReadingSettingsControl.vue'
 import ReaderSurface from '@/components/ReaderSurface.vue'
 import sampleMarkdown from '@/content/sample.md?raw'
@@ -12,6 +13,7 @@ import { useReadingSettings } from '@/features/settings/useReadingSettings'
 import { loadDefaultReadingFonts } from '@/lib/theme/fonts'
 import { readPersistedReadingSettings } from '@/lib/theme/tokens'
 import type { ReaderDocument, RemoteImageMode } from '@/types/reader'
+import type { ReaderOutlineItem } from '@/features/reader/outlineNavigation'
 
 const documentState = reactive<ReaderDocument>({
   source: 'sample',
@@ -21,6 +23,8 @@ const documentState = reactive<ReaderDocument>({
 const isDragging = shallowRef(false)
 const isInputMenuOpen = shallowRef(false)
 const liveStatus = shallowRef('')
+const outlineItems = shallowRef<ReaderOutlineItem[]>([])
+const activeOutlineId = shallowRef('')
 const readerRef = useTemplateRef<InstanceType<typeof ReaderSurface>>('reader')
 const persistedSettings = readPersistedReadingSettings()
 const remoteImageMode = shallowRef<RemoteImageMode>(persistedSettings?.remoteImageMode ?? 'auto')
@@ -62,6 +66,22 @@ onMounted(async () => {
 
 function resetToSample(): void {
   loadFromText(sampleMarkdown, 'sample', 'miru sample')
+}
+
+function navigateToOutlineItem(id: string): void {
+  void readerRef.value?.scrollToHeading(id)
+}
+
+function updateOutlineItems(items: ReaderOutlineItem[]): void {
+  outlineItems.value = items
+
+  if (items.length === 0) {
+    activeOutlineId.value = ''
+  }
+}
+
+function updateActiveOutlineId(id: string): void {
+  activeOutlineId.value = id
 }
 
 async function onDocumentLoaded(source: ReaderDocument['source']): Promise<void> {
@@ -149,6 +169,14 @@ async function onDrop(event: DragEvent): Promise<void> {
       :document="documentState"
       :html="rendered.html.value"
       :is-rendering="rendered.isRendering.value"
+      @outline-change="updateOutlineItems"
+      @active-heading-change="updateActiveOutlineId"
+    />
+
+    <ReaderOutlineNavigation
+      :items="outlineItems"
+      :active-id="activeOutlineId"
+      @navigate="navigateToOutlineItem"
     />
 
     <p class="app-shell__live-status" role="status" aria-live="polite">
