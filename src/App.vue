@@ -5,6 +5,7 @@ import FloatingInputMenu from '@/components/FloatingInputMenu.vue'
 import ReadingSettingsControl from '@/components/ReadingSettingsControl.vue'
 import ReaderSurface from '@/components/ReaderSurface.vue'
 import sampleMarkdown from '@/content/sample.md?raw'
+import { getBareUrlPaste } from '@/features/input/urlInput'
 import { useDocumentInput } from '@/features/input/useDocumentInput'
 import { useRenderedMarkdown } from '@/features/reader/useRenderedMarkdown'
 import { useReadingSettings } from '@/features/settings/useReadingSettings'
@@ -19,6 +20,7 @@ const documentState = reactive<ReaderDocument>({
 })
 const isDragging = shallowRef(false)
 const isInputMenuOpen = shallowRef(false)
+const liveStatus = shallowRef('')
 const readerRef = useTemplateRef<InstanceType<typeof ReaderSurface>>('reader')
 const persistedSettings = readPersistedReadingSettings()
 const remoteImageMode = shallowRef<RemoteImageMode>(persistedSettings?.remoteImageMode ?? 'auto')
@@ -43,6 +45,13 @@ const status = computed(() => rendered.error.value ?? error.value?.detail ?? '')
 watch(status, (value) => {
   if (value) {
     isInputMenuOpen.value = true
+    liveStatus.value = value
+  }
+})
+
+watch(isFetchingUrl, (value) => {
+  if (value) {
+    liveStatus.value = '正在抓取 URL 内容…'
   }
 })
 
@@ -64,6 +73,8 @@ async function onDocumentLoaded(source: ReaderDocument['source']): Promise<void>
     isInputMenuOpen.value = false
   }
 
+  liveStatus.value = '文档已加载'
+
   await nextTick()
   readerRef.value?.focus()
 }
@@ -77,6 +88,14 @@ function onPaste(event: ClipboardEvent): void {
 
   if (text?.trim()) {
     event.preventDefault()
+
+    const bareUrl = getBareUrlPaste(text)
+    if (bareUrl) {
+      isInputMenuOpen.value = true
+      void loadFromUrl(bareUrl)
+      return
+    }
+
     loadFromText(text, 'paste', 'Pasted markdown')
   }
 }
@@ -132,6 +151,10 @@ async function onDrop(event: DragEvent): Promise<void> {
       :is-rendering="rendered.isRendering.value"
     />
 
+    <p class="app-shell__live-status" role="status" aria-live="polite">
+      {{ liveStatus }}
+    </p>
+
     <FloatingInputMenu
       :is-open="isInputMenuOpen"
       :is-fetching-url="isFetchingUrl"
@@ -181,6 +204,18 @@ async function onDrop(event: DragEvent): Promise<void> {
   font-size: 1.35rem;
   font-weight: 650;
   text-decoration: none;
+}
+
+.app-shell__live-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 </style>

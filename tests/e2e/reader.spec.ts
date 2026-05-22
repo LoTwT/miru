@@ -87,6 +87,42 @@ test('collapses the floating menu and focuses the reader after URL fetch success
   await expect(page.getByRole('button', { name: /粘贴/ })).toBeFocused()
 })
 
+test('auto-fetches a bare URL pasted into the reader', async ({ page }) => {
+  await page.route('https://example.com/readme.md', async route => route.fulfill({
+    contentType: 'text/markdown',
+    body: fetchedMarkdown,
+  }))
+
+  await page.goto('/')
+
+  await pasteText(page, 'https://example.com/readme.md')
+
+  await expect(page.getByRole('heading', { name: 'Remote doc' })).toBeVisible()
+  await expect(page.getByTestId('floating-affordance-menu')).not.toBeVisible()
+  await expect(page.locator('.reader-surface')).toBeFocused()
+  await expect(page.locator('.app-shell__live-status')).toHaveText('文档已加载')
+})
+
+test('keeps the current document when pasted URL fetch is not markdown-readable', async ({ page }) => {
+  await page.route('https://example.com/page', async route => route.fulfill({
+    contentType: 'text/html',
+    body: '<!doctype html><title>Not markdown</title>',
+  }))
+
+  await page.goto('/')
+
+  await pasteText(page, '# Current doc\n\nKeep reading.')
+  await expect(page.getByRole('heading', { name: 'Current doc' })).toBeVisible()
+
+  await pasteText(page, 'https://example.com/page')
+
+  await expect(page.getByRole('heading', { name: 'Current doc' })).toBeVisible()
+  await expect(page.getByText('Keep reading.')).toBeVisible()
+  await expect(page.getByTestId('floating-affordance-menu')).toBeVisible()
+  await expect(page.getByTestId('floating-affordance-menu')
+    .getByText('请使用原始 markdown / 纯文本 URL，或复制内容后粘贴进 miru。')).toBeVisible()
+})
+
 test('keeps URL field paste inside the URL input', async ({ page, context }) => {
   await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: 'http://127.0.0.1:4173' })
   await page.goto('/')
@@ -359,4 +395,16 @@ async function readInlineReadingTokens(page: import('@playwright/test').Page) {
       readingTheme: root.dataset.readingTheme ?? '',
     }
   })
+}
+
+async function pasteText(page: import('@playwright/test').Page, text: string) {
+  await page.evaluate((value) => {
+    const event = new ClipboardEvent('paste', {
+      clipboardData: new DataTransfer(),
+      bubbles: true,
+      cancelable: true,
+    })
+    event.clipboardData?.setData('text/plain', value)
+    document.querySelector('main')?.dispatchEvent(event)
+  }, text)
 }
