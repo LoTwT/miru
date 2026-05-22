@@ -16,6 +16,7 @@ import {
   readingFontSizeOptions,
   readingLineHeightOptions,
   readingMeasureOptions,
+  readingOutlinePositionOptions,
   themeTokenOverridesByChoice,
 } from './readingSettingsOptions'
 import type {
@@ -23,6 +24,7 @@ import type {
   ReadingFontSizeId,
   ReadingLineHeightId,
   ReadingMeasureId,
+  ReadingOutlinePositionId,
   ReadingThemeChoice,
 } from './readingSettingsOptions'
 
@@ -32,6 +34,7 @@ export interface ReadingCustomizationState {
   lineHeight: ReadingLineHeightId
   fontFamily: ReadingFontFamilyId
   theme: ReadingThemeChoice
+  outlinePosition: ReadingOutlinePositionId
 }
 
 export function useReadingSettings(options: {
@@ -49,7 +52,8 @@ export function useReadingSettings(options: {
     && state.measure === defaultReadingSettings.measure
     && state.lineHeight === defaultReadingSettings.lineHeight
     && state.fontFamily === defaultReadingSettings.fontFamily
-    && state.theme === defaultReadingSettings.theme,
+    && state.theme === defaultReadingSettings.theme
+    && state.outlinePosition === defaultReadingSettings.outlinePosition,
   )
 
   function applyCurrent(): void {
@@ -88,12 +92,18 @@ export function useReadingSettings(options: {
     commit()
   }
 
+  function updateOutlinePosition(value: ReadingOutlinePositionId): void {
+    state.outlinePosition = value
+    commit()
+  }
+
   function reset(): void {
     state.fontSize = defaultReadingSettings.fontSize
     state.measure = defaultReadingSettings.measure
     state.lineHeight = defaultReadingSettings.lineHeight
     state.fontFamily = defaultReadingSettings.fontFamily
     state.theme = defaultReadingSettings.theme
+    state.outlinePosition = defaultReadingSettings.outlinePosition
 
     clearInlineReadingOverrides(root)
     syncThemeAttribute(root, state.theme)
@@ -114,8 +124,9 @@ export function useReadingSettings(options: {
   function persist(): void {
     const tokenOverrides = buildTokenOverrides(state)
     const hasTokenOverrides = Object.keys(tokenOverrides).length > 0
+    const hasOutlinePositionOverride = state.outlinePosition !== defaultReadingSettings.outlinePosition
 
-    if (!hasTokenOverrides && state.theme === 'system' && !remoteImageMode) {
+    if (!hasTokenOverrides && state.theme === 'system' && !hasOutlinePositionOverride && !remoteImageMode) {
       clearPersistedReadingSettings(storage)
       return
     }
@@ -128,6 +139,7 @@ export function useReadingSettings(options: {
         ? readingFontFamilyOptions.find(option => option.id === 'sans')?.tokenValue
         : undefined,
       remoteImageMode,
+      outlinePosition: hasOutlinePositionOverride ? state.outlinePosition : undefined,
     }
 
     writePersistedReadingSettings(settings, storage)
@@ -143,6 +155,7 @@ export function useReadingSettings(options: {
     updateLineHeight,
     updateFontFamily,
     updateTheme,
+    updateOutlinePosition,
   }
 }
 
@@ -159,6 +172,8 @@ function stateFromPersistedSettings(settings: PersistedReadingSettings | null): 
     fontFamily: matchTokenValue(readingFontFamilyOptions, settings?.fontBody ?? tokenOverrides?.['--reading-font-body'])
       ?? defaultReadingSettings.fontFamily,
     theme: isReadingThemeChoice(settings?.presetId) ? settings.presetId : defaultReadingSettings.theme,
+    outlinePosition: matchSimpleValue(readingOutlinePositionOptions, settings?.outlinePosition)
+      ?? defaultReadingSettings.outlinePosition,
   }
 }
 
@@ -167,6 +182,13 @@ function matchTokenValue<T extends string>(
   value: string | undefined,
 ): T | undefined {
   return options.find(option => option.tokenValue === value)?.id
+}
+
+function matchSimpleValue<T extends string>(
+  options: readonly { id: T }[],
+  value: string | undefined,
+): T | undefined {
+  return options.find(option => option.id === value)?.id
 }
 
 function buildTokenOverrides(state: ReadingCustomizationState): Record<ReadingTokenName, string> {

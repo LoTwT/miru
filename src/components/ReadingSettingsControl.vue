@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { nextTick, onMounted, onUnmounted, shallowRef, useTemplateRef, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, shallowRef, useTemplateRef, watch } from 'vue'
 
 import {
   readingFontFamilyOptions,
   readingFontSizeOptions,
   readingLineHeightOptions,
   readingMeasureOptions,
+  readingOutlinePositionOptions,
   readingThemeOptions,
 } from '@/features/settings/readingSettingsOptions'
 import type {
@@ -13,6 +14,7 @@ import type {
   ReadingFontSizeId,
   ReadingLineHeightId,
   ReadingMeasureId,
+  ReadingOutlinePositionId,
   ReadingThemeChoice,
 } from '@/features/settings/readingSettingsOptions'
 import type { ReadingCustomizationState } from '@/features/settings/useReadingSettings'
@@ -20,6 +22,7 @@ import type { ReadingCustomizationState } from '@/features/settings/useReadingSe
 const props = defineProps<{
   isDefault: boolean
   settings: Readonly<ReadingCustomizationState>
+  showOutlinePositionControl: boolean
 }>()
 
 const emit = defineEmits<{
@@ -28,6 +31,7 @@ const emit = defineEmits<{
   updateLineHeight: [value: ReadingLineHeightId]
   updateFontFamily: [value: ReadingFontFamilyId]
   updateTheme: [value: ReadingThemeChoice]
+  updateOutlinePosition: [value: ReadingOutlinePositionId]
   reset: []
 }>()
 
@@ -36,12 +40,15 @@ const isHovering = shallowRef(false)
 const isFocusWithin = shallowRef(false)
 const isReceded = shallowRef(false)
 const prefersReducedMotion = shallowRef(false)
+const isDesktopOutlineViewport = shallowRef(false)
 const rootRef = useTemplateRef<HTMLElement>('root')
 const buttonRef = useTemplateRef<HTMLButtonElement>('button')
+const showOutlinePositionControl = computed(() => props.showOutlinePositionControl && isDesktopOutlineViewport.value)
 
 let lastScrollY = 0
 let recedeTimer: ReturnType<typeof setTimeout> | undefined
 let mediaQuery: MediaQueryList | undefined
+let outlineViewportMediaQuery: MediaQueryList | undefined
 
 function togglePanel(): void {
   if (isOpen.value) {
@@ -186,6 +193,10 @@ function selectTheme(value: ReadingThemeChoice): void {
   emit('updateTheme', value)
 }
 
+function selectOutlinePosition(value: ReadingOutlinePositionId): void {
+  emit('updateOutlinePosition', value)
+}
+
 watch(isOpen, (value) => {
   if (value) {
     isReceded.value = false
@@ -194,10 +205,13 @@ watch(isOpen, (value) => {
 
 onMounted(() => {
   mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
+  outlineViewportMediaQuery = window.matchMedia('(min-width: 1100px)')
   syncReducedMotion()
+  syncOutlineViewport()
   lastScrollY = window.scrollY
 
   mediaQuery.addEventListener('change', syncReducedMotion)
+  outlineViewportMediaQuery.addEventListener('change', syncOutlineViewport)
   window.addEventListener('scroll', onWindowScroll, { passive: true })
   window.addEventListener('mousemove', onWindowMouseMove, { passive: true })
   document.addEventListener('pointerdown', onDocumentPointerDown)
@@ -206,10 +220,15 @@ onMounted(() => {
 onUnmounted(() => {
   window.clearTimeout(recedeTimer)
   mediaQuery?.removeEventListener('change', syncReducedMotion)
+  outlineViewportMediaQuery?.removeEventListener('change', syncOutlineViewport)
   window.removeEventListener('scroll', onWindowScroll)
   window.removeEventListener('mousemove', onWindowMouseMove)
   document.removeEventListener('pointerdown', onDocumentPointerDown)
 })
+
+function syncOutlineViewport(): void {
+  isDesktopOutlineViewport.value = outlineViewportMediaQuery?.matches ?? false
+}
 </script>
 
 <template>
@@ -354,6 +373,31 @@ onUnmounted(() => {
             :data-option-id="option.id"
             data-settings-item
             @click="selectTheme(option.id)"
+          >
+            {{ option.label }}
+          </button>
+        </div>
+      </fieldset>
+
+      <fieldset v-if="showOutlinePositionControl" class="reading-settings__field">
+        <legend class="reading-settings__legend">大纲位置</legend>
+        <div
+          class="reading-settings__segments reading-settings__segments--outline-position"
+          role="radiogroup"
+          aria-label="大纲位置"
+          @keydown="onRadioKeydown($event, readingOutlinePositionOptions, props.settings.outlinePosition, selectOutlinePosition)"
+        >
+          <button
+            v-for="option in readingOutlinePositionOptions"
+            :key="option.id"
+            class="reading-settings__segment"
+            type="button"
+            role="radio"
+            :aria-checked="props.settings.outlinePosition === option.id"
+            :aria-label="option.ariaLabel"
+            :data-option-id="option.id"
+            data-settings-item
+            @click="selectOutlinePosition(option.id)"
           >
             {{ option.label }}
           </button>
@@ -542,6 +586,10 @@ onUnmounted(() => {
 
 .reading-settings__segments--theme {
   --segment-count: 4;
+}
+
+.reading-settings__segments--outline-position {
+  --segment-count: 2;
 }
 
 .reading-settings__segment,

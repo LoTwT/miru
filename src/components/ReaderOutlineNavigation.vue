@@ -2,10 +2,12 @@
 import { computed, nextTick, onMounted, onUnmounted, shallowRef, useTemplateRef, watch } from 'vue'
 
 import type { ReaderOutlineItem } from '@/features/reader/outlineNavigation'
+import type { ReadingOutlinePositionId } from '@/features/settings/readingSettingsOptions'
 
 const props = defineProps<{
   activeId: string
   items: readonly ReaderOutlineItem[]
+  position: ReadingOutlinePositionId
 }>()
 
 const emit = defineEmits<{
@@ -195,6 +197,8 @@ onUnmounted(() => {
     :class="{
       'reader-outline--dimmed': isReceded && !isOpen && !isHovering && !isFocusWithin && !prefersReducedMotion,
       'reader-outline--open': isOpen,
+      'reader-outline--left': props.position === 'left',
+      'reader-outline--right': props.position === 'right',
     }"
     aria-label="文档大纲"
     data-testid="reader-outline"
@@ -484,11 +488,23 @@ onUnmounted(() => {
 
 @media (min-width: 1100px) {
   .reader-outline {
+    --reader-outline-edge: min(32.5ch, 50vw - 18rem);
+    --reader-outline-rail-size: 12rem;
+    --reader-outline-right-gap: 4rem;
+    --reader-outline-left-gap: 5rem;
+
     inset-block-start: 27vh;
-    inset-inline-start: calc(50% + min(32.5ch, 50vw - 18rem) + 4rem);
-    inline-size: 12rem;
+    inline-size: var(--reader-outline-rail-size);
     opacity: 0.72;
     transition: opacity 160ms ease;
+  }
+
+  .reader-outline--right {
+    inset-inline-start: calc(50% + var(--reader-outline-edge) + var(--reader-outline-right-gap));
+  }
+
+  .reader-outline--left {
+    inset-inline-start: calc(50% - var(--reader-outline-edge) - var(--reader-outline-rail-size) - var(--reader-outline-left-gap));
   }
 
   .reader-outline--dimmed {

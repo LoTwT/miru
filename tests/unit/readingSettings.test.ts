@@ -33,12 +33,14 @@ describe('reading customization settings', () => {
     settings.updateFontSize('22')
     settings.updateMeasure('75')
     settings.updateTheme('sepia')
+    settings.updateOutlinePosition('left')
 
     expect(root.style.getPropertyValue('--reading-font-size')).toBe('22px')
     expect(root.style.getPropertyValue('--reading-measure')).toBe('75ch')
     expect(root.style.getPropertyValue('--reading-bg')).toBe('#f4ecd8')
     expect(root.style.getPropertyValue('--reading-fg-muted')).toBe('#6f6149')
     expect(root.dataset.readingTheme).toBe('sepia')
+    expect(settings.state.outlinePosition).toBe('left')
 
     const persisted = readPersistedReadingSettings(storage)
 
@@ -46,6 +48,7 @@ describe('reading customization settings', () => {
     expect(persisted?.tokenOverrides?.['--reading-font-size']).toBe('22px')
     expect(persisted?.tokenOverrides?.['--reading-measure']).toBe('75ch')
     expect(persisted?.tokenOverrides?.['--reading-bg']).toBe('#f4ecd8')
+    expect(persisted?.outlinePosition).toBe('left')
   })
 
   it('switches back to system by clearing theme tokens while preserving typography overrides', () => {
@@ -66,10 +69,26 @@ describe('reading customization settings', () => {
     expect(persisted?.tokenOverrides?.['--reading-bg']).toBeUndefined()
   })
 
+  it('persists outline position without writing typography or theme overrides', () => {
+    const settings = useReadingSettings({ root, storage })
+
+    settings.updateOutlinePosition('left')
+
+    expect(settings.state.outlinePosition).toBe('left')
+    expect(root.style.cssText).toBe('')
+
+    const persisted = readPersistedReadingSettings(storage)
+
+    expect(persisted?.outlinePosition).toBe('left')
+    expect(persisted?.presetId).toBe('system')
+    expect(persisted?.tokenOverrides).toBeUndefined()
+  })
+
   it('reset clears customization overrides without losing remote image mode', () => {
     storage.setItem('miru:reading-settings:v1', JSON.stringify({
       version: 1,
       remoteImageMode: 'block',
+      outlinePosition: 'left',
       tokenOverrides: {
         '--reading-font-size': '24px',
         '--reading-bg': '#f4ecd8',
@@ -85,11 +104,13 @@ describe('reading customization settings', () => {
     expect(root.style.getPropertyValue('--reading-font-size')).toBe('')
     expect(root.style.getPropertyValue('--reading-bg')).toBe('')
     expect(root.dataset.readingTheme).toBeUndefined()
+    expect(settings.state.outlinePosition).toBe('right')
 
     const persisted = readPersistedReadingSettings(storage)
 
     expect(persisted?.remoteImageMode).toBe('block')
     expect(persisted?.tokenOverrides).toBeUndefined()
+    expect(persisted?.outlinePosition).toBeUndefined()
   })
 
   it('ignores malformed persisted settings safely', () => {
@@ -99,5 +120,6 @@ describe('reading customization settings', () => {
 
     expect(settings.state.fontSize).toBe('18')
     expect(settings.state.theme).toBe('system')
+    expect(settings.state.outlinePosition).toBe('right')
   })
 })
