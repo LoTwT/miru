@@ -37,8 +37,9 @@ describe('reading customization settings', () => {
 
     expect(root.style.getPropertyValue('--reading-font-size')).toBe('22px')
     expect(root.style.getPropertyValue('--reading-measure')).toBe('75ch')
-    expect(root.style.getPropertyValue('--reading-bg')).toBe('#f4ecd8')
-    expect(root.style.getPropertyValue('--reading-fg-muted')).toBe('#6f6149')
+    expect(root.style.getPropertyValue('--reading-bg')).toBe('#efe1bd')
+    expect(root.style.getPropertyValue('--reading-fg-muted')).toBe('#64553e')
+    expect(root.style.getPropertyValue('--reading-code-bg')).toBe('#e2cb99')
     expect(root.dataset.readingTheme).toBe('sepia')
     expect(settings.state.outlinePosition).toBe('left')
 
@@ -47,7 +48,7 @@ describe('reading customization settings', () => {
     expect(persisted?.presetId).toBe('sepia')
     expect(persisted?.tokenOverrides?.['--reading-font-size']).toBe('22px')
     expect(persisted?.tokenOverrides?.['--reading-measure']).toBe('75ch')
-    expect(persisted?.tokenOverrides?.['--reading-bg']).toBe('#f4ecd8')
+    expect(persisted?.tokenOverrides?.['--reading-bg']).toBe('#efe1bd')
     expect(persisted?.outlinePosition).toBe('left')
   })
 
@@ -91,7 +92,7 @@ describe('reading customization settings', () => {
       outlinePosition: 'left',
       tokenOverrides: {
         '--reading-font-size': '24px',
-        '--reading-bg': '#f4ecd8',
+        '--reading-bg': '#efe1bd',
       },
       presetId: 'sepia',
     }))

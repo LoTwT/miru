@@ -92,15 +92,15 @@ export const lightThemeTokenOverrides = pickThemeTokens(defaultReadingTheme.toke
 export const darkThemeTokenOverrides = pickThemeTokens(darkReadingTheme.tokens)
 
 export const sepiaThemeTokenOverrides = {
-  '--reading-bg': '#f4ecd8',
+  '--reading-bg': '#efe1bd',
   '--reading-fg': '#463b29',
-  '--reading-fg-muted': '#6f6149',
+  '--reading-fg-muted': '#64553e',
   '--reading-link': '#66569d',
   '--reading-link-hover': '#55468d',
-  '--reading-accent': '#8c552f',
-  '--reading-rule': '#d6c4a4',
+  '--reading-accent': '#83502d',
+  '--reading-rule': '#c4a466',
   '--reading-code-fg': '#463b29',
-  '--reading-code-bg': '#ece1c4',
+  '--reading-code-bg': '#e2cb99',
 } as const satisfies Record<(typeof customizableThemeTokens)[number], string>
 
 export const themeTokenOverridesByChoice = {

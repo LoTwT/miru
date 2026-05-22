@@ -1,6 +1,6 @@
 # miru V1 — Reading customization UI · interaction spec (FINAL)
 
-> Status: **FINAL — all gates green.** Product design sign-off ✅ (`0de3086b`) · TL feasibility ✅ (`8077c090`) · QA sepia-AA PASS ✅ (`267ee431`, condition: muted `#6f6149` — applied) · UX. Ready for TL-Vivian implementation PR. Task #26. Built on V0 `--reading-*` token contract + runtime mutation API + persistence (read-in-V0). Division: Product=scope/persistence-policy/priority · UX=interaction (this doc) · TL=impl.
+> Status: **FINAL — implemented.** Product design sign-off ✅ (`0de3086b`) · TL feasibility ✅ (`8077c090`) · QA sepia-AA PASS ✅ (`267ee431`, condition: muted `#6f6149` — applied) · warm-paper sepia refresh accepted by UX brand review (`f0c6e075`) and Product scope (`10247d7b`). Built on V0 `--reading-*` token contract + runtime mutation API + persistence (read-in-V0). Division: Product=scope/persistence-policy/priority · UX=interaction (this doc) · TL=impl.
 
 ## 1. Principle (reading-first)
 - Reading surface stays the hero; the panel is **chrome that recedes**. Live preview applies to the **real content** (not a preview box). Calm, on-brand, `--reading-*` tokens.
@@ -41,7 +41,17 @@
 
 ## 7. Themes + sepia
 - 4 themes. **Explicit light / dark / sepia via `:root[data-reading-theme=light|dark|sepia]` token override** (NOT JS-writing base). **跟随系统** = no `data-reading-theme` attr set → falls back to existing `prefers-color-scheme` media-query path (default, = V0). sepia = a `data-reading-theme=sepia` preset; switching away clears the attr/override (no residue). (Impl mechanism per PR #12.)
-- **Sepia palette (UX; QA AA-confirmed)**: `--reading-bg #f4ecd8` · `--reading-fg #463b29` · `--reading-fg-muted #6f6149` · `--reading-code-bg #ece1c4` · `--reading-link #66569d`. UX WCAG pre-check on `#f4ecd8`: fg **9.30:1**, link **5.27:1** (no swap needed), code-fg **8.41:1**, muted **5.12:1** (darkened from #8a7d63 which was 3.43 fail) — all ≥4.5 AA. QA authoritative confirm: PASS.
+- **Warm-paper sepia palette (miru-local preset override; UX brand-reviewed, QA to verify on implementation PR)**:
+  - `--reading-bg #efe1bd`
+  - `--reading-fg #463b29`
+  - `--reading-fg-muted #64553e`
+  - `--reading-link #66569d`
+  - `--reading-link-hover #55468d`
+  - `--reading-accent #83502d`
+  - `--reading-rule #c4a466`
+  - `--reading-code-fg #463b29`
+  - `--reading-code-bg #e2cb99`
+- **Sepia AA matrix (UX pre-check)**: fg on bg **8.43:1**; muted on bg **5.56:1**; link on bg **4.78:1**; hover on bg **6.11:1**; accent on bg **5.13:1**; bg on accent **5.13:1**; code-fg on code-bg **6.90:1**; muted on code-bg **4.55:1**. All text pairs are ≥4.5 AA. `code-bg #e2cb99` was accepted as a subtle but visible surface step; a darker code block should be paired with a future sepia-specific Shiki theme rather than only darkening the background.
 
 ## 8. Acceptance (AC-C* + e2e)
 - AC-C1: `aA` reachable keyboard+touch; panel opens, Esc/outside/toggle closes + focus returns to `aA`; page not locked.
@@ -53,9 +63,9 @@
 - e2e: discrete apply-live, reset, persist/restore, theme switch incl. sepia clear, mobile bottom-sheet no-overflow.
 
 ## 9. Non-text / future notes (QA `267ee431`)
-- `code-bg #ece1c4` vs `bg #f4ecd8` = 1.11:1 — intentional subtle code surface (consistent w/ light/dark); not text-AA-gated. Keep.
-- `--reading-rule` (table/divider): subtle low-contrast OK for reading dividers. **If it ever becomes an interactive control border (hard WCAG non-text 3:1), set a deeper sepia `--reading-rule`** — out of scope this round.
-- sepia `--reading-accent`: V1 controls use their own chrome colors (segmented selected = light-lavender bg + dark-lavender text), NOT `--reading-accent`, so no filled-accent-text in sepia. **If a filled CTA/checkbox ever puts text on the accent in sepia, use `#8c552f` (5.16:1 both ways, QA-proposed)**; for border/decoration the existing accent is fine. Not a blocker.
+- `code-bg #e2cb99` vs `bg #efe1bd` = **1.22:1** — intentional subtle code surface (consistent with light/dark); not text-AA-gated. Keep unless a future sepia-specific Shiki theme is introduced.
+- `--reading-rule #c4a466` gives dividers/table frames visible structure without making the page heavy. If a future control border requires hard WCAG non-text 3:1, evaluate that component separately.
+- sepia `--reading-accent #83502d` is AA both directions on the warm-paper bg (5.13:1) if it is ever used as filled text/background; V1 controls still use their own chrome colors.
 
 ## 10. Status
 - **All gates green. Spec FINAL.** → TL-Vivian opens implementation PR; Product reviews scope on PR; UX visual + QA verify on PR.
