@@ -42,6 +42,13 @@ defineExpose({
   scrollToHeading,
 })
 
+function scrollToTop(): void {
+  window.scrollTo({
+    top: 0,
+    behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+  })
+}
+
 async function enhanceCurrentContent(): Promise<void> {
   cleanupCollapsibleHeadings?.()
   cleanupCollapsibleHeadings = undefined
@@ -223,6 +230,35 @@ function prefersReducedMotion(): boolean {
     </p>
     <!-- v-html is restricted to TrustedHtml returned by the markdown sanitizer pipeline. -->
     <div ref="content" class="reader-surface__content" v-html="props.html.value" />
+    <footer class="reader-footer" data-testid="reader-footer">
+      <p class="reader-footer__mark" aria-label="miru">
+        miru.
+      </p>
+      <p class="reader-footer__line">
+        安静地读 Markdown · 文档留在本机 · 隐私是默认
+      </p>
+      <nav class="reader-footer__links" aria-label="miru 相关链接">
+        <button class="reader-footer__link" type="button" @click="scrollToTop">
+          ↑ 回到顶部
+        </button>
+        <a
+          class="reader-footer__link"
+          href="https://github.com/LoTwT/miru"
+          target="_blank"
+          rel="noreferrer"
+        >
+          源码 (GitHub)
+        </a>
+        <a
+          class="reader-footer__link"
+          href="https://commonmark.org/"
+          target="_blank"
+          rel="noreferrer"
+        >
+          CommonMark
+        </a>
+      </nav>
+    </footer>
   </article>
 </template>
 
@@ -246,5 +282,53 @@ function prefersReducedMotion(): boolean {
   font-family: var(--reading-font-body);
   font-size: var(--reading-font-size);
   line-height: var(--reading-line-height);
+}
+
+.reader-footer {
+  margin-block-start: clamp(4rem, 11vw, 7rem);
+  padding-block: 1.25rem clamp(2rem, 7vw, 4.5rem);
+  border-block-start: 1px solid color-mix(in srgb, var(--reading-fg-muted) 30%, transparent);
+  color: var(--reading-fg-muted);
+  font-family: system-ui, sans-serif;
+  font-size: 0.86rem;
+}
+
+.reader-footer__mark {
+  margin: 0;
+  color: var(--reading-fg);
+  font-family: var(--reading-font-body);
+  font-size: 1.18rem;
+  line-height: 1;
+}
+
+.reader-footer__line {
+  margin: 0.7rem 0 0;
+}
+
+.reader-footer__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 0.8rem;
+  align-items: center;
+  margin-block-start: 0.75rem;
+}
+
+.reader-footer__link {
+  display: inline-flex;
+  align-items: center;
+  min-block-size: 2rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--reading-link);
+  font: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.reader-footer__link:hover,
+.reader-footer__link:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 0.22em;
 }
 </style>
