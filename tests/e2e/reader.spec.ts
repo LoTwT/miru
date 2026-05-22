@@ -22,6 +22,19 @@ test('renders the sample document and supports paste input', async ({ page }) =>
   await expect(page.getByText('Hello miru.')).toBeVisible()
 })
 
+test('renders the reader footer with privacy copy and safe links', async ({ page }) => {
+  await page.goto('/')
+
+  const footer = page.getByTestId('reader-footer')
+  await footer.scrollIntoViewIfNeeded()
+  await expect(footer).toContainText('安静地读 Markdown · 文档留在本机 · 隐私是默认')
+  await expect(footer.getByRole('link', { name: '源码 (GitHub)' })).toHaveAttribute('rel', 'noreferrer')
+  await expect(footer.getByRole('link', { name: 'CommonMark' })).toHaveAttribute('rel', 'noreferrer')
+
+  await footer.getByRole('button', { name: '↑ 回到顶部' }).click()
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeLessThan(24)
+})
+
 test('exposes document input through the floating affordance', async ({ page }) => {
   await page.goto('/')
 
