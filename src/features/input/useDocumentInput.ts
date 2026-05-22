@@ -83,7 +83,7 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
         setError('无法作为 markdown 拉取', '请使用原始 markdown / 纯文本 URL，或复制内容后粘贴进 miru。')
       }
       else {
-        setError('拉取失败', '可能是跨域限制或链接失效。可以复制 raw 内容后粘贴进 miru。')
+        setError('拉取失败', '可能是跨域限制、离线或链接失效。可以复制 raw 内容后粘贴进 miru。')
       }
     }
     finally {
