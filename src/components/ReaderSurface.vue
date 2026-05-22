@@ -149,6 +149,11 @@ function syncActiveHeading(): void {
     return
   }
 
+  if (isNearPageBottom()) {
+    emit('activeHeadingChange', visibleHeadings.at(-1)?.id ?? '')
+    return
+  }
+
   const threshold = Math.min(window.innerHeight * 0.32, 220)
   let activeId = visibleHeadings[0]?.id ?? ''
 
@@ -162,6 +167,18 @@ function syncActiveHeading(): void {
   }
 
   emit('activeHeadingChange', activeId)
+}
+
+function isNearPageBottom(): boolean {
+  const scrollElement = document.scrollingElement ?? document.documentElement
+  const maxScrollY = scrollElement.scrollHeight - window.innerHeight
+
+  if (maxScrollY <= 1) {
+    return false
+  }
+
+  const bottomThreshold = Math.max(24, window.innerHeight * 0.02)
+  return window.scrollY >= maxScrollY - bottomThreshold
 }
 
 function findHeadingById(id: string): HTMLElement | null {
