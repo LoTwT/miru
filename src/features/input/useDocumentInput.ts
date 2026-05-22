@@ -1,5 +1,10 @@
 import { readonly, shallowRef } from 'vue'
 
+import {
+  ensureReadableUrlContentType,
+  getBareUrlPaste,
+  UnsupportedUrlContentTypeError,
+} from '@/features/input/urlInput'
 import type { ReaderDocument, ReaderError } from '@/types/reader'
 
 interface UseDocumentInputOptions {
@@ -15,6 +20,12 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
       const text = await navigator.clipboard.readText()
       if (!text.trim()) {
         setError('剪贴板为空', '复制一段 markdown 后再试。')
+        return
+      }
+
+      const bareUrl = getBareUrlPaste(text)
+      if (bareUrl) {
+        await loadFromUrl(bareUrl)
         return
       }
 
@@ -62,11 +73,18 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
         throw new Error(`HTTP ${response.status}`)
       }
 
+      ensureReadableUrlContentType(response.headers.get('content-type'))
+
       const text = await response.text()
       loadFromText(text, 'url', trimmed)
     }
-    catch {
-      setError('拉取失败', '可能是跨域限制或链接失效。可以复制 raw 内容后粘贴进 miru。')
+    catch (reason) {
+      if (reason instanceof UnsupportedUrlContentTypeError) {
+        setError('无法作为 markdown 拉取', '请使用原始 markdown / 纯文本 URL，或复制内容后粘贴进 miru。')
+      }
+      else {
+        setError('拉取失败', '可能是跨域限制或链接失效。可以复制 raw 内容后粘贴进 miru。')
+      }
     }
     finally {
       isFetchingUrl.value = false
