@@ -81,7 +81,7 @@ test.describe('PWA install and offline shell', () => {
     const menu = page.getByTestId('floating-affordance-menu')
     await expect(page.getByRole('heading', { name: 'Offline file' })).toBeVisible()
     await expect(menu).toBeVisible()
-    await expect(menu.getByText('可能是跨域限制、离线或链接失效。可以复制 raw 内容后粘贴进 miru。')).toBeVisible()
+    await expect(menu.getByText('联网后再试，或先粘贴 / 打开本地文件。', { exact: false })).toBeVisible()
 
     const cachedUrls = await readCachedUrls(page)
     const pageOrigin = new URL(page.url()).origin

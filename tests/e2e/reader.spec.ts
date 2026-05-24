@@ -119,6 +119,26 @@ test('auto-fetches a bare URL pasted into the reader', async ({ page }) => {
   await expect(page.locator('.app-shell__live-status')).toHaveText('文档已加载')
 })
 
+test('converts GitHub blob URLs to raw markdown before fetching', async ({ page }) => {
+  let requestedRawUrl = ''
+
+  await page.route('https://raw.githubusercontent.com/LoTwT/miru/main/README.md', async (route) => {
+    requestedRawUrl = route.request().url()
+    await route.fulfill({
+      contentType: 'text/markdown',
+      body: '# GitHub doc\n\nLoaded from a blob URL.',
+    })
+  })
+  await page.route('https://github.com/LoTwT/miru/blob/main/README.md', route => route.abort('failed'))
+
+  await page.goto('/')
+  await pasteText(page, 'https://github.com/LoTwT/miru/blob/main/README.md')
+
+  await expect(page.getByRole('heading', { name: 'GitHub doc' })).toBeVisible()
+  expect(requestedRawUrl).toBe('https://raw.githubusercontent.com/LoTwT/miru/main/README.md')
+  await expect(page.locator('.reader-surface__meta')).toHaveText('https://github.com/LoTwT/miru/blob/main/README.md')
+})
+
 test('keeps the current document when pasted URL fetch is not markdown-readable', async ({ page }) => {
   await page.route('https://example.com/page', async route => route.fulfill({
     contentType: 'text/html',
@@ -136,7 +156,43 @@ test('keeps the current document when pasted URL fetch is not markdown-readable'
   await expect(page.getByText('Keep reading.')).toBeVisible()
   await expect(page.getByTestId('floating-affordance-menu')).toBeVisible()
   await expect(page.getByTestId('floating-affordance-menu')
-    .getByText('请使用原始 markdown / 纯文本 URL，或复制内容后粘贴进 miru。')).toBeVisible()
+    .getByText('这个链接像网页或文件。试试它的 raw / 源文件链接，或直接粘贴 markdown。', { exact: false })).toBeVisible()
+})
+
+test('keeps the current document and explains missing URL fetches', async ({ page }) => {
+  await page.route('https://example.com/missing.md', async route => route.fulfill({
+    status: 404,
+    contentType: 'text/plain',
+    body: 'Not found',
+  }))
+
+  await page.goto('/')
+
+  await pasteText(page, '# Current doc\n\nKeep reading.')
+  await expect(page.getByRole('heading', { name: 'Current doc' })).toBeVisible()
+
+  await pasteText(page, 'https://example.com/missing.md')
+
+  await expect(page.getByRole('heading', { name: 'Current doc' })).toBeVisible()
+  await expect(page.getByTestId('floating-affordance-menu')).toBeVisible()
+  await expect(page.getByTestId('floating-affordance-menu')
+    .getByText('404 或不存在——核对一下地址。', { exact: false })).toBeVisible()
+})
+
+test('keeps the current document and explains CORS-style URL failures', async ({ page }) => {
+  await page.route('https://example.com/cors.md', route => route.abort('failed'))
+
+  await page.goto('/')
+
+  await pasteText(page, '# Current doc\n\nKeep reading.')
+  await expect(page.getByRole('heading', { name: 'Current doc' })).toBeVisible()
+
+  await pasteText(page, 'https://example.com/cors.md')
+
+  await expect(page.getByRole('heading', { name: 'Current doc' })).toBeVisible()
+  await expect(page.getByTestId('floating-affordance-menu')).toBeVisible()
+  await expect(page.getByTestId('floating-affordance-menu')
+    .getByText('该站点未开放跨域。换 raw 链接，或直接把内容粘贴进 miru。', { exact: false })).toBeVisible()
 })
 
 test('keeps URL field paste inside the URL input', async ({ page, context }) => {

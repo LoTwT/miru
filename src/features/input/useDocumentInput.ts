@@ -3,7 +3,9 @@ import { readonly, shallowRef } from 'vue'
 import {
   ensureReadableUrlContentType,
   getBareUrlPaste,
+  normalizeMarkdownUrl,
   UnsupportedUrlContentTypeError,
+  UrlFetchHttpError,
 } from '@/features/input/urlInput'
 import type { ReaderDocument, ReaderError } from '@/types/reader'
 
@@ -52,10 +54,10 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
   }
 
   async function loadFromUrl(url: string): Promise<void> {
-    const trimmed = url.trim()
+    const normalized = normalizeMarkdownUrl(url)
 
-    if (!/^https?:\/\//i.test(trimmed)) {
-      setError('URL 格式不支持', 'V0 只支持 http/https 的原始 markdown URL。')
+    if (!normalized) {
+      setError('URL 格式不支持', '请使用 http/https 的 markdown 或纯文本链接。')
       return
     }
 
@@ -63,27 +65,38 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
     error.value = null
 
     try {
-      const response = await fetch(trimmed, {
+      const response = await fetch(normalized.requestUrl, {
         mode: 'cors',
         credentials: 'omit',
         referrerPolicy: 'no-referrer',
       })
 
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`)
+        throw new UrlFetchHttpError(response.status)
       }
 
       ensureReadableUrlContentType(response.headers.get('content-type'))
 
       const text = await response.text()
-      loadFromText(text, 'url', trimmed)
+      loadFromText(text, 'url', normalized.inputUrl)
     }
     catch (reason) {
       if (reason instanceof UnsupportedUrlContentTypeError) {
-        setError('无法作为 markdown 拉取', '请使用原始 markdown / 纯文本 URL，或复制内容后粘贴进 miru。')
+        setError('无法作为 markdown 拉取', '这个链接像网页或文件。试试它的 raw / 源文件链接，或直接粘贴 markdown。')
+      }
+      else if (reason instanceof UrlFetchHttpError) {
+        if (reason.status === 404) {
+          setError('链接打不开', '404 或不存在——核对一下地址。')
+        }
+        else {
+          setError('链接打不开', `HTTP ${reason.status}——核对一下地址，或直接把内容粘贴进 miru。`)
+        }
+      }
+      else if (navigator.onLine === false) {
+        setError('现在像是离线', '联网后再试，或先粘贴 / 打开本地文件。')
       }
       else {
-        setError('拉取失败', '可能是跨域限制、离线或链接失效。可以复制 raw 内容后粘贴进 miru。')
+        setError('无法跨域读取', '该站点未开放跨域。换 raw 链接，或直接把内容粘贴进 miru。')
       }
     }
     finally {

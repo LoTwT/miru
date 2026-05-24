@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   ensureReadableUrlContentType,
   getBareUrlPaste,
+  normalizeMarkdownUrl,
   UnsupportedUrlContentTypeError,
 } from '@/features/input/urlInput'
 
@@ -21,6 +22,41 @@ describe('bare URL paste detection', () => {
   it('rejects non-http schemes and invalid URLs', () => {
     expect(getBareUrlPaste('ftp://example.com/readme.md')).toBeNull()
     expect(getBareUrlPaste('example.com/readme.md')).toBeNull()
+  })
+})
+
+describe('markdown URL normalization', () => {
+  it('converts GitHub file pages to raw URLs', () => {
+    expect(normalizeMarkdownUrl('https://github.com/LoTwT/miru/blob/main/README.md')).toMatchObject({
+      inputUrl: 'https://github.com/LoTwT/miru/blob/main/README.md',
+      requestUrl: 'https://raw.githubusercontent.com/LoTwT/miru/main/README.md',
+      wasConverted: true,
+    })
+
+    expect(normalizeMarkdownUrl('https://github.com/LoTwT/miru/raw/main/docs/guide.md')?.requestUrl)
+      .toBe('https://raw.githubusercontent.com/LoTwT/miru/main/docs/guide.md')
+  })
+
+  it('converts gist pages to raw URLs', () => {
+    expect(normalizeMarkdownUrl('https://gist.github.com/octocat/1234567890abcdef')?.requestUrl)
+      .toBe('https://gist.githubusercontent.com/octocat/1234567890abcdef/raw')
+
+    expect(normalizeMarkdownUrl('https://gist.github.com/octocat/1234567890abcdef/raw/readme.md')?.requestUrl)
+      .toBe('https://gist.githubusercontent.com/octocat/1234567890abcdef/raw/readme.md')
+  })
+
+  it('converts GitLab blob pages to raw URLs', () => {
+    expect(normalizeMarkdownUrl('https://gitlab.com/group/project/-/blob/main/README.md?ref_type=heads#L4')?.requestUrl)
+      .toBe('https://gitlab.com/group/project/-/raw/main/README.md')
+  })
+
+  it('preserves direct http markdown URLs and rejects unsupported schemes', () => {
+    expect(normalizeMarkdownUrl('https://example.com/readme.md')).toMatchObject({
+      requestUrl: 'https://example.com/readme.md',
+      wasConverted: false,
+    })
+    expect(normalizeMarkdownUrl('ftp://example.com/readme.md')).toBeNull()
+    expect(normalizeMarkdownUrl('example.com/readme.md')).toBeNull()
   })
 })
 
