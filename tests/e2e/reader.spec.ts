@@ -38,6 +38,70 @@ test('renders the reader footer with privacy copy and safe links', async ({ page
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBeLessThan(24)
 })
 
+test('prints a clean full document without app chrome', async ({ page }) => {
+  await page.goto('/')
+
+  await pasteText(page, [
+    '# First section',
+    '',
+    'First paragraph with an [external reference](https://example.com/resource).',
+    '',
+    '```ts',
+    'const message = "print";',
+    'console.log(message);',
+    '```',
+    '',
+    '## Nested topic',
+    '',
+    'Collapsed body.',
+    '',
+    '# Second section',
+    '',
+    '| A | B |',
+    '|---|---|',
+    '| One | Two |',
+    '',
+    '# Third section',
+    '',
+    '> Quote to keep together.',
+    '',
+    '# Fourth section',
+    '',
+    'Final body.',
+  ].join('\n'))
+
+  const firstToggle = page.locator('[data-reader-heading-toggle]').first()
+  await firstToggle.click()
+  await expect(page.getByText('Collapsed body.')).not.toBeVisible()
+  await expect(page.getByTestId('reader-outline')).toBeVisible()
+
+  await page.emulateMedia({ media: 'print' })
+
+  await expect(page.getByText('Collapsed body.')).toBeVisible()
+  await expect(page.getByTestId('floating-affordance')).not.toBeVisible()
+  await expect(page.getByTestId('reading-settings')).not.toBeVisible()
+  await expect(page.getByTestId('reader-outline')).not.toBeVisible()
+  await expect(page.locator('.app-shell__header')).not.toBeVisible()
+  await expect(page.locator('.reader-footer__links')).not.toBeVisible()
+  await expect(page.getByText('安静地读 Markdown · 文档留在本机 · 隐私是默认')).toBeVisible()
+
+  await expect.poll(() =>
+    page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--reading-bg').trim()),
+  ).toMatch(/^#fff(?:fff)?$/)
+
+  const linkAfter = await page
+    .locator('.reader-surface__content a[href="https://example.com/resource"]')
+    .evaluate(element => getComputedStyle(element, '::after').content)
+  expect(linkAfter).toContain('https://example.com/resource')
+
+  await expect.poll(() =>
+    page.locator('.reader-surface__content pre').evaluate(element => getComputedStyle(element).whiteSpace),
+  ).toBe('pre-wrap')
+  await expect.poll(() =>
+    page.locator('.reader-surface__content table').evaluate(element => getComputedStyle(element).breakInside),
+  ).toBe('avoid')
+})
+
 test('exposes document input through the floating affordance', async ({ page }) => {
   await page.goto('/')
 

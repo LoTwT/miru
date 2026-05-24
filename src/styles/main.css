@@ -362,3 +362,133 @@ a:focus-visible {
     animation-iteration-count: 1 !important;
   }
 }
+
+@page {
+  margin: 18mm 16mm;
+}
+
+@media print {
+  :root {
+    color-scheme: light;
+    --reading-bg: #ffffff !important;
+    --reading-fg: #161616 !important;
+    --reading-fg-muted: #555555 !important;
+    --reading-link: #111111 !important;
+    --reading-link-hover: #111111 !important;
+    --reading-accent: #555555 !important;
+    --reading-rule: #d8d8d8 !important;
+    --reading-code-fg: #161616 !important;
+    --reading-code-bg: #f6f6f6 !important;
+    --reading-measure: 100% !important;
+  }
+
+  html,
+  body,
+  .app-shell {
+    background: #ffffff !important;
+    color: var(--reading-fg) !important;
+  }
+
+  body {
+    min-width: 0;
+  }
+
+  .app-shell {
+    min-height: auto !important;
+    padding: 0 !important;
+  }
+
+  .app-shell__header,
+  .app-shell__live-status,
+  .floating-input,
+  .reading-settings,
+  .reader-outline,
+  .reader-heading-toggle,
+  .reader-footer__links {
+    display: none !important;
+  }
+
+  .reader-surface {
+    max-inline-size: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  .reader-surface__meta {
+    margin-block-end: 1.2rem !important;
+    color: var(--reading-fg-muted) !important;
+  }
+
+  .reader-surface__content {
+    --reader-heading-gutter: 0 !important;
+  }
+
+  .reader-surface__content > .reader-heading-row {
+    break-after: avoid-page;
+    page-break-after: avoid;
+  }
+
+  .reader-surface__content > .reader-heading-row > h1 {
+    padding-inline-start: 0 !important;
+  }
+
+  .reader-section[hidden] {
+    display: block !important;
+  }
+
+  .reader-surface__content h1,
+  .reader-surface__content h2,
+  .reader-surface__content h3,
+  .reader-surface__content h4,
+  .reader-surface__content h5,
+  .reader-surface__content h6 {
+    color: var(--reading-fg) !important;
+    break-after: avoid-page;
+    page-break-after: avoid;
+  }
+
+  .reader-surface__content blockquote,
+  .reader-surface__content img,
+  .reader-surface__content pre,
+  .reader-surface__content table {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .reader-surface__content a[href^="http"]::after {
+    content: " (" attr(href) ")";
+    color: var(--reading-fg-muted);
+    font-size: 0.85em;
+    overflow-wrap: anywhere;
+  }
+
+  .reader-surface__content pre {
+    overflow: visible !important;
+    white-space: pre-wrap;
+  }
+
+  .reader-surface__content pre code {
+    white-space: pre-wrap;
+  }
+
+  .reader-surface__content .shiki,
+  .reader-surface__content .shiki span {
+    background: var(--reading-code-bg) !important;
+    color: var(--shiki-light, var(--reading-code-fg)) !important;
+  }
+
+  .reader-surface__content table {
+    display: table;
+    overflow: visible;
+  }
+
+  .reader-footer {
+    margin-block-start: 3rem !important;
+    padding-block: 0.85rem 0 !important;
+    color: var(--reading-fg-muted) !important;
+  }
+
+  .reader-footer__mark {
+    color: var(--reading-fg) !important;
+  }
+}
