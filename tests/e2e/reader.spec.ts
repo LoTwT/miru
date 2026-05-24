@@ -51,7 +51,7 @@ test('adds pasted markdown to the local library and reopens it from the bookshel
   await expect(entry).toContainText('粘贴')
   await expect(entry).toContainText('MD')
 
-  await entry.getByRole('button', { name: '打开' }).click()
+  await openBookshelfEntry(entry, 'Library doc')
 
   await expect(page.getByRole('heading', { name: 'Library doc' })).toBeVisible()
   await expect(page.getByText('Saved locally.')).toBeVisible()
@@ -66,16 +66,16 @@ test('renames, pins, and deletes local library markdown entries from the bookshe
   await page.getByTestId('library-open-button').click()
 
   const secondEntry = page.getByTestId('library-entry').filter({ hasText: 'Second note' })
-  await secondEntry.getByRole('button', { name: '置顶' }).click()
+  await chooseBookshelfAction(secondEntry, 'Second note', '置顶')
   await expect(page.getByRole('heading', { name: '置顶' })).toBeVisible()
   await expect(page.locator('#library-pinned-title + .library-view__list').getByText('Second note')).toBeVisible()
 
-  await secondEntry.getByRole('button', { name: '重命名' }).click()
+  await chooseBookshelfAction(secondEntry, 'Second note', '重命名')
   await page.getByLabel('重命名 Second note').fill('Pinned note')
   await page.getByRole('button', { name: '保存' }).click()
   await expect(page.getByTestId('library-entry').filter({ hasText: 'Pinned note' })).toBeVisible()
 
-  await page.getByTestId('library-entry').filter({ hasText: 'Pinned note' }).getByRole('button', { name: '删除' }).click()
+  await chooseBookshelfAction(page.getByTestId('library-entry').filter({ hasText: 'Pinned note' }), 'Pinned note', '删除')
   const dialog = page.getByRole('dialog', { name: /删除「Pinned note」/ })
   await expect(dialog).toBeVisible()
   await expect(dialog.getByRole('button', { name: '取消' })).toBeFocused()
@@ -90,6 +90,32 @@ test('renames, pins, and deletes local library markdown entries from the bookshe
   await expect(page.getByTestId('library-entry').filter({ hasText: 'Pinned note' })).toHaveCount(0)
   await expect(page.getByTestId('library-entry').filter({ hasText: 'First note' })).toBeVisible()
   await expect(page.getByTestId('library-view')).toBeFocused()
+})
+
+test.describe('mobile local library bookshelf', () => {
+  test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
+
+  test('keeps secondary entry actions in an overflow menu', async ({ page }) => {
+    await page.goto('/')
+
+    await pasteText(page, '# Mobile shelf\n\nOne quiet row.')
+    await page.getByTestId('library-open-button').click()
+
+    const entry = page.getByTestId('library-entry').filter({ hasText: 'Mobile shelf' })
+    await expect(entry.getByRole('button', { name: '打开' })).toHaveCount(0)
+    await expect(entry.getByRole('button', { name: '置顶' })).toHaveCount(0)
+    await expect(page.getByRole('button', { name: '返回阅读' })).toHaveCount(1)
+
+    await entry.getByRole('button', { name: 'Mobile shelf 更多操作' }).click()
+    await expect(entry.getByRole('menu')).toBeVisible()
+    await entry.getByRole('menuitem', { name: '置顶' }).click()
+
+    await expect(page.getByRole('heading', { name: '置顶' })).toBeVisible()
+    await page.getByRole('button', { name: 'Mobile shelf', exact: true }).click()
+
+    await expect(page.getByRole('heading', { name: 'Mobile shelf' })).toBeVisible()
+    await expect(page.getByText('One quiet row.')).toBeVisible()
+  })
 })
 
 test('restores local library markdown scroll position when reopening a document', async ({ page }) => {
@@ -108,7 +134,7 @@ test('restores local library markdown scroll position when reopening a document'
 
   await page.getByTestId('floating-affordance-button').click()
   await page.getByTestId('floating-affordance-menu').getByRole('button', { name: /文库/ }).click()
-  await page.getByTestId('library-entry').filter({ hasText: 'Long local doc' }).getByRole('button', { name: '打开' }).click()
+  await openBookshelfEntry(page.getByTestId('library-entry').filter({ hasText: 'Long local doc' }), 'Long local doc')
 
   await expect(page.getByRole('heading', { name: 'Long local doc' })).toBeVisible()
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(800)
@@ -891,6 +917,31 @@ async function pasteText(page: import('@playwright/test').Page, text: string) {
     event.clipboardData?.setData('text/plain', value)
     document.querySelector('main')?.dispatchEvent(event)
   }, text)
+}
+
+async function openBookshelfEntry(entry: import('@playwright/test').Locator, title: string) {
+  const directOpen = entry.getByRole('button', { name: /^(打开|看原件)$/ })
+  if (await directOpen.count() > 0) {
+    await directOpen.first().click()
+    return
+  }
+
+  await entry.getByRole('button', { name: title, exact: true }).click()
+}
+
+async function chooseBookshelfAction(
+  entry: import('@playwright/test').Locator,
+  title: string,
+  actionName: string,
+) {
+  const directAction = entry.getByRole('button', { name: actionName, exact: true })
+  if (await directAction.count() > 0) {
+    await directAction.first().click()
+    return
+  }
+
+  await entry.getByRole('button', { name: `${title} 更多操作`, exact: true }).click()
+  await entry.getByRole('menuitem', { name: actionName, exact: true }).click()
 }
 
 function isWideViewport(page: import('@playwright/test').Page): boolean {

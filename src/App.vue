@@ -440,7 +440,6 @@ function focusLibraryView(): void {
       @toggle-pin="toggleLibraryPin"
       @delete="deleteLibraryEntry"
       @clear="clearLibrary"
-      @close="showReader"
     />
 
     <template v-else>

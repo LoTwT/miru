@@ -18,13 +18,13 @@ const emit = defineEmits<{
   togglePin: [entry: LibraryEntry]
   delete: [entry: LibraryEntry]
   clear: []
-  close: []
 }>()
 
 const pendingDelete = shallowRef<LibraryEntry | null>(null)
 const pendingClear = shallowRef(false)
 const renamingId = shallowRef<string | null>(null)
 const renameValue = shallowRef('')
+const openActionsEntryId = shallowRef<string | null>(null)
 const rootRef = useTemplateRef<HTMLElement>('root')
 const deleteCancelRef = useTemplateRef<HTMLButtonElement>('deleteCancel')
 const clearCancelRef = useTemplateRef<HTMLButtonElement>('clearCancel')
@@ -40,6 +40,7 @@ function setSortMode(event: Event): void {
 }
 
 function startRename(entry: LibraryEntry): void {
+  closeActionsMenu()
   renamingId.value = entry.id
   renameValue.value = entry.title
   void nextTick(() => {
@@ -81,6 +82,32 @@ function confirmDelete(): void {
 function requestClear(): void {
   dialogRestoreTarget = document.activeElement instanceof HTMLElement ? document.activeElement : null
   pendingClear.value = true
+}
+
+function openEntry(entry: LibraryEntry): void {
+  closeActionsMenu()
+  emit('open', entry)
+}
+
+function toggleActionsMenu(entry: LibraryEntry): void {
+  openActionsEntryId.value = openActionsEntryId.value === entry.id ? null : entry.id
+}
+
+function closeActionsMenu(): void {
+  openActionsEntryId.value = null
+}
+
+function isActionsMenuOpen(entry: LibraryEntry): boolean {
+  return openActionsEntryId.value === entry.id
+}
+
+function actionsMenuId(entry: LibraryEntry): string {
+  return `library-entry-actions-${entry.id}`
+}
+
+function togglePinFromMenu(entry: LibraryEntry): void {
+  emit('togglePin', entry)
+  closeActionsMenu()
 }
 
 function confirmClear(): void {
@@ -192,6 +219,10 @@ function typeLabel(entry: LibraryEntry): string {
   return entry.type === 'pdf' ? 'PDF' : 'MD'
 }
 
+function pinLabel(entry: LibraryEntry): string {
+  return entry.pinned ? '取消置顶' : '置顶'
+}
+
 watch(pendingDelete, async (entry) => {
   if (entry) {
     await nextTick()
@@ -210,9 +241,6 @@ watch(pendingClear, async (value) => {
 <template>
   <section ref="root" class="library-view" aria-labelledby="library-title" data-testid="library-view" tabindex="-1">
     <header class="library-view__hero">
-      <button class="library-view__quiet-link" type="button" @click="emit('close')">
-        返回阅读
-      </button>
       <div>
         <p class="library-view__eyebrow">本地文库</p>
         <h1 id="library-title" class="library-view__title">你的文库</h1>
@@ -275,7 +303,9 @@ watch(pendingClear, async (value) => {
                     <button type="button" @click="cancelRename">取消</button>
                   </form>
                   <h3 v-else class="library-entry__title">
-                    {{ entry.title }}
+                    <button class="library-entry__title-button" type="button" @click="openEntry(entry)">
+                      {{ entry.title }}
+                    </button>
                   </h3>
                   <p class="library-entry__meta">
                     <span>{{ formatSource(entry) }}</span>
@@ -286,18 +316,47 @@ watch(pendingClear, async (value) => {
               </div>
 
               <div class="library-entry__actions">
-                <button class="library-entry__open" type="button" @click="emit('open', entry)">
+                <button class="library-entry__open" type="button" @click="openEntry(entry)">
                   {{ entry.type === 'pdf' ? '看原件' : '打开' }}
                 </button>
-                <button class="library-entry__action" type="button" @click="emit('togglePin', entry)">
-                  取消置顶
+                <button class="library-entry__action library-entry__desktop-action" type="button" @click="emit('togglePin', entry)">
+                  {{ pinLabel(entry) }}
                 </button>
-                <button class="library-entry__action" type="button" @click="startRename(entry)">
+                <button class="library-entry__action library-entry__desktop-action" type="button" @click="startRename(entry)">
                   重命名
                 </button>
-                <button class="library-entry__danger" type="button" @click="requestDelete(entry)">
+                <button class="library-entry__danger library-entry__desktop-action" type="button" @click="requestDelete(entry)">
                   删除
                 </button>
+                <div class="library-entry__more-wrap">
+                  <button
+                    class="library-entry__more"
+                    type="button"
+                    :aria-expanded="isActionsMenuOpen(entry)"
+                    :aria-controls="actionsMenuId(entry)"
+                    :aria-label="`${entry.title} 更多操作`"
+                    @click="toggleActionsMenu(entry)"
+                  >
+                    ⋯
+                  </button>
+                  <div
+                    v-if="isActionsMenuOpen(entry)"
+                    :id="actionsMenuId(entry)"
+                    class="library-entry__overflow-menu"
+                    role="menu"
+                    @keydown.esc.stop.prevent="closeActionsMenu"
+                  >
+                    <button class="library-entry__menu-item" type="button" role="menuitem" @click="togglePinFromMenu(entry)">
+                      {{ pinLabel(entry) }}
+                    </button>
+                    <button class="library-entry__menu-item" type="button" role="menuitem" @click="startRename(entry)">
+                      重命名
+                    </button>
+                    <button class="library-entry__menu-item library-entry__menu-item--danger" type="button" role="menuitem" @click="requestDelete(entry)">
+                      删除
+                    </button>
+                  </div>
+                </div>
               </div>
             </article>
           </li>
@@ -327,7 +386,9 @@ watch(pendingClear, async (value) => {
                     <button type="button" @click="cancelRename">取消</button>
                   </form>
                   <h3 v-else class="library-entry__title">
-                    {{ entry.title }}
+                    <button class="library-entry__title-button" type="button" @click="openEntry(entry)">
+                      {{ entry.title }}
+                    </button>
                   </h3>
                   <p class="library-entry__meta">
                     <span>{{ formatSource(entry) }}</span>
@@ -338,18 +399,47 @@ watch(pendingClear, async (value) => {
               </div>
 
               <div class="library-entry__actions">
-                <button class="library-entry__open" type="button" @click="emit('open', entry)">
+                <button class="library-entry__open" type="button" @click="openEntry(entry)">
                   {{ entry.type === 'pdf' ? '看原件' : '打开' }}
                 </button>
-                <button class="library-entry__action" type="button" @click="emit('togglePin', entry)">
-                  置顶
+                <button class="library-entry__action library-entry__desktop-action" type="button" @click="emit('togglePin', entry)">
+                  {{ pinLabel(entry) }}
                 </button>
-                <button class="library-entry__action" type="button" @click="startRename(entry)">
+                <button class="library-entry__action library-entry__desktop-action" type="button" @click="startRename(entry)">
                   重命名
                 </button>
-                <button class="library-entry__danger" type="button" @click="requestDelete(entry)">
+                <button class="library-entry__danger library-entry__desktop-action" type="button" @click="requestDelete(entry)">
                   删除
                 </button>
+                <div class="library-entry__more-wrap">
+                  <button
+                    class="library-entry__more"
+                    type="button"
+                    :aria-expanded="isActionsMenuOpen(entry)"
+                    :aria-controls="actionsMenuId(entry)"
+                    :aria-label="`${entry.title} 更多操作`"
+                    @click="toggleActionsMenu(entry)"
+                  >
+                    ⋯
+                  </button>
+                  <div
+                    v-if="isActionsMenuOpen(entry)"
+                    :id="actionsMenuId(entry)"
+                    class="library-entry__overflow-menu"
+                    role="menu"
+                    @keydown.esc.stop.prevent="closeActionsMenu"
+                  >
+                    <button class="library-entry__menu-item" type="button" role="menuitem" @click="togglePinFromMenu(entry)">
+                      {{ pinLabel(entry) }}
+                    </button>
+                    <button class="library-entry__menu-item" type="button" role="menuitem" @click="startRename(entry)">
+                      重命名
+                    </button>
+                    <button class="library-entry__menu-item library-entry__menu-item--danger" type="button" role="menuitem" @click="requestDelete(entry)">
+                      删除
+                    </button>
+                  </div>
+                </div>
               </div>
             </article>
           </li>
@@ -431,7 +521,6 @@ watch(pendingClear, async (value) => {
   margin-bottom: clamp(2rem, 6vw, 3.5rem);
 }
 
-.library-view__quiet-link,
 .library-entry__action,
 .library-entry__danger,
 .library-view__danger-link {
@@ -448,8 +537,6 @@ watch(pendingClear, async (value) => {
   cursor: pointer;
 }
 
-.library-view__quiet-link:hover,
-.library-view__quiet-link:focus-visible,
 .library-entry__action:hover,
 .library-entry__action:focus-visible,
 .library-entry__danger:hover,
@@ -600,7 +687,7 @@ watch(pendingClear, async (value) => {
   border-block-end: 1px solid color-mix(in srgb, var(--reading-rule) 42%, transparent);
 }
 
-.library-entry--active .library-entry__title {
+.library-entry--active .library-entry__title-button {
   color: var(--reading-accent);
 }
 
@@ -634,12 +721,27 @@ watch(pendingClear, async (value) => {
 
 .library-entry__title {
   margin: 0;
+  line-height: 1.15;
+}
+
+.library-entry__title-button {
+  display: block;
+  border: 0;
+  padding: 0;
+  background: transparent;
   overflow-wrap: anywhere;
   color: var(--reading-fg);
   font-family: var(--reading-font-heading);
   font-size: 1.28rem;
   font-weight: 620;
-  line-height: 1.15;
+  line-height: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.library-entry__title-button:hover,
+.library-entry__title-button:focus-visible {
+  color: var(--reading-accent);
 }
 
 .library-entry__meta {
@@ -651,11 +753,67 @@ watch(pendingClear, async (value) => {
 }
 
 .library-entry__actions {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: end;
   gap: 0.7rem;
+}
+
+.library-entry__more-wrap {
+  position: relative;
+  display: none;
+}
+
+.library-entry__more {
+  min-inline-size: 2.75rem;
+  min-block-size: 2.75rem;
+  border: 1px solid color-mix(in srgb, var(--reading-rule) 72%, transparent);
+  border-radius: 8px;
+  color: var(--reading-fg);
+  background: var(--reading-bg);
+  font: inherit;
+  font-size: 1.35rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.library-entry__overflow-menu {
+  position: absolute;
+  inset-block-start: calc(100% + 0.35rem);
+  inset-inline-end: 0;
+  z-index: 20;
+  display: grid;
+  min-inline-size: 9.5rem;
+  padding: 0.35rem;
+  border: 1px solid color-mix(in srgb, var(--reading-rule) 86%, transparent);
+  border-radius: 8px;
+  background: var(--reading-bg);
+  box-shadow: 0 16px 40px color-mix(in srgb, var(--reading-fg) 14%, transparent);
+}
+
+.library-entry__menu-item {
+  min-block-size: 2.75rem;
+  border: 0;
+  border-radius: 6px;
+  padding: 0 0.75rem;
+  color: var(--reading-fg);
+  background: transparent;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.library-entry__menu-item:hover,
+.library-entry__menu-item:focus-visible,
+.library-entry__more:hover,
+.library-entry__more:focus-visible {
+  background: color-mix(in srgb, var(--reading-accent) 10%, transparent);
+}
+
+.library-entry__menu-item--danger {
+  color: color-mix(in srgb, #9b2f23 82%, var(--reading-fg));
 }
 
 .library-entry__danger,
@@ -742,17 +900,28 @@ watch(pendingClear, async (value) => {
   }
 
   .library-view__toolbar,
-  .library-entry__actions,
   .library-view__footer {
     align-items: stretch;
   }
 
-  .library-entry__actions,
+  .library-entry__actions {
+    justify-content: end;
+  }
+
   .library-dialog__actions {
     justify-content: start;
   }
 
-  .library-entry__actions > *,
+  .library-entry__open,
+  .library-entry__desktop-action {
+    display: none;
+  }
+
+  .library-entry__more-wrap {
+    display: block;
+    margin-inline-start: auto;
+  }
+
   .library-view__primary,
   .library-view__sort {
     width: 100%;
