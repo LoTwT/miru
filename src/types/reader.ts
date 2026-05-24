@@ -1,9 +1,12 @@
+import type { LibrarySource } from '@/features/library/types'
+
 export type DocumentSourceKind = 'sample' | 'paste' | 'file' | 'url'
 
 export interface ReaderDocument {
   source: DocumentSourceKind
   label: string
   markdown: string
+  librarySource?: LibrarySource
 }
 
 export interface ReaderError {
