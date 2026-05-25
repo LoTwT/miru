@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, reactive, shallowRef, useTe
 
 import FloatingInputMenu from '@/components/FloatingInputMenu.vue'
 import LibraryView from '@/components/LibraryView.vue'
+import PdfViewer from '@/components/PdfViewer.vue'
 import ReaderOutlineNavigation from '@/components/ReaderOutlineNavigation.vue'
 import ReadingSettingsControl from '@/components/ReadingSettingsControl.vue'
 import ReaderSurface from '@/components/ReaderSurface.vue'
@@ -14,11 +15,11 @@ import { useRenderedMarkdown } from '@/features/reader/useRenderedMarkdown'
 import { useReadingSettings } from '@/features/settings/useReadingSettings'
 import { loadDefaultReadingFonts } from '@/lib/theme/fonts'
 import { readPersistedReadingSettings } from '@/lib/theme/tokens'
-import type { LibraryEntry, LibrarySortMode, LibrarySource, MarkdownReadingPosition } from '@/features/library/types'
+import type { LibraryEntry, LibrarySortMode, LibrarySource, MarkdownReadingPosition, OpenPdfDocumentResult, PdfReadingPosition } from '@/features/library/types'
 import type { ReaderDocument, RemoteImageMode } from '@/types/reader'
 import type { ReaderOutlineItem } from '@/features/reader/outlineNavigation'
 
-type AppMode = 'reader' | 'library'
+type AppMode = 'reader' | 'library' | 'pdf'
 
 const documentState = reactive<ReaderDocument>({
   source: 'sample',
@@ -33,12 +34,14 @@ const activeLibraryEntryId = shallowRef<string | null>(null)
 const libraryStatus = shallowRef('')
 const inputMenuStatus = shallowRef('')
 const pendingRestorePosition = shallowRef<MarkdownReadingPosition | null>(null)
+const activePdfDocument = shallowRef<OpenPdfDocumentResult | null>(null)
 const isDragging = shallowRef(false)
 const isInputMenuOpen = shallowRef(false)
 const liveStatus = shallowRef('')
 const outlineItems = shallowRef<ReaderOutlineItem[]>([])
 const activeOutlineId = shallowRef('')
 const readerRef = useTemplateRef<InstanceType<typeof ReaderSurface>>('reader')
+const pdfViewerRef = useTemplateRef<InstanceType<typeof PdfViewer>>('pdfViewer')
 const persistedSettings = readPersistedReadingSettings()
 const remoteImageMode = shallowRef<RemoteImageMode>(persistedSettings?.remoteImageMode ?? 'auto')
 const readingSettings = useReadingSettings()
@@ -46,6 +49,9 @@ const readingSettings = useReadingSettings()
 const { error, isFetchingUrl, loadFromClipboard, loadFromFile, loadFromText, loadFromUrl } = useDocumentInput({
   onDocument(document) {
     void loadIncomingDocument(document)
+  },
+  onPdf(file) {
+    void loadIncomingPdf(file)
   },
 })
 
@@ -97,9 +103,21 @@ async function showLibrary(): Promise<void> {
 }
 
 async function showReader(): Promise<void> {
+  activePdfDocument.value = null
   appMode.value = 'reader'
   await nextTick()
   readerRef.value?.focus()
+}
+
+async function returnToActiveDocument(): Promise<void> {
+  if (activePdfDocument.value) {
+    appMode.value = 'pdf'
+    await nextTick()
+    pdfViewerRef.value?.focus()
+    return
+  }
+
+  await showReader()
 }
 
 function openAddMenu(): void {
@@ -128,6 +146,7 @@ async function loadIncomingDocument(document: ReaderDocument): Promise<void> {
 
   if (document.source === 'sample') {
     activeLibraryEntryId.value = null
+    activePdfDocument.value = null
     documentState.source = document.source
     documentState.label = document.label
     documentState.markdown = document.markdown
@@ -160,12 +179,59 @@ async function loadIncomingDocument(document: ReaderDocument): Promise<void> {
   }
 }
 
+async function loadIncomingPdf(file: File): Promise<void> {
+  libraryStatus.value = ''
+  inputMenuStatus.value = ''
+
+  try {
+    await saveActiveReadingPosition()
+    const pdfBlob = file.type === 'application/pdf' ? file : file.slice(0, file.size, 'application/pdf')
+    const entry = await libraryStore.addPdfDocument({
+      blob: pdfBlob,
+      source: {
+        kind: 'file',
+        fileName: file.name || 'document.pdf',
+        mimeType: file.type || 'application/pdf',
+      },
+    })
+
+    await refreshLibraryEntries()
+    await openLibraryEntry(entry)
+    liveStatus.value = 'PDF 已加入文库'
+  }
+  catch (reason) {
+    if (reason instanceof LibraryQuotaExceededError) {
+      libraryStatus.value = '本机存储空间不够, PDF 没有加入文库。可以删除一些文档后再试。'
+      inputMenuStatus.value = libraryStatus.value
+    }
+    else {
+      libraryStatus.value = '无法加入 PDF。当前文档没有被替换, 请稍后再试。'
+      inputMenuStatus.value = libraryStatus.value
+    }
+
+    isInputMenuOpen.value = true
+  }
+}
+
 async function openLibraryEntry(entry: LibraryEntry): Promise<void> {
   libraryStatus.value = ''
 
   if (entry.type === 'pdf') {
-    libraryStatus.value = 'PDF 原件查看会在下一步接入。'
-    appMode.value = 'library'
+    await saveActiveReadingPosition()
+    const opened = await libraryStore.openPdfDocument(entry.id)
+
+    if (!opened) {
+      libraryStatus.value = '这个 PDF 已经不在文库中。'
+      await refreshLibraryEntries()
+      return
+    }
+
+    activeLibraryEntryId.value = opened.entry.id
+    activePdfDocument.value = opened
+    appMode.value = 'pdf'
+    await refreshLibraryEntries()
+    await nextTick()
+    pdfViewerRef.value?.focus()
     return
   }
 
@@ -179,6 +245,7 @@ async function openLibraryEntry(entry: LibraryEntry): Promise<void> {
   }
 
   activeLibraryEntryId.value = opened.entry.id
+  activePdfDocument.value = null
   documentState.source = readerSourceFromLibrarySource(opened.entry.source)
   documentState.label = labelForEntry(opened.entry)
   documentState.markdown = opened.markdown
@@ -213,6 +280,7 @@ async function deleteLibraryEntry(entry: LibraryEntry): Promise<void> {
 
   if (activeLibraryEntryId.value === entry.id) {
     activeLibraryEntryId.value = null
+    activePdfDocument.value = null
     documentState.source = 'sample'
     documentState.label = 'miru sample'
     documentState.markdown = sampleMarkdown
@@ -225,11 +293,26 @@ async function deleteLibraryEntry(entry: LibraryEntry): Promise<void> {
 async function clearLibrary(): Promise<void> {
   await libraryStore.clearLibrary()
   activeLibraryEntryId.value = null
+  activePdfDocument.value = null
   documentState.source = 'sample'
   documentState.label = 'miru sample'
   documentState.markdown = sampleMarkdown
   await refreshLibraryEntries()
   focusLibraryView()
+}
+
+async function savePdfReadingPosition(position: Omit<PdfReadingPosition, 'updatedAt'>): Promise<void> {
+  if (activePdfDocument.value?.entry.id !== position.documentId) {
+    return
+  }
+
+  const saved = await libraryStore.saveReadingPosition(position)
+  if (saved.type === 'pdf' && activePdfDocument.value) {
+    activePdfDocument.value = {
+      ...activePdfDocument.value,
+      position: saved,
+    }
+  }
 }
 
 async function refreshLibraryEntries(): Promise<void> {
@@ -421,7 +504,7 @@ function focusLibraryView(): void {
         class="app-shell__library-button"
         type="button"
         data-testid="library-open-button"
-        @click="appMode === 'library' ? showReader() : showLibrary()"
+        @click="appMode === 'library' ? returnToActiveDocument() : showLibrary()"
       >
         {{ appMode === 'library' ? '返回阅读' : '文库' }}
       </button>
@@ -440,6 +523,16 @@ function focusLibraryView(): void {
       @toggle-pin="toggleLibraryPin"
       @delete="deleteLibraryEntry"
       @clear="clearLibrary"
+    />
+
+    <PdfViewer
+      v-else-if="appMode === 'pdf' && activePdfDocument"
+      ref="pdfViewer"
+      :entry="activePdfDocument.entry"
+      :blob="activePdfDocument.blob"
+      :position="activePdfDocument.position"
+      @back="showLibrary"
+      @position-change="savePdfReadingPosition"
     />
 
     <template v-else>

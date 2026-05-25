@@ -42,12 +42,29 @@ export default defineConfig({
         ],
       },
       workbox: {
-        globPatterns: ['**/*.{html,js,css,woff2,png}'],
+        globPatterns: ['**/*.{html,js,mjs,css,woff2,png}'],
+        globIgnores: ['**/assets/pdf*.js', '**/assets/pdf*.mjs'],
         navigateFallback: '/index.html',
         cleanupOutdatedCaches: true,
         clientsClaim: false,
         skipWaiting: false,
-        runtimeCaching: [],
+        runtimeCaching: [
+          {
+            urlPattern: ({ url, sameOrigin }) =>
+              sameOrigin && /^\/assets\/pdf(?:\.worker)?-[^/]+\.(?:js|mjs)$/.test(url.pathname),
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'miru-pdf-viewer-assets-v1',
+              cacheableResponse: {
+                statuses: [200],
+              },
+              expiration: {
+                maxEntries: 4,
+                maxAgeSeconds: 365 * 24 * 60 * 60,
+              },
+            },
+          },
+        ],
       },
     }),
   ],
