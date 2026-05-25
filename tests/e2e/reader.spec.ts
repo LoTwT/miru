@@ -118,6 +118,49 @@ test.describe('mobile local library bookshelf', () => {
   })
 })
 
+test('adds a local PDF and reopens it through the view-only PDF viewer', async ({ page }) => {
+  await page.goto('/')
+
+  await openFileThroughFloatingMenu(page, {
+    name: 'Daily Paper.pdf',
+    mimeType: 'application/pdf',
+    buffer: createSimplePdfBuffer('Daily Paper'),
+  })
+
+  await expect(page.getByTestId('pdf-viewer')).toBeVisible()
+  await expect(page.getByTestId('pdf-viewer')).toBeFocused()
+  await expect(page.getByRole('heading', { name: 'Daily Paper' })).toBeVisible()
+  await expect(page.getByText('PDF 保持原样显示, 不做文字提取或上传。')).toBeVisible()
+  await expect(page.getByTestId('pdf-viewer-canvas')).toBeVisible()
+  await expect(page.getByText('1 / 1')).toBeVisible()
+
+  await page.getByRole('button', { name: '← 文库' }).click()
+
+  const entry = page.getByTestId('library-entry').filter({ hasText: 'Daily Paper' })
+  await expect(entry).toContainText('PDF')
+  await expect(entry).toContainText('文件 · Daily Paper.pdf')
+
+  await openBookshelfEntry(entry, 'Daily Paper')
+
+  await expect(page.getByTestId('pdf-viewer')).toBeVisible()
+  await expect(page.getByTestId('pdf-viewer')).toBeFocused()
+  await expect(page.locator('.reader-surface')).toHaveCount(0)
+})
+
+test('shows a recoverable error for malformed local PDFs', async ({ page }) => {
+  await page.goto('/')
+
+  await openFileThroughFloatingMenu(page, {
+    name: 'broken.pdf',
+    mimeType: 'application/pdf',
+    buffer: Buffer.from('not a real pdf'),
+  })
+
+  await expect(page.getByTestId('pdf-viewer')).toBeVisible()
+  await expect(page.getByText('这个 PDF 打不开。文件可能已损坏, 或浏览器无法解析它。')).toBeVisible()
+  await expect(page.getByRole('button', { name: '再试一次' })).toBeVisible()
+})
+
 test('restores local library markdown scroll position when reopening a document', async ({ page }) => {
   await page.goto('/')
 
@@ -917,6 +960,47 @@ async function pasteText(page: import('@playwright/test').Page, text: string) {
     event.clipboardData?.setData('text/plain', value)
     document.querySelector('main')?.dispatchEvent(event)
   }, text)
+}
+
+async function openFileThroughFloatingMenu(
+  page: import('@playwright/test').Page,
+  file: { name: string, mimeType: string, buffer: Buffer },
+) {
+  await page.getByTestId('floating-affordance-button').click()
+  const fileChooserPromise = page.waitForEvent('filechooser')
+  await page.getByRole('button', { name: /打开文件/ }).click()
+  const fileChooser = await fileChooserPromise
+  await fileChooser.setFiles(file)
+}
+
+function createSimplePdfBuffer(text: string): Buffer {
+  const stream = `BT /F1 24 Tf 72 720 Td (${escapePdfText(text)}) Tj ET`
+  const objects = [
+    '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n',
+    '2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n',
+    '3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n',
+    '4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n',
+    `5 0 obj\n<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream\nendobj\n`,
+  ]
+  let pdf = '%PDF-1.4\n'
+  const offsets: number[] = []
+
+  for (const object of objects) {
+    offsets.push(Buffer.byteLength(pdf))
+    pdf += object
+  }
+
+  const xrefOffset = Buffer.byteLength(pdf)
+  pdf += `xref\n0 ${objects.length + 1}\n`
+  pdf += '0000000000 65535 f \n'
+  pdf += offsets.map(offset => `${String(offset).padStart(10, '0')} 00000 n \n`).join('')
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`
+
+  return Buffer.from(pdf)
+}
+
+function escapePdfText(value: string): string {
+  return value.replaceAll('\\', '\\\\').replaceAll('(', '\\(').replaceAll(')', '\\)')
 }
 
 async function openBookshelfEntry(entry: import('@playwright/test').Locator, title: string) {

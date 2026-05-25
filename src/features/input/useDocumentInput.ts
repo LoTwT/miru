@@ -12,6 +12,7 @@ import type { ReaderDocument, ReaderError } from '@/types/reader'
 
 interface UseDocumentInputOptions {
   onDocument: (document: ReaderDocument) => void
+  onPdf?: (file: File) => void | Promise<void>
 }
 
 export function useDocumentInput(options: UseDocumentInputOptions) {
@@ -50,8 +51,19 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
   }
 
   async function loadFromFile(file: File): Promise<void> {
+    if (isPdfFile(file)) {
+      if (!options.onPdf) {
+        setError('PDF 还不能打开', '这个版本只能读取 .md、.markdown 或纯文本。')
+        return
+      }
+
+      error.value = null
+      await options.onPdf(file)
+      return
+    }
+
     if (!isReadableMarkdownFile(file)) {
-      setError('无法读取这个文件', '请确认文件是 .md、.markdown 或纯文本。')
+      setError('无法读取这个文件', '请确认文件是 .md、.markdown、纯文本或 PDF。')
       return
     }
 
@@ -136,4 +148,8 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
 function isReadableMarkdownFile(file: File): boolean {
   const name = file.name.toLowerCase()
   return name.endsWith('.md') || name.endsWith('.markdown') || file.type.startsWith('text/')
+}
+
+function isPdfFile(file: File): boolean {
+  return file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
 }

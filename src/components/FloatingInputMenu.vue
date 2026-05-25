@@ -324,7 +324,7 @@ onUnmounted(() => {
         @click="openFileDialog"
       >
         <span>打开文件</span>
-        <small>.md / .markdown / text</small>
+        <small>.md / text / PDF</small>
       </button>
 
       <button
@@ -382,7 +382,7 @@ onUnmounted(() => {
         ref="fileInput"
         class="floating-input__file"
         type="file"
-        accept=".md,.markdown,text/markdown,text/plain"
+        accept=".md,.markdown,.pdf,text/markdown,text/plain,application/pdf"
         @change="onFileChange"
       >
     </div>

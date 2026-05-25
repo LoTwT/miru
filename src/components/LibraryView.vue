@@ -272,7 +272,7 @@ watch(pendingClear, async (value) => {
     <div v-if="!hasEntries" class="library-view__empty" data-testid="library-empty">
       <p class="library-view__empty-title">你的文库还是空的</p>
       <p class="library-view__empty-copy">
-        粘贴、打开文件或拉取 URL 后, miru 会把 Markdown 保存进本地文库。
+        粘贴、打开文件或拉取 URL 后, miru 会把 Markdown 或 PDF 原件保存进本地文库。
       </p>
       <button class="library-view__primary" type="button" @click="emit('add')">
         加入第一篇
