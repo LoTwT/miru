@@ -434,7 +434,7 @@ onUnmounted(() => {
 .pdf-viewer__back,
 .pdf-viewer__toolbar button,
 .pdf-viewer__state button {
-  min-block-size: 2.75rem;
+  min-block-size: 44px;
   border: 1px solid color-mix(in srgb, var(--reading-rule) 82%, transparent);
   border-radius: 8px;
   color: var(--reading-fg);
@@ -526,12 +526,13 @@ onUnmounted(() => {
 }
 
 .pdf-viewer__toolbar button {
+  min-inline-size: 44px;
   padding-inline: 0.72rem;
 }
 
 .pdf-viewer__page-jump input {
   inline-size: 4rem;
-  min-block-size: 2.75rem;
+  min-block-size: 44px;
   border: 1px solid color-mix(in srgb, var(--reading-rule) 82%, transparent);
   border-radius: 8px;
   color: var(--reading-fg);

@@ -108,6 +108,12 @@ test.describe('mobile local library bookshelf', () => {
 
     await entry.getByRole('button', { name: 'Mobile shelf 更多操作' }).click()
     await expect(entry.getByRole('menu')).toBeVisible()
+
+    await page.touchscreen.tap(24, 24)
+    await expect(entry.getByRole('menu')).not.toBeVisible()
+
+    await entry.getByRole('button', { name: 'Mobile shelf 更多操作' }).click()
+    await expect(entry.getByRole('menu')).toBeVisible()
     await entry.getByRole('menuitem', { name: '置顶' }).click()
 
     await expect(page.getByRole('heading', { name: '置顶' })).toBeVisible()
@@ -146,6 +152,17 @@ test('adds a local PDF and reopens it through the view-only PDF viewer', async (
   await expect(page.getByText('PDF 保持原样显示, 不做文字提取或上传。')).toBeVisible()
   await expect(page.getByTestId('pdf-viewer-canvas')).toBeVisible()
   await expect(page.getByText('1 / 1')).toBeVisible()
+  const toolbarButtonRects = await page.locator('.pdf-viewer__toolbar button').evaluateAll(buttons =>
+    buttons.map(button => button.getBoundingClientRect()).map(rect => ({
+      height: rect.height,
+      width: rect.width,
+    })),
+  )
+  expect(toolbarButtonRects.length).toBeGreaterThan(0)
+  for (const rect of toolbarButtonRects) {
+    expect(rect.width).toBeGreaterThanOrEqual(44)
+    expect(rect.height).toBeGreaterThanOrEqual(44)
+  }
   await expect.poll(() => pdfWorkerResponses.some(response =>
     response.status === 200 && response.contentType?.includes('javascript'),
   )).toBe(true)
