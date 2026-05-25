@@ -7,6 +7,7 @@ import {
   UnsupportedUrlContentTypeError,
   UrlFetchHttpError,
 } from '@/features/input/urlInput'
+import type { LibrarySource } from '@/features/library/types'
 import type { ReaderDocument, ReaderError } from '@/types/reader'
 
 interface UseDocumentInputOptions {
@@ -31,16 +32,21 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
         return
       }
 
-      loadFromText(text, 'paste', 'Pasted markdown')
+      loadFromText(text, 'paste', 'Pasted markdown', { kind: 'paste' })
     }
     catch {
       setError('无法读取剪贴板', '可以直接按 Cmd+V / Ctrl+V 粘贴，或拖入 .md 文件。')
     }
   }
 
-  function loadFromText(markdown: string, source: ReaderDocument['source'] = 'paste', label = 'Markdown'): void {
+  function loadFromText(
+    markdown: string,
+    source: ReaderDocument['source'] = 'paste',
+    label = 'Markdown',
+    librarySource?: LibrarySource,
+  ): void {
     error.value = null
-    options.onDocument({ source, label, markdown })
+    options.onDocument({ source, label, markdown, librarySource })
   }
 
   async function loadFromFile(file: File): Promise<void> {
@@ -50,7 +56,11 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
     }
 
     const text = await file.text()
-    loadFromText(text, 'file', file.name)
+    loadFromText(text, 'file', file.name, {
+      kind: 'file',
+      fileName: file.name,
+      mimeType: file.type || 'text/plain',
+    })
   }
 
   async function loadFromUrl(url: string): Promise<void> {
@@ -78,7 +88,12 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
       ensureReadableUrlContentType(response.headers.get('content-type'))
 
       const text = await response.text()
-      loadFromText(text, 'url', normalized.inputUrl)
+      loadFromText(text, 'url', normalized.inputUrl, {
+        kind: 'url',
+        inputUrl: normalized.inputUrl,
+        requestUrl: normalized.requestUrl,
+        domain: new URL(normalized.requestUrl).hostname,
+      })
     }
     catch (reason) {
       if (reason instanceof UnsupportedUrlContentTypeError) {

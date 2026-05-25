@@ -11,6 +11,7 @@ const emit = defineEmits<{
   'update:isOpen': [value: boolean]
   paste: []
   openFile: [file: File]
+  openLibrary: []
   fetchUrl: [url: string]
   clear: []
 }>()
@@ -194,6 +195,11 @@ function openFileDialog(): void {
   fileInputRef.value?.click()
 }
 
+function openLibrary(): void {
+  emit('openLibrary')
+  closeMenu()
+}
+
 function onFileChange(event: Event): void {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
@@ -319,6 +325,16 @@ onUnmounted(() => {
       >
         <span>打开文件</span>
         <small>.md / .markdown / text</small>
+      </button>
+
+      <button
+        class="floating-input__item"
+        type="button"
+        data-menu-item
+        @click="openLibrary"
+      >
+        <span>文库</span>
+        <small>本机保存的文档</small>
       </button>
 
       <form class="floating-input__url" @submit.prevent="submitUrl">
