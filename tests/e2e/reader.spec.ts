@@ -920,13 +920,16 @@ async function pasteText(page: import('@playwright/test').Page, text: string) {
 }
 
 async function openBookshelfEntry(entry: import('@playwright/test').Locator, title: string) {
-  const directOpen = entry.getByRole('button', { name: /^(打开|看原件)$/ })
-  if (await directOpen.count() > 0) {
-    await directOpen.first().click()
+  await expect(entry).toBeVisible()
+
+  if (!isWideViewport(entry.page())) {
+    await entry.getByRole('button', { name: title, exact: true }).click()
     return
   }
 
-  await entry.getByRole('button', { name: title, exact: true }).click()
+  const directOpen = entry.getByRole('button', { name: /^(打开|看原件)$/ })
+  await expect(directOpen.first()).toBeVisible()
+  await directOpen.first().click()
 }
 
 async function chooseBookshelfAction(
@@ -934,14 +937,17 @@ async function chooseBookshelfAction(
   title: string,
   actionName: string,
 ) {
-  const directAction = entry.getByRole('button', { name: actionName, exact: true })
-  if (await directAction.count() > 0) {
-    await directAction.first().click()
+  await expect(entry).toBeVisible()
+
+  if (!isWideViewport(entry.page())) {
+    await entry.getByRole('button', { name: `${title} 更多操作`, exact: true }).click()
+    await entry.getByRole('menuitem', { name: actionName, exact: true }).click()
     return
   }
 
-  await entry.getByRole('button', { name: `${title} 更多操作`, exact: true }).click()
-  await entry.getByRole('menuitem', { name: actionName, exact: true }).click()
+  const directAction = entry.getByRole('button', { name: actionName, exact: true })
+  await expect(directAction.first()).toBeVisible()
+  await directAction.first().click()
 }
 
 function isWideViewport(page: import('@playwright/test').Page): boolean {
