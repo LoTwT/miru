@@ -119,6 +119,19 @@ test.describe('mobile local library bookshelf', () => {
 })
 
 test('adds a local PDF and reopens it through the view-only PDF viewer', async ({ page }) => {
+  const pdfWorkerResponses: Array<{ contentType: string | undefined, status: number, url: string }> = []
+  page.on('response', (response) => {
+    if (!response.url().includes('pdf.worker')) {
+      return
+    }
+
+    pdfWorkerResponses.push({
+      contentType: response.headers()['content-type'],
+      status: response.status(),
+      url: response.url(),
+    })
+  })
+
   await page.goto('/')
 
   await openFileThroughFloatingMenu(page, {
@@ -133,6 +146,9 @@ test('adds a local PDF and reopens it through the view-only PDF viewer', async (
   await expect(page.getByText('PDF 保持原样显示, 不做文字提取或上传。')).toBeVisible()
   await expect(page.getByTestId('pdf-viewer-canvas')).toBeVisible()
   await expect(page.getByText('1 / 1')).toBeVisible()
+  await expect.poll(() => pdfWorkerResponses.some(response =>
+    response.status === 200 && response.contentType?.includes('javascript'),
+  )).toBe(true)
 
   await page.getByRole('button', { name: '← 文库' }).click()
 
