@@ -382,7 +382,6 @@ onUnmounted(() => {
         ref="fileInput"
         class="floating-input__file"
         type="file"
-        accept=".md,.markdown,.pdf,text/markdown,text/plain,application/pdf"
         @change="onFileChange"
       >
     </div>

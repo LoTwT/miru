@@ -147,9 +147,15 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
 
 function isReadableMarkdownFile(file: File): boolean {
   const name = file.name.toLowerCase()
-  return name.endsWith('.md') || name.endsWith('.markdown') || file.type.startsWith('text/')
+  return name.endsWith('.md')
+    || name.endsWith('.markdown')
+    || name.endsWith('.txt')
+    || name.endsWith('.text')
+    || file.type.startsWith('text/')
 }
 
 function isPdfFile(file: File): boolean {
-  return file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
+  return file.type === 'application/pdf'
+    || file.type === 'application/x-pdf'
+    || file.name.toLowerCase().endsWith('.pdf')
 }

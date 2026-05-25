@@ -123,7 +123,7 @@ test('adds a local PDF and reopens it through the view-only PDF viewer', async (
 
   await openFileThroughFloatingMenu(page, {
     name: 'Daily Paper.pdf',
-    mimeType: 'application/pdf',
+    mimeType: 'application/octet-stream',
     buffer: createSimplePdfBuffer('Daily Paper'),
   })
 
@@ -260,6 +260,7 @@ test('exposes document input through the floating affordance', async ({ page }) 
   await expect(page.getByTestId('floating-affordance-menu').getByRole('button', { name: /文库/ })).toBeVisible()
   await expect(page.getByLabel('URL')).toBeVisible()
   await expect(page.getByRole('button', { name: /清空/ })).toBeVisible()
+  await expect(page.locator('input[type="file"]')).not.toHaveAttribute('accept')
   await expect(page.getByRole('button', { name: /粘贴/ })).toBeFocused()
 
   await page.keyboard.press('ArrowDown')

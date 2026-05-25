@@ -191,7 +191,7 @@ async function loadIncomingPdf(file: File): Promise<void> {
       source: {
         kind: 'file',
         fileName: file.name || 'document.pdf',
-        mimeType: file.type || 'application/pdf',
+        mimeType: 'application/pdf',
       },
     })
 
