@@ -20,6 +20,7 @@ import type { ReaderDocument, RemoteImageMode } from '@/types/reader'
 import type { ReaderOutlineItem } from '@/features/reader/outlineNavigation'
 
 type AppMode = 'reader' | 'library' | 'pdf'
+type CommandSurfaceId = 'actions' | 'settings'
 
 const documentState = reactive<ReaderDocument>({
   source: 'sample',
@@ -36,10 +37,14 @@ const inputMenuStatus = shallowRef('')
 const pendingRestorePosition = shallowRef<MarkdownReadingPosition | null>(null)
 const activePdfDocument = shallowRef<OpenPdfDocumentResult | null>(null)
 const isDragging = shallowRef(false)
-const isInputMenuOpen = shallowRef(false)
+const openSurfaceId = shallowRef<CommandSurfaceId | null>(null)
 const liveStatus = shallowRef('')
 const outlineItems = shallowRef<ReaderOutlineItem[]>([])
 const activeOutlineId = shallowRef('')
+const topBarRef = useTemplateRef<HTMLElement>('topBar')
+const commandSurfaceRef = useTemplateRef<HTMLElement>('commandSurface')
+const actionsButtonRef = useTemplateRef<HTMLButtonElement>('actionsButton')
+const settingsButtonRef = useTemplateRef<HTMLButtonElement>('settingsButton')
 const readerRef = useTemplateRef<InstanceType<typeof ReaderSurface>>('reader')
 const pdfViewerRef = useTemplateRef<InstanceType<typeof PdfViewer>>('pdfViewer')
 const persistedSettings = readPersistedReadingSettings()
@@ -61,10 +66,23 @@ const rendered = useRenderedMarkdown({
 })
 
 const status = computed(() => rendered.error.value ?? error.value?.detail ?? inputMenuStatus.value ?? '')
+const isActionsSurfaceOpen = computed(() => openSurfaceId.value === 'actions')
+const isSettingsSurfaceOpen = computed(() => openSurfaceId.value === 'settings')
+const activeDocumentTitle = computed(() => {
+  if (appMode.value === 'library') {
+    return '文库'
+  }
+
+  if (appMode.value === 'pdf' && activePdfDocument.value) {
+    return activePdfDocument.value.entry.title
+  }
+
+  return documentState.label === 'miru sample' ? '示例文档' : documentState.label
+})
 
 watch(status, (value) => {
   if (value) {
-    isInputMenuOpen.value = true
+    openSurface('actions')
     liveStatus.value = value
   }
 })
@@ -80,11 +98,13 @@ onMounted(async () => {
   readingSettings.applyCurrent()
   await refreshLibraryEntries()
   window.addEventListener('scroll', onWindowScroll, { passive: true })
+  document.addEventListener('pointerdown', onDocumentPointerDown)
 })
 
 onUnmounted(() => {
   window.clearTimeout(positionSaveTimer)
   window.removeEventListener('scroll', onWindowScroll)
+  document.removeEventListener('pointerdown', onDocumentPointerDown)
   void libraryStore.close()
 })
 
@@ -93,6 +113,7 @@ function resetToSample(): void {
 }
 
 async function showLibrary(): Promise<void> {
+  closeSurface()
   const currentScrollY = window.scrollY
   window.clearTimeout(positionSaveTimer)
   await saveActiveReadingPosition({ scrollY: currentScrollY })
@@ -103,6 +124,7 @@ async function showLibrary(): Promise<void> {
 }
 
 async function showReader(): Promise<void> {
+  closeSurface()
   activePdfDocument.value = null
   appMode.value = 'reader'
   await nextTick()
@@ -110,6 +132,8 @@ async function showReader(): Promise<void> {
 }
 
 async function returnToActiveDocument(): Promise<void> {
+  closeSurface()
+
   if (activePdfDocument.value) {
     appMode.value = 'pdf'
     await nextTick()
@@ -121,7 +145,118 @@ async function returnToActiveDocument(): Promise<void> {
 }
 
 function openAddMenu(): void {
-  isInputMenuOpen.value = true
+  openSurface('actions')
+}
+
+function printDocument(): void {
+  closeSurface()
+  window.print()
+}
+
+function toggleSurface(surfaceId: CommandSurfaceId): void {
+  if (openSurfaceId.value === surfaceId) {
+    closeSurface({ restoreFocus: true, previousSurfaceId: surfaceId })
+    return
+  }
+
+  openSurface(surfaceId)
+}
+
+function openSurface(surfaceId: CommandSurfaceId): void {
+  openSurfaceId.value = surfaceId
+}
+
+function setActionsSurfaceOpen(value: boolean): void {
+  if (value) {
+    openSurface('actions')
+    return
+  }
+
+  closeSurface({ restoreFocus: true, previousSurfaceId: 'actions' })
+}
+
+function closeSurface(options: { restoreFocus?: boolean, previousSurfaceId?: CommandSurfaceId | null } = {}): void {
+  const previousSurfaceId = options.previousSurfaceId ?? openSurfaceId.value
+  openSurfaceId.value = null
+
+  if (options.restoreFocus) {
+    const trigger = getSurfaceTrigger(previousSurfaceId)
+    window.setTimeout(() => trigger?.focus(), 0)
+  }
+}
+
+function getSurfaceTrigger(surfaceId: CommandSurfaceId | null): HTMLButtonElement | null {
+  if (surfaceId === 'actions') {
+    return actionsButtonRef.value
+  }
+
+  if (surfaceId === 'settings') {
+    return settingsButtonRef.value
+  }
+
+  return null
+}
+
+function onDocumentPointerDown(event: PointerEvent): void {
+  if (!openSurfaceId.value) {
+    return
+  }
+
+  const target = event.target
+  if (!(target instanceof Node)) {
+    closeSurface({ restoreFocus: true })
+    return
+  }
+
+  if (commandSurfaceRef.value?.contains(target) || topBarRef.value?.contains(target)) {
+    return
+  }
+
+  closeSurface({ restoreFocus: true })
+}
+
+function onCommandSurfaceKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closeSurface({ restoreFocus: true })
+    return
+  }
+
+  if (event.key !== 'Tab') {
+    return
+  }
+
+  const focusableElements = getCommandSurfaceFocusableElements()
+  if (focusableElements.length === 0) {
+    return
+  }
+
+  const firstElement = focusableElements[0]
+  const lastElement = focusableElements[focusableElements.length - 1]
+
+  if (event.shiftKey && document.activeElement === firstElement) {
+    event.preventDefault()
+    lastElement?.focus()
+  }
+  else if (!event.shiftKey && document.activeElement === lastElement) {
+    event.preventDefault()
+    firstElement?.focus()
+  }
+}
+
+function getCommandSurfaceFocusableElements(): HTMLElement[] {
+  return Array.from(commandSurfaceRef.value?.querySelectorAll<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])') ?? [])
+    .filter(isVisibleFocusableElement)
+}
+
+function isVisibleFocusableElement(element: HTMLElement): boolean {
+  const style = window.getComputedStyle(element)
+
+  return !element.hasAttribute('disabled')
+    && element.getAttribute('aria-hidden') !== 'true'
+    && style.display !== 'none'
+    && style.visibility !== 'hidden'
+    && element.getClientRects().length > 0
 }
 
 function navigateToOutlineItem(id: string): void {
@@ -175,7 +310,7 @@ async function loadIncomingDocument(document: ReaderDocument): Promise<void> {
       libraryStatus.value = '无法加入文库。当前文档没有被替换, 请稍后再试。'
       inputMenuStatus.value = libraryStatus.value
     }
-    isInputMenuOpen.value = true
+    openSurface('actions')
   }
 }
 
@@ -209,7 +344,7 @@ async function loadIncomingPdf(file: File): Promise<void> {
       inputMenuStatus.value = libraryStatus.value
     }
 
-    isInputMenuOpen.value = true
+    openSurface('actions')
   }
 }
 
@@ -324,8 +459,8 @@ async function onDocumentLoaded(source: ReaderDocument['source']): Promise<void>
     return
   }
 
-  if (isInputMenuOpen.value) {
-    isInputMenuOpen.value = false
+  if (openSurfaceId.value) {
+    closeSurface()
   }
 
   liveStatus.value = '文档已加载'
@@ -346,7 +481,7 @@ function onPaste(event: ClipboardEvent): void {
 
     const bareUrl = getBareUrlPaste(text)
     if (bareUrl) {
-      isInputMenuOpen.value = true
+      openSurface('actions')
       void loadFromUrl(bareUrl)
       return
     }
@@ -498,16 +633,52 @@ function focusLibraryView(): void {
     @dragleave="onDragLeave"
     @drop="onDrop"
   >
-    <header class="app-shell__header">
-      <a class="app-shell__mark" href="/" aria-label="miru home">miru</a>
+    <header ref="topBar" class="app-shell__header" data-testid="app-top-bar">
+      <button class="app-shell__mark" type="button" aria-label="回到当前阅读" @click="returnToActiveDocument">
+        <span>miru</span>
+        <span class="app-shell__mark-separator" aria-hidden="true">›</span>
+        <span class="app-shell__document-title">{{ activeDocumentTitle }}</span>
+      </button>
       <button
         class="app-shell__library-button"
         type="button"
         data-testid="library-open-button"
         @click="appMode === 'library' ? returnToActiveDocument() : showLibrary()"
       >
-        {{ appMode === 'library' ? '返回阅读' : '文库' }}
+        <span class="app-shell__library-icon" aria-hidden="true" />
+        <span>{{ appMode === 'library' ? '返回阅读' : '文库' }}</span>
       </button>
+      <div class="app-shell__command-actions" aria-label="阅读命令">
+        <button
+          v-if="appMode === 'reader'"
+          ref="settingsButton"
+          class="app-shell__command-button"
+          :class="{ 'app-shell__command-button--active': isSettingsSurfaceOpen }"
+          type="button"
+          aria-label="阅读设置"
+          :aria-expanded="isSettingsSurfaceOpen"
+          aria-controls="reading-settings-panel"
+          data-testid="reading-settings-button"
+          @click="toggleSurface('settings')"
+          @keydown.escape.prevent="closeSurface({ restoreFocus: true })"
+        >
+          <span aria-hidden="true">aA</span>
+        </button>
+        <button
+          ref="actionsButton"
+          class="app-shell__command-button"
+          :class="{ 'app-shell__command-button--active': isActionsSurfaceOpen }"
+          type="button"
+          aria-label="文档操作"
+          :aria-expanded="isActionsSurfaceOpen"
+          aria-controls="floating-input-menu"
+          data-testid="floating-affordance-button"
+          @click="toggleSurface('actions')"
+          @keydown.escape.prevent="closeSurface({ restoreFocus: true })"
+        >
+          <span aria-hidden="true">⋯</span>
+        </button>
+      </div>
     </header>
 
     <LibraryView
@@ -557,31 +728,43 @@ function focusLibraryView(): void {
       {{ liveStatus }}
     </p>
 
-    <FloatingInputMenu
-      :is-open="isInputMenuOpen"
-      :is-fetching-url="isFetchingUrl"
-      :status="status"
-      @update:is-open="isInputMenuOpen = $event"
-      @paste="loadFromClipboard"
-      @open-file="loadFromFile"
-      @open-library="showLibrary"
-      @fetch-url="loadFromUrl"
-      @clear="resetToSample"
-    />
+    <div
+      v-if="openSurfaceId"
+      ref="commandSurface"
+      class="app-shell__command-surface"
+      data-command-surface="true"
+      @keydown.capture="onCommandSurfaceKeydown"
+    >
+      <FloatingInputMenu
+        v-if="isActionsSurfaceOpen"
+        :is-open="isActionsSurfaceOpen"
+        :is-fetching-url="isFetchingUrl"
+        :status="status"
+        @update:is-open="setActionsSurfaceOpen"
+        @paste="loadFromClipboard"
+        @open-file="loadFromFile"
+        @open-library="showLibrary"
+        @fetch-url="loadFromUrl"
+        @clear="resetToSample"
+        @print="printDocument"
+      />
 
-    <ReadingSettingsControl
-      v-if="appMode === 'reader'"
-      :settings="readingSettings.state"
-      :is-default="readingSettings.isDefault.value"
-      :show-outline-position-control="outlineItems.length > 0"
-      @update-font-size="readingSettings.updateFontSize"
-      @update-measure="readingSettings.updateMeasure"
-      @update-line-height="readingSettings.updateLineHeight"
-      @update-font-family="readingSettings.updateFontFamily"
-      @update-theme="readingSettings.updateTheme"
-      @update-outline-position="readingSettings.updateOutlinePosition"
-      @reset="readingSettings.reset"
-    />
+      <ReadingSettingsControl
+        v-else-if="isSettingsSurfaceOpen && appMode === 'reader'"
+        :is-open="isSettingsSurfaceOpen"
+        :settings="readingSettings.state"
+        :is-default="readingSettings.isDefault.value"
+        :show-outline-position-control="outlineItems.length > 0"
+        @update-font-size="readingSettings.updateFontSize"
+        @update-measure="readingSettings.updateMeasure"
+        @update-line-height="readingSettings.updateLineHeight"
+        @update-font-family="readingSettings.updateFontFamily"
+        @update-theme="readingSettings.updateTheme"
+        @update-outline-position="readingSettings.updateOutlinePosition"
+        @reset="readingSettings.reset"
+        @close="closeSurface({ restoreFocus: true })"
+      />
+    </div>
   </main>
 </template>
 
@@ -599,38 +782,133 @@ function focusLibraryView(): void {
 }
 
 .app-shell__header {
+  position: sticky;
+  top: max(0.75rem, env(safe-area-inset-top));
+  z-index: 30;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
+  justify-content: center;
+  gap: 0.55rem;
   max-width: 78rem;
   margin: 0 auto;
-  padding-top: 1rem;
+  padding: 0.45rem;
+  border: 1px solid color-mix(in srgb, var(--reading-rule) 62%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--reading-bg) 92%, transparent);
+  box-shadow: 0 12px 34px rgb(0 0 0 / 9%);
+  backdrop-filter: blur(16px);
 }
 
 .app-shell__mark {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  min-inline-size: 0;
+  min-block-size: 44px;
+  padding: 0 0.85rem;
+  border: 0;
+  border-radius: 999px;
   color: var(--reading-fg);
+  background: transparent;
+  cursor: pointer;
   font-family: var(--reading-font-heading);
-  font-size: 1.35rem;
+  font-size: 1rem;
   font-weight: 650;
   text-decoration: none;
 }
 
-.app-shell__library-button {
-  min-block-size: 2.75rem;
-  padding: 0 0.85rem;
+.app-shell__mark:hover,
+.app-shell__mark:focus-visible {
+  background: color-mix(in srgb, var(--reading-code-bg) 60%, transparent);
+}
+
+.app-shell__mark-separator,
+.app-shell__document-title {
+  color: var(--reading-fg-muted);
+  font-family: var(--reading-font-body);
+  font-size: 0.86rem;
+  font-weight: 500;
+}
+
+.app-shell__mark-separator {
+  margin-inline: 0.45rem;
+}
+
+.app-shell__document-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-shell__library-button,
+.app-shell__command-button {
+  display: inline-grid;
+  place-items: center;
+  min-inline-size: 44px;
+  min-block-size: 44px;
+  padding: 0 0.78rem;
   border: 1px solid color-mix(in srgb, var(--reading-rule) 72%, transparent);
-  border-radius: 8px;
+  border-radius: 999px;
   color: var(--reading-fg-muted);
   background: color-mix(in srgb, var(--reading-bg) 92%, var(--reading-fg) 8%);
   font: inherit;
   cursor: pointer;
 }
 
+.app-shell__library-button {
+  grid-auto-flow: column;
+  gap: 0.35rem;
+}
+
+.app-shell__library-icon {
+  position: relative;
+  inline-size: 1rem;
+  block-size: 0.84rem;
+  border: 1.5px solid currentColor;
+  border-left-width: 3px;
+  border-radius: 3px;
+}
+
+.app-shell__library-icon::before {
+  position: absolute;
+  inset-inline: 0.2rem;
+  top: 0.28rem;
+  block-size: 1.5px;
+  background: currentColor;
+  content: "";
+  opacity: 0.65;
+}
+
+.app-shell__command-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.35rem;
+}
+
+.app-shell__command-button {
+  padding: 0;
+  font-family: var(--reading-font-heading);
+  font-weight: 700;
+}
+
 .app-shell__library-button:hover,
-.app-shell__library-button:focus-visible {
+.app-shell__library-button:focus-visible,
+.app-shell__command-button:hover,
+.app-shell__command-button:focus-visible,
+.app-shell__command-button--active {
   color: var(--reading-fg);
   border-color: color-mix(in srgb, var(--reading-accent) 54%, transparent);
+}
+
+.app-shell__command-button--active {
+  background: color-mix(in srgb, var(--reading-accent) 12%, transparent);
+}
+
+.app-shell__command-surface {
+  position: fixed;
+  top: max(4.65rem, calc(env(safe-area-inset-top) + 4.65rem));
+  right: max(1rem, calc(env(safe-area-inset-right) + 1rem));
+  z-index: 40;
 }
 
 .app-shell__live-status {
@@ -643,6 +921,44 @@ function focusLibraryView(): void {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+@media (max-width: 640px) {
+  .app-shell {
+    padding-inline: clamp(1rem, 4vw, 1.25rem);
+  }
+
+  .app-shell__header {
+    top: max(0.5rem, env(safe-area-inset-top));
+    gap: 0.35rem;
+    padding: 0.35rem;
+  }
+
+  .app-shell__library-button span:last-child,
+  .app-shell__document-title {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .app-shell__mark {
+    flex: 1 1 auto;
+    min-inline-size: 0;
+    padding-inline: 0.72rem;
+  }
+
+  .app-shell__command-surface {
+    top: auto;
+    right: 0;
+    bottom: 0;
+    left: 0;
+  }
 }
 
 </style>

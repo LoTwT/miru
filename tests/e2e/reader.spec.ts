@@ -280,10 +280,9 @@ test('prints a clean full document without app chrome', async ({ page }) => {
   ).toBe('avoid')
 })
 
-test('exposes document input through the floating affordance', async ({ page }) => {
+test('exposes document input through the top-bar command surface', async ({ page }) => {
   await page.goto('/')
 
-  const affordance = page.getByTestId('floating-affordance')
   const button = page.getByTestId('floating-affordance-button')
 
   await button.click()
@@ -291,13 +290,21 @@ test('exposes document input through the floating affordance', async ({ page }) 
   await expect(page.getByRole('button', { name: /粘贴/ })).toBeVisible()
   await expect(page.getByRole('button', { name: /打开文件/ })).toBeVisible()
   await expect(page.getByTestId('floating-affordance-menu').getByRole('button', { name: /文库/ })).toBeVisible()
-  await expect(page.getByLabel('URL')).toBeVisible()
+  await expect(page.getByLabel('URL 导入')).toBeVisible()
   await expect(page.getByRole('button', { name: /清空/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /打印/ })).toBeVisible()
   await expect(page.locator('input[type="file"]')).not.toHaveAttribute('accept')
   await expect(page.getByRole('button', { name: /粘贴/ })).toBeFocused()
 
   await page.keyboard.press('ArrowDown')
-  await expect(page.getByRole('button', { name: /打开文件/ })).toBeFocused()
+  await expect(page.getByLabel('URL 导入')).toBeFocused()
+
+  await page.getByRole('button', { name: /清空当前/ }).focus()
+  await page.keyboard.press('Tab')
+  await expect(page.getByRole('button', { name: '关闭文档操作' })).toBeFocused()
+
+  await page.keyboard.press('Shift+Tab')
+  await expect(page.getByRole('button', { name: /清空当前/ })).toBeFocused()
 
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('floating-affordance-menu')).not.toBeVisible()
@@ -305,23 +312,27 @@ test('exposes document input through the floating affordance', async ({ page }) 
 
   await button.click()
   await expect(page.getByRole('button', { name: /粘贴/ })).toBeFocused()
-  await page.mouse.click(24, 24)
+  await page.mouse.click(200, 120)
   await expect(page.getByTestId('floating-affordance-menu')).not.toBeVisible()
   await expect(button).toBeFocused()
 
   await button.click()
   await expect(page.getByRole('button', { name: /粘贴/ })).toBeFocused()
+  await page.getByTestId('reading-settings-button').click()
+  await expect(page.getByTestId('floating-affordance-menu')).not.toBeVisible()
+  await expect(page.getByTestId('reading-settings-panel')).toBeVisible()
+
+  await button.click()
+  await expect(page.getByTestId('reading-settings-panel')).not.toBeVisible()
+  await expect(page.getByTestId('floating-affordance-menu')).toBeVisible()
+
   await button.click()
   await expect(page.getByTestId('floating-affordance-menu')).not.toBeVisible()
   await expect(button).toBeFocused()
 
   await button.evaluate(element => (element as HTMLElement).blur())
-  await page.mouse.move(20, 20)
   await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
-  await expect.poll(async () => Number.parseFloat(await affordance.evaluate(element => getComputedStyle(element).opacity))).toBeLessThan(0.5)
-
-  await page.evaluate(() => window.scrollTo(0, 360))
-  await expect(page.getByTestId('scroll-top-button')).toBeVisible()
+  await expect(page.getByTestId('app-top-bar')).toBeVisible()
 })
 
 test('collapses the floating menu and focuses the reader after URL fetch success', async ({ page }) => {

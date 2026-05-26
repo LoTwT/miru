@@ -21,6 +21,7 @@ import type { ReadingCustomizationState } from '@/features/settings/useReadingSe
 
 const props = defineProps<{
   isDefault: boolean
+  isOpen: boolean
   settings: Readonly<ReadingCustomizationState>
   showOutlinePositionControl: boolean
 }>()
@@ -33,46 +34,14 @@ const emit = defineEmits<{
   updateTheme: [value: ReadingThemeChoice]
   updateOutlinePosition: [value: ReadingOutlinePositionId]
   reset: []
+  close: []
 }>()
 
-const isOpen = shallowRef(false)
-const isHovering = shallowRef(false)
-const isFocusWithin = shallowRef(false)
-const isReceded = shallowRef(false)
-const prefersReducedMotion = shallowRef(false)
 const isDesktopOutlineViewport = shallowRef(false)
 const rootRef = useTemplateRef<HTMLElement>('root')
-const buttonRef = useTemplateRef<HTMLButtonElement>('button')
 const showOutlinePositionControl = computed(() => props.showOutlinePositionControl && isDesktopOutlineViewport.value)
 
-let lastScrollY = 0
-let recedeTimer: ReturnType<typeof setTimeout> | undefined
-let mediaQuery: MediaQueryList | undefined
 let outlineViewportMediaQuery: MediaQueryList | undefined
-
-function togglePanel(): void {
-  if (isOpen.value) {
-    closePanel({ restoreFocus: true })
-    return
-  }
-
-  void openPanel()
-}
-
-async function openPanel(): Promise<void> {
-  isOpen.value = true
-  isReceded.value = false
-  await nextTick()
-  focusFirstPanelItem()
-}
-
-function closePanel(options: { restoreFocus?: boolean } = {}): void {
-  isOpen.value = false
-
-  if (options.restoreFocus) {
-    window.setTimeout(() => buttonRef.value?.focus(), 0)
-  }
-}
 
 function focusFirstPanelItem(): void {
   window.setTimeout(() => {
@@ -80,65 +49,10 @@ function focusFirstPanelItem(): void {
   }, 0)
 }
 
-function onDocumentPointerDown(event: PointerEvent): void {
-  const target = event.target
-
-  if (isOpen.value && (!(target instanceof Node) || !rootRef.value?.contains(target))) {
-    closePanel({ restoreFocus: true })
-  }
-}
-
-function onFocusIn(): void {
-  isFocusWithin.value = true
-  isReceded.value = false
-}
-
-function onFocusOut(event: FocusEvent): void {
-  const nextTarget = event.relatedTarget
-
-  if (!(nextTarget instanceof Node) || !rootRef.value?.contains(nextTarget)) {
-    isFocusWithin.value = false
-  }
-}
-
-function onWindowScroll(): void {
-  const currentY = window.scrollY
-  const delta = currentY - lastScrollY
-
-  window.clearTimeout(recedeTimer)
-
-  if (currentY < 160 || delta < -6) {
-    isReceded.value = false
-  }
-  else if (delta > 6 && !prefersReducedMotion.value) {
-    recedeTimer = window.setTimeout(() => {
-      if (!isOpen.value && !isFocusWithin.value && !isHovering.value) {
-        isReceded.value = true
-      }
-    }, 520)
-  }
-
-  lastScrollY = currentY
-}
-
-function onWindowMouseMove(): void {
-  if (!isOpen.value && !prefersReducedMotion.value) {
-    isReceded.value = false
-  }
-}
-
-function syncReducedMotion(): void {
-  prefersReducedMotion.value = mediaQuery?.matches ?? false
-
-  if (prefersReducedMotion.value) {
-    isReceded.value = false
-  }
-}
-
 function onPanelKeydown(event: KeyboardEvent): void {
   if (event.key === 'Escape') {
     event.preventDefault()
-    closePanel({ restoreFocus: true })
+    emit('close')
   }
 }
 
@@ -197,33 +111,28 @@ function selectOutlinePosition(value: ReadingOutlinePositionId): void {
   emit('updateOutlinePosition', value)
 }
 
-watch(isOpen, (value) => {
-  if (value) {
-    isReceded.value = false
+watch(() => props.isOpen, async (value) => {
+  if (!value) {
+    return
   }
+
+  await nextTick()
+  focusFirstPanelItem()
 })
 
 onMounted(() => {
-  mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
   outlineViewportMediaQuery = window.matchMedia('(min-width: 1100px)')
-  syncReducedMotion()
   syncOutlineViewport()
-  lastScrollY = window.scrollY
 
-  mediaQuery.addEventListener('change', syncReducedMotion)
   outlineViewportMediaQuery.addEventListener('change', syncOutlineViewport)
-  window.addEventListener('scroll', onWindowScroll, { passive: true })
-  window.addEventListener('mousemove', onWindowMouseMove, { passive: true })
-  document.addEventListener('pointerdown', onDocumentPointerDown)
+
+  if (props.isOpen) {
+    focusFirstPanelItem()
+  }
 })
 
 onUnmounted(() => {
-  window.clearTimeout(recedeTimer)
-  mediaQuery?.removeEventListener('change', syncReducedMotion)
   outlineViewportMediaQuery?.removeEventListener('change', syncOutlineViewport)
-  window.removeEventListener('scroll', onWindowScroll)
-  window.removeEventListener('mousemove', onWindowMouseMove)
-  document.removeEventListener('pointerdown', onDocumentPointerDown)
 })
 
 function syncOutlineViewport(): void {
@@ -233,22 +142,13 @@ function syncOutlineViewport(): void {
 
 <template>
   <section
+    v-if="props.isOpen"
     ref="root"
     class="reading-settings"
-    :class="{
-      'reading-settings--dimmed': isReceded && !isOpen && !isHovering && !isFocusWithin && !prefersReducedMotion,
-      'reading-settings--open': isOpen,
-    }"
     aria-label="阅读设置"
     data-testid="reading-settings"
-    @focusin="onFocusIn"
-    @focusout="onFocusOut"
-    @pointerenter="isHovering = true; isReceded = false"
-    @pointerleave="isHovering = false"
-    @pointerdown="isReceded = false"
   >
     <div
-      v-if="isOpen"
       id="reading-settings-panel"
       class="reading-settings__panel"
       role="dialog"
@@ -272,7 +172,7 @@ function syncOutlineViewport(): void {
           class="reading-settings__close"
           type="button"
           aria-label="关闭阅读设置"
-          @click="closePanel({ restoreFocus: true })"
+          @click="emit('close')"
         >
           ×
         </button>
@@ -439,74 +339,15 @@ function syncOutlineViewport(): void {
         恢复默认
       </button>
     </div>
-
-    <button
-      ref="button"
-      class="reading-settings__button"
-      type="button"
-      aria-label="阅读设置"
-      :aria-expanded="isOpen"
-      aria-controls="reading-settings-panel"
-      data-testid="reading-settings-button"
-      @click="togglePanel"
-      @keydown.enter.prevent="togglePanel"
-      @keydown.space.prevent="togglePanel"
-      @keydown.arrow-up.prevent="openPanel"
-      @keydown.escape.prevent="closePanel({ restoreFocus: true })"
-    >
-      <span aria-hidden="true">aA</span>
-    </button>
   </section>
 </template>
 
 <style scoped>
 .reading-settings {
-  position: fixed;
-  right: max(1rem, calc(env(safe-area-inset-right) + 1rem));
-  bottom: max(4.85rem, calc(env(safe-area-inset-bottom) + 4.85rem));
-  z-index: 21;
-  display: grid;
-  justify-items: end;
-  opacity: 1;
-  transition: opacity 160ms ease;
-}
-
-.reading-settings--dimmed {
-  opacity: 0.36;
-}
-
-.reading-settings:focus-within,
-.reading-settings:hover {
-  opacity: 1;
-}
-
-.reading-settings__button {
-  display: grid;
-  place-items: center;
-  inline-size: 48px;
-  block-size: 48px;
-  border: 1px solid var(--reading-rule);
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--reading-bg) 92%, transparent);
-  color: var(--reading-fg);
-  box-shadow: 0 12px 30px rgb(0 0 0 / 13%);
-  cursor: pointer;
-  font-family: var(--reading-font-heading);
-  font-size: 1rem;
-  font-weight: 700;
-  letter-spacing: 0;
-  backdrop-filter: blur(14px);
-}
-
-.reading-settings__button span {
-  transform: translateY(-0.03em);
+  inline-size: min(22rem, calc(100vw - 2rem));
 }
 
 .reading-settings__panel {
-  position: absolute;
-  right: 0;
-  bottom: 3.85rem;
-  inline-size: min(22rem, calc(100vw - 2rem));
   padding: 0.8rem;
   border: 1px solid var(--reading-rule);
   border-radius: 18px;
@@ -549,8 +390,8 @@ function syncOutlineViewport(): void {
 .reading-settings__close {
   display: grid;
   place-items: center;
-  inline-size: 36px;
-  block-size: 36px;
+  inline-size: 44px;
+  block-size: 44px;
   border: 1px solid var(--reading-rule);
   border-radius: 50%;
   background: var(--reading-bg);
@@ -642,19 +483,10 @@ function syncOutlineViewport(): void {
 
 @media (max-width: 640px) {
   .reading-settings {
-    bottom: max(4.85rem, calc(env(safe-area-inset-bottom) + 4.85rem));
-  }
-
-  .reading-settings--open .reading-settings__button {
-    position: fixed;
-    right: max(1rem, calc(env(safe-area-inset-right) + 1rem));
-    bottom: calc(min(72vh, 34rem) + max(1rem, env(safe-area-inset-bottom)));
+    inline-size: 100vw;
   }
 
   .reading-settings__panel {
-    position: fixed;
-    right: 0;
-    bottom: 0;
     inline-size: 100vw;
     max-block-size: min(72vh, 34rem);
     overflow-y: auto;
@@ -676,7 +508,6 @@ function syncOutlineViewport(): void {
 
 @media (prefers-reduced-motion: reduce) {
   .reading-settings {
-    opacity: 1;
     transition: none;
   }
 }
