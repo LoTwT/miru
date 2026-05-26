@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, shallowRef, useTemplateRef, watch } from 'vue'
+import { nextTick, onMounted, shallowRef, useTemplateRef, watch } from 'vue'
 
 const props = defineProps<{
   isFetchingUrl: boolean
@@ -14,150 +14,22 @@ const emit = defineEmits<{
   openLibrary: []
   fetchUrl: [url: string]
   clear: []
+  print: []
 }>()
 
 const url = shallowRef('')
-const isHovering = shallowRef(false)
-const isHoverPreview = shallowRef(false)
-const isFocusWithin = shallowRef(false)
-const isReceded = shallowRef(false)
-const showScrollTop = shallowRef(false)
-const prefersReducedMotion = shallowRef(false)
-const pendingFirstItemFocus = shallowRef(false)
 const rootRef = useTemplateRef<HTMLElement>('root')
 const fileInputRef = useTemplateRef<HTMLInputElement>('fileInput')
-const fabRef = useTemplateRef<HTMLButtonElement>('fab')
 const urlInputRef = useTemplateRef<HTMLInputElement>('urlInput')
 
-let lastScrollY = 0
-let recedeTimer: ReturnType<typeof setTimeout> | undefined
-let mediaQuery: MediaQueryList | undefined
-
-const isDimmed = computed(() =>
-  isReceded.value && !props.isOpen && !isHovering.value && !isFocusWithin.value && !prefersReducedMotion.value,
-)
-
-function setOpen(value: boolean): void {
-  emit('update:isOpen', value)
-}
-
-async function openMenu(options: { focusFirstItem?: boolean } = {}): Promise<void> {
-  if (options.focusFirstItem) {
-    pendingFirstItemFocus.value = true
-  }
-
-  setOpen(true)
-  isReceded.value = false
-  await nextTick()
-
-  if (options.focusFirstItem) {
-    focusFirstMenuItem()
-  }
-}
-
-function closeMenu(options: { restoreFocus?: boolean } = {}): void {
-  isHoverPreview.value = false
-  setOpen(false)
-
-  if (options.restoreFocus) {
-    window.setTimeout(() => fabRef.value?.focus(), 0)
-  }
-}
-
-function toggleMenu(): void {
-  if (props.isOpen && isHoverPreview.value) {
-    isHoverPreview.value = false
-    focusFirstMenuItem()
-    return
-  }
-
-  if (props.isOpen) {
-    closeMenu({ restoreFocus: true })
-    return
-  }
-
-  void openMenu({ focusFirstItem: true })
-}
-
-function onPointerEnter(event: PointerEvent): void {
-  isHovering.value = true
-  isReceded.value = false
-
-  if (event.pointerType === 'mouse') {
-    if (!props.isOpen) {
-      isHoverPreview.value = true
-    }
-    void openMenu()
-  }
-}
-
-function onPointerLeave(): void {
-  isHovering.value = false
-
-  if (!isFocusWithin.value) {
-    closeMenu()
-  }
-}
-
-function onFocusIn(): void {
-  isFocusWithin.value = true
-  isReceded.value = false
-}
-
-function onFocusOut(event: FocusEvent): void {
-  const nextTarget = event.relatedTarget
-
-  if (!(nextTarget instanceof Node) || !rootRef.value?.contains(nextTarget)) {
-    isFocusWithin.value = false
-  }
-}
-
-function onDocumentPointerDown(event: PointerEvent): void {
-  const target = event.target
-
-  if (props.isOpen && (!(target instanceof Node) || !rootRef.value?.contains(target))) {
-    closeMenu({ restoreFocus: true })
-  }
-}
-
-function onWindowMouseMove(): void {
-  if (!props.isOpen && !prefersReducedMotion.value) {
-    isReceded.value = false
-  }
-}
-
-function onWindowScroll(): void {
-  const currentY = window.scrollY
-  const delta = currentY - lastScrollY
-
-  window.clearTimeout(recedeTimer)
-
-  if (currentY < 160) {
-    isReceded.value = false
-    showScrollTop.value = false
-  }
-  else if (delta > 6) {
-    showScrollTop.value = false
-    if (!prefersReducedMotion.value) {
-      recedeTimer = window.setTimeout(() => {
-        if (!props.isOpen && !isFocusWithin.value && !isHovering.value) {
-          isReceded.value = true
-        }
-      }, 520)
-    }
-  }
-  else if (delta < -6) {
-    isReceded.value = false
-    showScrollTop.value = currentY > 320
-  }
-
-  lastScrollY = currentY
+function closeMenu(): void {
+  emit('update:isOpen', false)
 }
 
 function onMenuKeydown(event: KeyboardEvent): void {
   if (event.key === 'Escape') {
     event.preventDefault()
-    closeMenu({ restoreFocus: true })
+    closeMenu()
     return
   }
 
@@ -180,9 +52,7 @@ function onMenuKeydown(event: KeyboardEvent): void {
 
 function focusFirstMenuItem(): void {
   window.setTimeout(() => {
-    const item = getMenuItems()[0]
-    item?.focus()
-    pendingFirstItemFocus.value = false
+    getMenuItems()[0]?.focus()
   }, 0)
 }
 
@@ -196,8 +66,8 @@ function openFileDialog(): void {
 }
 
 function openLibrary(): void {
-  emit('openLibrary')
   closeMenu()
+  emit('openLibrary')
 }
 
 function onFileChange(event: Event): void {
@@ -205,8 +75,8 @@ function onFileChange(event: Event): void {
   const file = input.files?.[0]
 
   if (file) {
-    emit('openFile', file)
     closeMenu()
+    emit('openFile', file)
   }
 
   input.value = ''
@@ -224,237 +94,203 @@ function submitUrl(): void {
 }
 
 function clearDocument(): void {
+  closeMenu()
   emit('clear')
-  closeMenu({ restoreFocus: true })
 }
 
 function requestPaste(): void {
   emit('paste')
 }
 
-function scrollToTop(): void {
-  window.scrollTo({
-    top: 0,
-    behavior: prefersReducedMotion.value ? 'auto' : 'smooth',
-  })
-}
-
-function syncReducedMotion(): void {
-  prefersReducedMotion.value = mediaQuery?.matches ?? false
-
-  if (prefersReducedMotion.value) {
-    isReceded.value = false
-  }
+function printDocument(): void {
+  closeMenu()
+  emit('print')
 }
 
 watch(() => props.isOpen, async (isOpen) => {
-  if (isOpen && pendingFirstItemFocus.value) {
-    await nextTick()
-    focusFirstMenuItem()
+  if (!isOpen) {
+    return
   }
+
+  await nextTick()
+  focusFirstMenuItem()
 })
 
 onMounted(() => {
-  mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
-  syncReducedMotion()
-  lastScrollY = window.scrollY
-
-  mediaQuery.addEventListener('change', syncReducedMotion)
-  window.addEventListener('scroll', onWindowScroll, { passive: true })
-  window.addEventListener('mousemove', onWindowMouseMove, { passive: true })
-  document.addEventListener('pointerdown', onDocumentPointerDown)
-})
-
-onUnmounted(() => {
-  window.clearTimeout(recedeTimer)
-  mediaQuery?.removeEventListener('change', syncReducedMotion)
-  window.removeEventListener('scroll', onWindowScroll)
-  window.removeEventListener('mousemove', onWindowMouseMove)
-  document.removeEventListener('pointerdown', onDocumentPointerDown)
+  if (props.isOpen) {
+    focusFirstMenuItem()
+  }
 })
 </script>
 
 <template>
-  <button
-    v-if="showScrollTop"
-    class="floating-return-mark"
-    type="button"
-    aria-label="回到顶部"
-    data-testid="scroll-top-button"
-    @click="scrollToTop"
-  >
-    miru ↑
-  </button>
-
   <section
+    v-if="props.isOpen"
+    id="floating-input-menu"
     ref="root"
     class="floating-input"
-    :class="{ 'floating-input--dimmed': isDimmed, 'floating-input--open': props.isOpen }"
-    aria-label="Markdown input"
-    data-testid="floating-affordance"
-    @pointerenter="onPointerEnter"
-    @pointerleave="onPointerLeave"
-    @focusin="onFocusIn"
-    @focusout="onFocusOut"
-    @pointerdown="isReceded = false"
+    aria-labelledby="floating-input-title"
+    data-testid="floating-affordance-menu"
+    @keydown="onMenuKeydown"
   >
-    <div
-      v-if="props.isOpen"
-      id="floating-input-menu"
-      class="floating-input__panel"
-      role="group"
-      aria-label="加载文档菜单"
-      data-testid="floating-affordance-menu"
-      @keydown="onMenuKeydown"
-    >
-      <button
-        class="floating-input__item"
-        type="button"
-        data-menu-item
-        @click="requestPaste"
-      >
-        <span>粘贴</span>
-        <small>也可按 Cmd/Ctrl+V</small>
+    <div class="floating-input__handle" aria-hidden="true" />
+
+    <header class="floating-input__header">
+      <div>
+        <h2 id="floating-input-title" class="floating-input__title">
+          文档操作
+        </h2>
+        <p class="floating-input__caption">
+          加载、导入或整理当前阅读
+        </p>
+      </div>
+      <button class="floating-input__close" type="button" aria-label="关闭文档操作" @click="closeMenu">
+        ×
       </button>
-
-      <button
-        class="floating-input__item"
-        type="button"
-        data-menu-item
-        @click="openFileDialog"
-      >
-        <span>打开文件</span>
-        <small>.md / text / PDF</small>
-      </button>
-
-      <button
-        class="floating-input__item"
-        type="button"
-        data-menu-item
-        @click="openLibrary"
-      >
-        <span>文库</span>
-        <small>本机保存的文档</small>
-      </button>
-
-      <form class="floating-input__url" @submit.prevent="submitUrl">
-        <label class="floating-input__label" for="floating-url-input">URL</label>
-        <div class="floating-input__url-row">
-          <input
-            id="floating-url-input"
-            ref="urlInput"
-            v-model="url"
-            class="floating-input__url-input"
-            type="url"
-            inputmode="url"
-            placeholder="https://example.com/readme.md"
-            data-menu-item
-          >
-          <button
-            class="floating-input__fetch"
-            type="submit"
-            :disabled="props.isFetchingUrl"
-            data-menu-item
-          >
-            {{ props.isFetchingUrl ? '拉取中' : '拉取' }}
-          </button>
-        </div>
-      </form>
-
-      <button
-        class="floating-input__item floating-input__item--quiet"
-        type="button"
-        data-menu-item
-        @click="clearDocument"
-      >
-        <span>清空</span>
-        <small>回到示例文档</small>
-      </button>
-
-      <p v-if="props.isFetchingUrl" class="floating-input__status" role="status">
-        正在拉取 URL…
-      </p>
-      <p v-else-if="props.status" class="floating-input__status" role="status" aria-live="polite">
-        {{ props.status }}
-      </p>
-
-      <input
-        ref="fileInput"
-        class="floating-input__file"
-        type="file"
-        @change="onFileChange"
-      >
-    </div>
+    </header>
 
     <button
-      ref="fab"
-      class="floating-input__fab"
+      class="floating-input__item"
       type="button"
-      aria-label="加载文档"
-      :aria-expanded="props.isOpen"
-      aria-controls="floating-input-menu"
-      data-testid="floating-affordance-button"
-      @click="toggleMenu"
-      @keydown.enter.prevent="openMenu({ focusFirstItem: true })"
-      @keydown.space.prevent="openMenu({ focusFirstItem: true })"
-      @keydown.arrow-down.prevent="openMenu({ focusFirstItem: true })"
-      @keydown.escape.prevent="closeMenu({ restoreFocus: true })"
+      data-menu-item
+      @click="requestPaste"
     >
-      <span aria-hidden="true">＋</span>
+      <span>粘贴</span>
+      <small>也可按 Cmd/Ctrl+V</small>
     </button>
+
+    <form class="floating-input__url" @submit.prevent="submitUrl">
+      <label class="floating-input__label" for="floating-url-input">URL 导入</label>
+      <div class="floating-input__url-row">
+        <input
+          id="floating-url-input"
+          ref="urlInput"
+          v-model="url"
+          class="floating-input__url-input"
+          type="url"
+          inputmode="url"
+          placeholder="https://example.com/readme.md"
+          data-menu-item
+        >
+        <button
+          class="floating-input__fetch"
+          type="submit"
+          :disabled="props.isFetchingUrl"
+          data-menu-item
+        >
+          {{ props.isFetchingUrl ? '拉取中' : '拉取' }}
+        </button>
+      </div>
+    </form>
+
+    <button
+      class="floating-input__item"
+      type="button"
+      data-menu-item
+      @click="openFileDialog"
+    >
+      <span>打开文件</span>
+      <small>.md / .txt / .pdf</small>
+    </button>
+
+    <button
+      class="floating-input__item"
+      type="button"
+      data-menu-item
+      @click="openLibrary"
+    >
+      <span>文库</span>
+      <small>本机保存的文档</small>
+    </button>
+
+    <button
+      class="floating-input__item"
+      type="button"
+      data-menu-item
+      @click="printDocument"
+    >
+      <span>打印 / 保存 PDF</span>
+      <small>使用浏览器打印</small>
+    </button>
+
+    <button
+      class="floating-input__item floating-input__item--danger"
+      type="button"
+      data-menu-item
+      @click="clearDocument"
+    >
+      <span>清空当前</span>
+      <small>回到示例文档</small>
+    </button>
+
+    <p v-if="props.isFetchingUrl" class="floating-input__status" role="status">
+      正在拉取 URL…
+    </p>
+    <p v-else-if="props.status" class="floating-input__status" role="status" aria-live="polite">
+      {{ props.status }}
+    </p>
+
+    <input
+      ref="fileInput"
+      class="floating-input__file"
+      type="file"
+      @change="onFileChange"
+    >
   </section>
 </template>
 
 <style scoped>
 .floating-input {
-  position: fixed;
-  right: max(1rem, calc(env(safe-area-inset-right) + 1rem));
-  bottom: max(1rem, calc(env(safe-area-inset-bottom) + 1rem));
-  z-index: 20;
-  display: grid;
-  justify-items: end;
-  gap: 0.75rem;
-  opacity: 1;
-  transition: opacity 160ms ease;
-}
-
-.floating-input--dimmed {
-  opacity: 0.32;
-}
-
-.floating-input:focus-within,
-.floating-input:hover {
-  opacity: 1;
-}
-
-.floating-input__panel {
-  inline-size: min(20rem, calc(100vw - 2rem));
-  padding: 0.65rem;
+  inline-size: min(22rem, calc(100vw - 2rem));
+  padding: 0.8rem;
   border: 1px solid var(--reading-rule);
   border-radius: 18px;
-  background: color-mix(in srgb, var(--reading-bg) 92%, transparent);
+  background: color-mix(in srgb, var(--reading-bg) 94%, transparent);
   box-shadow: 0 18px 44px rgb(0 0 0 / 16%);
-  backdrop-filter: blur(14px);
+  backdrop-filter: blur(16px);
 }
 
-.floating-input__fab {
+.floating-input__handle {
+  display: none;
+}
+
+.floating-input__header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-block-end: 0.8rem;
+}
+
+.floating-input__title,
+.floating-input__caption {
+  margin: 0;
+}
+
+.floating-input__title {
+  color: var(--reading-fg);
+  font-family: var(--reading-font-heading);
+  font-size: 1.05rem;
+  line-height: 1.2;
+}
+
+.floating-input__caption {
+  margin-block-start: 0.2rem;
+  color: var(--reading-fg-muted);
+  font-size: 0.82rem;
+}
+
+.floating-input__close {
   display: grid;
   place-items: center;
-  inline-size: 48px;
-  block-size: 48px;
+  inline-size: 44px;
+  block-size: 44px;
   border: 1px solid var(--reading-rule);
   border-radius: 50%;
-  background: var(--reading-fg);
-  color: var(--reading-bg);
-  box-shadow: 0 12px 30px rgb(0 0 0 / 14%);
+  background: var(--reading-bg);
+  color: var(--reading-fg-muted);
   cursor: pointer;
-}
-
-.floating-input__fab span {
-  display: block;
-  font-size: 1.6rem;
-  line-height: 1;
-  transform: translateY(-0.03em);
+  font: inherit;
 }
 
 .floating-input__item,
@@ -484,12 +320,14 @@ onUnmounted(() => {
 .floating-input__item:hover,
 .floating-input__item:focus-visible,
 .floating-input__fetch:hover,
-.floating-input__fetch:focus-visible {
+.floating-input__fetch:focus-visible,
+.floating-input__close:hover,
+.floating-input__close:focus-visible {
   border-color: var(--reading-accent);
 }
 
-.floating-input__item--quiet {
-  color: var(--reading-fg-muted);
+.floating-input__item--danger {
+  color: var(--reading-accent);
 }
 
 .floating-input__url {
@@ -547,34 +385,24 @@ onUnmounted(() => {
   display: none;
 }
 
-.floating-return-mark {
-  position: fixed;
-  top: max(1rem, env(safe-area-inset-top));
-  left: max(1rem, env(safe-area-inset-left));
-  z-index: 20;
-  min-block-size: 36px;
-  padding-inline: 0.78rem;
-  border: 1px solid var(--reading-rule);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--reading-bg) 92%, transparent);
-  color: var(--reading-fg);
-  box-shadow: 0 10px 24px rgb(0 0 0 / 10%);
-  backdrop-filter: blur(12px);
-  cursor: pointer;
-  font-family: var(--reading-font-heading);
-  font-weight: 650;
-}
-
-@media (max-width: 700px) {
-  .floating-input__panel {
-    inline-size: min(21rem, calc(100vw - 2rem));
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
+@media (max-width: 640px) {
   .floating-input {
-    opacity: 1;
-    transition: none;
+    inline-size: 100vw;
+    max-block-size: min(72vh, 34rem);
+    overflow-y: auto;
+    padding: 0.72rem 1rem max(1rem, calc(env(safe-area-inset-bottom) + 1rem));
+    border-inline: 0;
+    border-block-end: 0;
+    border-radius: 18px 18px 0 0;
+  }
+
+  .floating-input__handle {
+    display: block;
+    inline-size: 2.7rem;
+    block-size: 0.28rem;
+    margin: 0 auto 0.7rem;
+    border-radius: 999px;
+    background: var(--reading-rule);
   }
 }
 </style>
