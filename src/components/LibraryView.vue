@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, shallowRef, useTemplateRef, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, shallowRef, useTemplateRef, watch } from 'vue'
 
 import type { LibraryEntry, LibrarySortMode } from '@/features/library/types'
 
@@ -64,6 +64,7 @@ function cancelRename(): void {
 }
 
 function requestDelete(entry: LibraryEntry): void {
+  closeActionsMenu()
   dialogRestoreTarget = document.activeElement instanceof HTMLElement ? document.activeElement : null
   pendingDelete.value = entry
 }
@@ -95,6 +96,24 @@ function toggleActionsMenu(entry: LibraryEntry): void {
 
 function closeActionsMenu(): void {
   openActionsEntryId.value = null
+}
+
+function onDocumentPointerDown(event: PointerEvent): void {
+  if (!openActionsEntryId.value) {
+    return
+  }
+
+  const target = event.target
+  if (!(target instanceof Node)) {
+    return
+  }
+
+  const openMenuRoot = rootRef.value?.querySelector<HTMLElement>('.library-entry__more-wrap[data-actions-open="true"]')
+  if (openMenuRoot?.contains(target)) {
+    return
+  }
+
+  closeActionsMenu()
 }
 
 function isActionsMenuOpen(entry: LibraryEntry): boolean {
@@ -223,6 +242,14 @@ function pinLabel(entry: LibraryEntry): string {
   return entry.pinned ? '取消置顶' : '置顶'
 }
 
+onMounted(() => {
+  document.addEventListener('pointerdown', onDocumentPointerDown)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('pointerdown', onDocumentPointerDown)
+})
+
 watch(pendingDelete, async (entry) => {
   if (entry) {
     await nextTick()
@@ -328,7 +355,7 @@ watch(pendingClear, async (value) => {
                 <button class="library-entry__danger library-entry__desktop-action" type="button" @click="requestDelete(entry)">
                   删除
                 </button>
-                <div class="library-entry__more-wrap">
+                <div class="library-entry__more-wrap" :data-actions-open="isActionsMenuOpen(entry) ? 'true' : undefined">
                   <button
                     class="library-entry__more"
                     type="button"
@@ -411,7 +438,7 @@ watch(pendingClear, async (value) => {
                 <button class="library-entry__danger library-entry__desktop-action" type="button" @click="requestDelete(entry)">
                   删除
                 </button>
-                <div class="library-entry__more-wrap">
+                <div class="library-entry__more-wrap" :data-actions-open="isActionsMenuOpen(entry) ? 'true' : undefined">
                   <button
                     class="library-entry__more"
                     type="button"
