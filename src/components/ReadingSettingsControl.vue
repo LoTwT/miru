@@ -390,8 +390,8 @@ function syncOutlineViewport(): void {
 .reading-settings__close {
   display: grid;
   place-items: center;
-  inline-size: 36px;
-  block-size: 36px;
+  inline-size: 44px;
+  block-size: 44px;
   border: 1px solid var(--reading-rule);
   border-radius: 50%;
   background: var(--reading-bg);
