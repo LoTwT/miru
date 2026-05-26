@@ -246,7 +246,17 @@ function onCommandSurfaceKeydown(event: KeyboardEvent): void {
 
 function getCommandSurfaceFocusableElements(): HTMLElement[] {
   return Array.from(commandSurfaceRef.value?.querySelectorAll<HTMLElement>('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])') ?? [])
-    .filter(element => !element.hasAttribute('disabled') && !element.getAttribute('aria-hidden'))
+    .filter(isVisibleFocusableElement)
+}
+
+function isVisibleFocusableElement(element: HTMLElement): boolean {
+  const style = window.getComputedStyle(element)
+
+  return !element.hasAttribute('disabled')
+    && element.getAttribute('aria-hidden') !== 'true'
+    && style.display !== 'none'
+    && style.visibility !== 'hidden'
+    && element.getClientRects().length > 0
 }
 
 function navigateToOutlineItem(id: string): void {

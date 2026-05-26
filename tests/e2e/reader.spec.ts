@@ -299,6 +299,13 @@ test('exposes document input through the top-bar command surface', async ({ page
   await page.keyboard.press('ArrowDown')
   await expect(page.getByLabel('URL 导入')).toBeFocused()
 
+  await page.getByRole('button', { name: /清空当前/ }).focus()
+  await page.keyboard.press('Tab')
+  await expect(page.getByRole('button', { name: '关闭文档操作' })).toBeFocused()
+
+  await page.keyboard.press('Shift+Tab')
+  await expect(page.getByRole('button', { name: /清空当前/ })).toBeFocused()
+
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('floating-affordance-menu')).not.toBeVisible()
   await expect(button).toBeFocused()
