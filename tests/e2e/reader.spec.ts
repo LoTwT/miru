@@ -517,6 +517,70 @@ test('collapses H1 sections while preserving heading permalinks', async ({ page 
   await expect(page).toHaveURL(/#first-section$/)
 })
 
+test('separates heading, body link, permalink, and collapse control styles', async ({ page }) => {
+  await page.goto('/')
+
+  await pasteText(page, [
+    '# First section',
+    '',
+    'First body with an [external reference](https://example.com/resource).',
+    '',
+    '## Nested topic',
+    '',
+    'Nested body.',
+    '',
+    '### Small detail',
+    '',
+    'Detail body.',
+    '',
+    '# Second section',
+    '',
+    'Second body.',
+  ].join('\n'))
+
+  const h1 = page.locator('h1#first-section')
+  const h2 = page.locator('h2#nested-topic')
+  const h3 = page.locator('h3#small-detail')
+  const h2Anchor = page.locator('h2#nested-topic > a.header-anchor')
+  const bodyLink = page.locator('.reader-surface__content p a[href="https://example.com/resource"]')
+  const firstToggle = page.locator('[data-reader-heading-toggle]').first()
+
+  for (const heading of [h1, h2, h3]) {
+    await expect.poll(() => heading.evaluate(element => getComputedStyle(element).textDecorationLine)).toBe('none')
+  }
+
+  await expect.poll(() => h2Anchor.evaluate(element => getComputedStyle(element).textDecorationLine)).toBe('none')
+  await expect.poll(() => h2Anchor.evaluate(element => getComputedStyle(element).color)).toBe(
+    await h2.evaluate(element => getComputedStyle(element).color),
+  )
+  await expect.poll(() => bodyLink.evaluate(element => getComputedStyle(element).textDecorationLine)).toContain('underline')
+
+  await expect.poll(() => h2.evaluate(element => getComputedStyle(element, '::before').width)).toBe('14px')
+  await expect.poll(() => h2Anchor.evaluate(element => getComputedStyle(element, '::after').opacity)).toBe('0')
+  await expect.poll(() => h2Anchor.evaluate(element => getComputedStyle(element, '::after').content)).toContain('¶')
+  await h2.hover()
+  if (await page.evaluate(() => window.matchMedia('(hover: hover)').matches)) {
+    await expect.poll(() => h2Anchor.evaluate(element => Number(getComputedStyle(element, '::after').opacity))).toBeGreaterThan(0)
+  }
+  else {
+    await expect.poll(() => h2Anchor.evaluate(element => getComputedStyle(element, '::after').opacity)).toBe('0')
+  }
+
+  await h2Anchor.focus()
+  await expect.poll(() => h2Anchor.evaluate(element => getComputedStyle(element).outlineStyle)).not.toBe('none')
+
+  await expect(firstToggle).toHaveAttribute('aria-expanded', 'true')
+  await expect.poll(() => firstToggle.evaluate(element => element.tagName)).toBe('BUTTON')
+  await expect.poll(() => firstToggle.evaluate(element => getComputedStyle(element).textDecorationLine)).toBe('none')
+  await expect.poll(() => firstToggle.evaluate(element => element.getBoundingClientRect().width)).toBeGreaterThanOrEqual(44)
+  await expect.poll(() => firstToggle.evaluate(element => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44)
+  await firstToggle.focus()
+  await expect.poll(() => firstToggle.evaluate(element => getComputedStyle(element).outlineStyle)).not.toBe('none')
+
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  await expect.poll(() => firstToggle.evaluate(element => getComputedStyle(element).transitionDuration)).toBe('0s')
+})
+
 test('does not persist collapsed H1 state after reload', async ({ page }) => {
   await page.goto('/')
 
