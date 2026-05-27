@@ -6,6 +6,11 @@ test('renders the sample document and supports paste input', async ({ page }) =>
   await page.goto('/')
 
   await expect(page.getByRole('heading', { name: 'miru' })).toBeVisible()
+  await expect(page.locator('.reader-surface__content h1')).toHaveCount(1)
+  await expect(page.getByRole('heading', { name: '输入方式', level: 2 })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '排版与阅读', level: 2 })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '行内元素', level: 3 })).toBeVisible()
+  await expect(page.getByText('顶部 ⋯ 菜单').first()).toBeVisible()
   await expect(page.getByTestId('floating-affordance-button')).toBeVisible()
 
   await page.evaluate(() => {
