@@ -214,7 +214,7 @@ test('restores local library markdown scroll position when reopening a document'
   await page.waitForTimeout(600)
 
   await page.getByTestId('floating-affordance-button').click()
-  await page.getByTestId('floating-affordance-menu').getByRole('button', { name: /文库/ }).click()
+  await page.getByTestId('floating-affordance-menu').getByRole('button', { name: /^文库/ }).click()
   await openBookshelfEntry(page.getByTestId('library-entry').filter({ hasText: 'Long local doc' }), 'Long local doc')
 
   await expect(page.getByRole('heading', { name: 'Long local doc' })).toBeVisible()
@@ -298,10 +298,20 @@ test('exposes document input through the top-bar command surface', async ({ page
     const rect = element.getBoundingClientRect()
     return { width: rect.width }
   })
-  const markRect = await page.getByRole('button', { name: '回到当前阅读' }).evaluate((element) => {
+  const headerMark = page.locator('.app-shell__mark')
+  await expect(headerMark).toContainText('miru')
+  await expect(headerMark).not.toHaveAttribute('role')
+  await expect(page.getByRole('button', { name: '回到当前阅读' })).toHaveCount(0)
+  const markRect = await headerMark.evaluate((element) => {
     const rect = element.getBoundingClientRect()
-    return { width: rect.width }
+    return {
+      cursor: getComputedStyle(element).cursor,
+      tagName: element.tagName,
+      width: rect.width,
+    }
   })
+  expect(markRect.tagName).toBe('DIV')
+  expect(markRect.cursor).toBe('auto')
 
   if (isWideViewport(page)) {
     expect(markRect.width).toBeLessThan(topBarRect.width * 0.45)
@@ -311,9 +321,9 @@ test('exposes document input through the top-bar command surface', async ({ page
   await expect(page.getByTestId('floating-affordance-menu')).toBeVisible()
   await expect(page.getByRole('button', { name: /粘贴/ })).toBeVisible()
   await expect(page.getByRole('button', { name: /打开文件/ })).toBeVisible()
-  await expect(page.getByTestId('floating-affordance-menu').getByRole('button', { name: /文库/ })).toBeVisible()
+  await expect(page.getByTestId('floating-affordance-menu').getByRole('button', { name: /^文库/ })).toBeVisible()
   await expect(page.getByLabel('URL 导入')).toBeVisible()
-  await expect(page.getByRole('button', { name: /清空/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /清空当前.*回到示例文档.*不影响文库/ })).toBeVisible()
   await expect(page.getByRole('button', { name: /打印/ })).toBeVisible()
   await expect(page.locator('input[type="file"]')).not.toHaveAttribute('accept')
   await expect(page.getByRole('button', { name: /粘贴/ })).toBeFocused()

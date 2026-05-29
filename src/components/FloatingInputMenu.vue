@@ -220,7 +220,7 @@ onMounted(() => {
       @click="clearDocument"
     >
       <span>清空当前</span>
-      <small>回到示例文档</small>
+      <small>回到示例文档 · 不影响文库</small>
     </button>
 
     <p v-if="props.isFetchingUrl" class="floating-input__status" role="status">
