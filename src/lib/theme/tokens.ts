@@ -11,10 +11,17 @@ export interface PersistedReadingSettings {
   presetId?: string
   tokenOverrides?: Record<ReadingTokenName, string>
   fontBody?: string
+  customTheme?: {
+    bg: string
+    fg: string
+    accent: string
+  }
   remoteImageMode?: 'auto' | 'prompt' | 'block'
   contrast?: 'soft' | 'standard' | 'strong'
   outlinePosition?: 'left' | 'right'
 }
+
+type PersistedCustomTheme = NonNullable<PersistedReadingSettings['customTheme']>
 
 const storageKey = 'miru:reading-settings:v1'
 
@@ -110,6 +117,7 @@ export function readPersistedReadingSettings(storage: Storage = localStorage): P
       presetId: parsed.presetId,
       tokenOverrides: sanitizeTokenOverrides(parsed.tokenOverrides),
       fontBody: typeof parsed.fontBody === 'string' ? parsed.fontBody : undefined,
+      customTheme: sanitizeCustomTheme(parsed.customTheme),
       remoteImageMode: isRemoteImageMode(parsed.remoteImageMode) ? parsed.remoteImageMode : undefined,
       contrast: isContrastMode(parsed.contrast) ? parsed.contrast : undefined,
       outlinePosition: isOutlinePosition(parsed.outlinePosition) ? parsed.outlinePosition : undefined,
@@ -157,6 +165,28 @@ function sanitizeTokenOverrides(value: unknown): Record<ReadingTokenName, string
   }
 
   return result
+}
+
+function sanitizeCustomTheme(value: unknown): PersistedReadingSettings['customTheme'] | undefined {
+  if (!value || typeof value !== 'object') {
+    return undefined
+  }
+
+  const customTheme = value as Partial<PersistedCustomTheme>
+
+  if (isHexColor(customTheme.bg) && isHexColor(customTheme.fg) && isHexColor(customTheme.accent)) {
+    return {
+      bg: customTheme.bg.toLowerCase(),
+      fg: customTheme.fg.toLowerCase(),
+      accent: customTheme.accent.toLowerCase(),
+    }
+  }
+
+  return undefined
+}
+
+function isHexColor(value: unknown): value is string {
+  return typeof value === 'string' && /^#[\da-f]{6}$/i.test(value)
 }
 
 function isRemoteImageMode(value: unknown): value is PersistedReadingSettings['remoteImageMode'] {

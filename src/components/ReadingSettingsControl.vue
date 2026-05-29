@@ -2,6 +2,10 @@
 import { computed, nextTick, onMounted, onUnmounted, shallowRef, useTemplateRef, watch } from 'vue'
 
 import {
+  contrastRatio,
+  getCustomThemeChecks,
+  hasReadableCustomTheme,
+  normalizeHexColor,
   readingContrastOptions,
   readingFontFamilyOptions,
   readingFontSizeOptions,
@@ -15,6 +19,7 @@ import {
 } from '@/features/settings/readingSettingsOptions'
 import type {
   ReadingContrastId,
+  ReadingCustomThemeState,
   ReadingFontFamilyId,
   ReadingFontSizeId,
   ReadingLetterSpacingId,
@@ -43,6 +48,8 @@ const emit = defineEmits<{
   updatePageMargin: [value: ReadingPageMarginId]
   updateFontFamily: [value: ReadingFontFamilyId]
   updateTheme: [value: ReadingThemeChoice]
+  updateCustomTheme: [value: Partial<ReadingCustomThemeState>]
+  autoFixCustomTheme: []
   updateContrast: [value: ReadingContrastId]
   updateOutlinePosition: [value: ReadingOutlinePositionId]
   reset: []
@@ -50,16 +57,47 @@ const emit = defineEmits<{
 }>()
 
 const isDesktopOutlineViewport = shallowRef(false)
-const activePanel = shallowRef<'main' | 'presets'>('main')
+const activePanel = shallowRef<'main' | 'custom-theme' | 'presets'>('main')
 const rootRef = useTemplateRef<HTMLElement>('root')
 const showOutlinePositionControl = computed(() => props.showOutlinePositionControl && isDesktopOutlineViewport.value)
-const settingsPanelTitle = computed(() => activePanel.value === 'main' ? '阅读设置' : '管理预设')
-const settingsPanelCaption = computed(() =>
-  activePanel.value === 'main'
-    ? '即时预览当前正文'
-    : '外观快照',
-)
+const settingsPanelTitle = computed(() => {
+  if (activePanel.value === 'custom-theme') {
+    return '自定义主题'
+  }
+
+  return activePanel.value === 'main' ? '阅读设置' : '管理预设'
+})
+const settingsPanelCaption = computed(() => {
+  if (activePanel.value === 'custom-theme') {
+    return '背景 / 正文 / 强调'
+  }
+
+  return activePanel.value === 'main' ? '即时预览当前正文' : '外观快照'
+})
 const currentPresetName = computed(() => props.isDefault ? '默认' : '自定义（未保存）')
+const customThemeChecks = computed(() => getCustomThemeChecks(props.settings.customTheme))
+const isCustomThemeReadable = computed(() => hasReadableCustomTheme(props.settings.customTheme))
+const hasCustomThemeBodyContrastIssue = computed(() => customThemeChecks.value.some(check => check.id === 'fg' && !check.passes))
+const hasCustomThemeAccentContrastIssue = computed(() => customThemeChecks.value.some(check => check.id === 'accent' && !check.passes))
+const customThemeWarningSeverity = computed(() => hasCustomThemeBodyContrastIssue.value ? 'critical' : 'notice')
+const customThemeWarningText = computed(() => {
+  if (hasCustomThemeBodyContrastIssue.value && hasCustomThemeAccentContrastIssue.value) {
+    return '正文与强调色对比不足，正文几乎无法阅读。'
+  }
+
+  return hasCustomThemeBodyContrastIssue.value
+    ? '正文对比不足，当前配色几乎无法阅读。'
+    : '强调色对比不足，链接和重点可能不清晰。'
+})
+const customThemeWarningStyle = computed(() => {
+  const bg = normalizeHexColor(props.settings.customTheme.bg) ?? '#ffffff'
+  const darkWarningInk = '#17130f'
+  const lightWarningInk = '#fff7f0'
+
+  return {
+    color: contrastRatio(darkWarningInk, bg) >= 4.5 ? darkWarningInk : lightWarningInk,
+  }
+})
 const fontSizeSliderValue = computed(() => {
   const index = readingFontSizeOptions.findIndex(option => option.id === props.settings.fontSize)
   return index === -1 ? defaultFontSizeIndex : index
@@ -169,6 +207,11 @@ function selectFontFamily(value: ReadingFontFamilyId): void {
 
 function selectTheme(value: ReadingThemeChoice): void {
   emit('updateTheme', value)
+}
+
+function updateCustomThemeColor(key: keyof ReadingCustomThemeState, event: Event): void {
+  const input = event.currentTarget as HTMLInputElement
+  emit('updateCustomTheme', { [key]: input.value })
 }
 
 function selectContrast(value: ReadingContrastId): void {
@@ -510,6 +553,23 @@ function syncOutlineViewport(): void {
             </div>
           </fieldset>
 
+          <button
+            v-if="props.settings.theme === 'custom'"
+            class="reading-settings__drilldown reading-settings__drilldown--custom-theme"
+            type="button"
+            data-settings-item
+            aria-controls="reading-settings-custom-theme-panel"
+            @click="openPanel('custom-theme')"
+          >
+            <span>
+              <strong>编辑自定义主题</strong>
+              <span :class="{ 'reading-settings__status--warning': !isCustomThemeReadable }">
+                {{ isCustomThemeReadable ? 'AA 可读' : '需要调整对比' }}
+              </span>
+            </span>
+            <span aria-hidden="true">→</span>
+          </button>
+
           <fieldset class="reading-settings__field">
             <legend class="reading-settings__legend">对比微调</legend>
             <div
@@ -553,6 +613,100 @@ function syncOutlineViewport(): void {
           >
             <span>管理预设</span>
             <span aria-hidden="true">→</span>
+          </button>
+        </section>
+      </div>
+
+      <div
+        v-else-if="activePanel === 'custom-theme'"
+        id="reading-settings-custom-theme-panel"
+        class="reading-settings__content"
+        data-testid="reading-settings-custom-theme-panel"
+      >
+        <section class="reading-settings__group reading-settings__group--subpanel" aria-labelledby="reading-settings-custom-theme-title">
+          <h3 id="reading-settings-custom-theme-title" class="reading-settings__group-title">
+            核心色
+          </h3>
+
+          <div class="reading-settings__color-list">
+            <label class="reading-settings__color-row">
+              <span>
+                <strong>背景</strong>
+                <span>{{ props.settings.customTheme.bg }}</span>
+              </span>
+              <input
+                class="reading-settings__color-input"
+                type="color"
+                :value="props.settings.customTheme.bg"
+                aria-label="自定义主题 背景"
+                data-settings-item
+                @input="updateCustomThemeColor('bg', $event)"
+              >
+            </label>
+            <label class="reading-settings__color-row">
+              <span>
+                <strong>正文</strong>
+                <span>{{ props.settings.customTheme.fg }}</span>
+              </span>
+              <input
+                class="reading-settings__color-input"
+                type="color"
+                :value="props.settings.customTheme.fg"
+                aria-label="自定义主题 正文"
+                data-settings-item
+                @input="updateCustomThemeColor('fg', $event)"
+              >
+            </label>
+            <label class="reading-settings__color-row">
+              <span>
+                <strong>强调</strong>
+                <span>{{ props.settings.customTheme.accent }}</span>
+              </span>
+              <input
+                class="reading-settings__color-input"
+                type="color"
+                :value="props.settings.customTheme.accent"
+                aria-label="自定义主题 强调"
+                data-settings-item
+                @input="updateCustomThemeColor('accent', $event)"
+              >
+            </label>
+          </div>
+
+          <div class="reading-settings__contrast-list" aria-label="自定义主题 AA 校验">
+            <div
+              v-for="check in customThemeChecks"
+              :key="check.id"
+              class="reading-settings__contrast-row"
+              :data-pass="check.passes"
+            >
+              <span>{{ check.label }}</span>
+              <strong>{{ check.ratio.toFixed(2) }}:1</strong>
+              <span>{{ check.passes ? '✓' : '✗' }}</span>
+            </div>
+          </div>
+
+          <p
+            v-if="!isCustomThemeReadable"
+            class="reading-settings__warning"
+            :data-severity="customThemeWarningSeverity"
+            role="status"
+            :style="customThemeWarningStyle"
+          >
+            {{ customThemeWarningText }}
+          </p>
+
+          <button
+            class="reading-settings__preset-item"
+            type="button"
+            data-settings-item
+            @click="emit('autoFixCustomTheme')"
+          >
+            <span>
+              <strong>自动修正到 AA</strong>
+              <span>只调整正文和强调色</span>
+            </span>
+            <span aria-hidden="true">应用</span>
           </button>
         </section>
       </div>
@@ -822,7 +976,7 @@ function syncOutlineViewport(): void {
 }
 
 .reading-settings__segments--theme {
-  --segment-count: 4;
+  --segment-count: 5;
 }
 
 .reading-settings__segments--font-family {
@@ -879,6 +1033,20 @@ function syncOutlineViewport(): void {
   text-align: start;
 }
 
+.reading-settings__drilldown--custom-theme {
+  margin-block-start: 0.55rem;
+}
+
+.reading-settings__drilldown > span:first-child {
+  display: grid;
+  gap: 0.18rem;
+}
+
+.reading-settings__drilldown > span:first-child > span {
+  color: var(--reading-fg-muted);
+  font-size: 0.78rem;
+}
+
 .reading-settings__preset-item > span:first-child {
   display: grid;
   gap: 0.18rem;
@@ -891,6 +1059,88 @@ function syncOutlineViewport(): void {
 
 .reading-settings__subpanel-note {
   margin: 0.65rem 0 0;
+}
+
+.reading-settings__status--warning {
+  color: var(--reading-accent) !important;
+  font-weight: 700;
+}
+
+.reading-settings__color-list,
+.reading-settings__contrast-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.reading-settings__color-row,
+.reading-settings__contrast-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: center;
+  min-block-size: 44px;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--reading-rule);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--reading-bg) 96%, var(--reading-fg));
+}
+
+.reading-settings__color-row > span {
+  display: grid;
+  gap: 0.16rem;
+}
+
+.reading-settings__color-row > span > span {
+  color: var(--reading-fg-muted);
+  font-family: var(--reading-font-code);
+  font-size: 0.76rem;
+}
+
+.reading-settings__color-input {
+  inline-size: 44px;
+  block-size: 44px;
+  padding: 2px;
+  border: 1px solid var(--reading-rule);
+  border-radius: 12px;
+  background: var(--reading-bg);
+  cursor: pointer;
+}
+
+.reading-settings__contrast-list {
+  margin-block-start: 0.75rem;
+}
+
+.reading-settings__contrast-row {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  min-block-size: 36px;
+  color: var(--reading-fg-muted);
+  font-size: 0.82rem;
+}
+
+.reading-settings__contrast-row[data-pass="true"] {
+  color: var(--reading-fg);
+}
+
+.reading-settings__contrast-row[data-pass="false"] {
+  border-color: var(--reading-accent);
+  color: var(--reading-accent);
+  font-weight: 700;
+}
+
+.reading-settings__warning {
+  margin: 0.75rem 0;
+  border: 1px solid currentColor;
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  padding: 0.65rem 0.75rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.reading-settings__warning[data-severity="critical"] {
+  background: color-mix(in srgb, currentColor 13%, transparent);
+  box-shadow: inset 0 0 0 1px currentColor;
+  font-size: 0.86rem;
 }
 
 .reading-settings__segment[aria-checked="true"] {

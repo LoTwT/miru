@@ -12,6 +12,9 @@ import type { PersistedReadingSettings, ReadingTokenName } from '@/lib/theme/tok
 import {
   customizableReadingTokens,
   defaultReadingSettings,
+  deriveCustomThemeTokenOverrides,
+  fixCustomThemeToAA,
+  normalizeHexColor,
   readingFontFamilyOptions,
   readingFontSizeOptions,
   readingLetterSpacingOptions,
@@ -23,7 +26,9 @@ import {
   resolveThemeTokenOverrides,
 } from './readingSettingsOptions'
 import type {
+  PresetReadingThemeChoice,
   ReadingContrastId,
+  ReadingCustomThemeState,
   ReadingFontFamilyId,
   ReadingFontSizeId,
   ReadingLetterSpacingId,
@@ -46,6 +51,7 @@ export interface ReadingCustomizationState {
   theme: ReadingThemeChoice
   contrast: ReadingContrastId
   outlinePosition: ReadingOutlinePositionId
+  customTheme: ReadingCustomThemeState
 }
 
 export function useReadingSettings(options: {
@@ -68,7 +74,8 @@ export function useReadingSettings(options: {
     && state.fontFamily === defaultReadingSettings.fontFamily
     && state.theme === defaultReadingSettings.theme
     && state.contrast === defaultReadingSettings.contrast
-    && state.outlinePosition === defaultReadingSettings.outlinePosition,
+    && state.outlinePosition === defaultReadingSettings.outlinePosition
+    && isSameCustomTheme(state.customTheme, defaultReadingSettings.customTheme),
   )
 
   function applyCurrent(): void {
@@ -123,6 +130,19 @@ export function useReadingSettings(options: {
     commit()
   }
 
+  function updateCustomTheme(value: Partial<ReadingCustomThemeState>): void {
+    state.customTheme = {
+      ...state.customTheme,
+      ...normalizeCustomTheme(value),
+    }
+    commit()
+  }
+
+  function autoFixCustomTheme(): void {
+    state.customTheme = fixCustomThemeToAA(state.customTheme)
+    commit()
+  }
+
   function updateContrast(value: ReadingContrastId): void {
     state.contrast = value
     commit()
@@ -144,6 +164,7 @@ export function useReadingSettings(options: {
     state.theme = defaultReadingSettings.theme
     state.contrast = defaultReadingSettings.contrast
     state.outlinePosition = defaultReadingSettings.outlinePosition
+    state.customTheme = { ...defaultReadingSettings.customTheme }
 
     clearInlineReadingOverrides(root)
     syncThemeAttribute(root, state.theme)
@@ -167,8 +188,16 @@ export function useReadingSettings(options: {
     const hasTokenOverrides = Object.keys(tokenOverrides).length > 0
     const hasOutlinePositionOverride = state.outlinePosition !== defaultReadingSettings.outlinePosition
     const hasContrastOverride = state.contrast !== defaultReadingSettings.contrast
+    const hasCustomThemeOverride = !isSameCustomTheme(state.customTheme, defaultReadingSettings.customTheme)
 
-    if (!hasTokenOverrides && state.theme === 'system' && !hasOutlinePositionOverride && !hasContrastOverride && !remoteImageMode) {
+    if (
+      !hasTokenOverrides
+      && state.theme === 'system'
+      && !hasOutlinePositionOverride
+      && !hasContrastOverride
+      && !hasCustomThemeOverride
+      && !remoteImageMode
+    ) {
       clearPersistedReadingSettings(storage)
       return
     }
@@ -177,6 +206,9 @@ export function useReadingSettings(options: {
       version: 1,
       presetId: state.theme,
       tokenOverrides: hasTokenOverrides ? tokenOverrides : undefined,
+      customTheme: hasCustomThemeOverride || state.theme === 'custom'
+        ? { ...state.customTheme }
+        : undefined,
       remoteImageMode,
       contrast: hasContrastOverride ? state.contrast : undefined,
       outlinePosition: hasOutlinePositionOverride ? state.outlinePosition : undefined,
@@ -198,6 +230,8 @@ export function useReadingSettings(options: {
     updatePageMargin,
     updateFontFamily,
     updateTheme,
+    updateCustomTheme,
+    autoFixCustomTheme,
     updateContrast,
     updateOutlinePosition,
   }
@@ -225,6 +259,7 @@ function stateFromPersistedSettings(settings: PersistedReadingSettings | null): 
     contrast: isReadingContrast(settings?.contrast) ? settings.contrast : defaultReadingSettings.contrast,
     outlinePosition: matchSimpleValue(readingOutlinePositionOptions, settings?.outlinePosition)
       ?? defaultReadingSettings.outlinePosition,
+    customTheme: stateCustomThemeFromPersisted(settings),
   }
 }
 
@@ -283,8 +318,11 @@ function buildTokenOverrides(state: ReadingCustomizationState): Record<ReadingTo
     defaultReadingSettings.fontFamily,
   )
 
-  if (state.theme !== 'system') {
-    Object.assign(tokenOverrides, resolveThemeTokenOverrides(state.theme, state.contrast))
+  if (state.theme === 'custom') {
+    Object.assign(tokenOverrides, deriveCustomThemeTokenOverrides(state.customTheme))
+  }
+  else if (state.theme !== 'system') {
+    Object.assign(tokenOverrides, resolveThemeTokenOverrides(state.theme as PresetReadingThemeChoice, state.contrast))
   }
 
   return tokenOverrides
@@ -314,8 +352,42 @@ function clearInlineReadingOverrides(root: HTMLElement): void {
   }
 }
 
+function stateCustomThemeFromPersisted(settings: PersistedReadingSettings | null): ReadingCustomThemeState {
+  if (settings?.customTheme) {
+    return { ...settings.customTheme }
+  }
+
+  const tokenOverrides = settings?.tokenOverrides
+  const bg = normalizeHexColor(tokenOverrides?.['--reading-bg'])
+  const fg = normalizeHexColor(tokenOverrides?.['--reading-fg'])
+  const accent = normalizeHexColor(tokenOverrides?.['--reading-accent'])
+
+  if (settings?.presetId === 'custom' && bg && fg && accent) {
+    return { bg, fg, accent }
+  }
+
+  return { ...defaultReadingSettings.customTheme }
+}
+
+function normalizeCustomTheme(value: Partial<ReadingCustomThemeState>): Partial<ReadingCustomThemeState> {
+  return Object.fromEntries(
+    Object.entries(value)
+      .map(([key, color]) => [key, normalizeHexColor(color)])
+      .filter((entry): entry is [keyof ReadingCustomThemeState, string] => typeof entry[1] === 'string'),
+  ) as Partial<ReadingCustomThemeState>
+}
+
+function isSameCustomTheme(
+  customTheme: ReadingCustomThemeState,
+  otherCustomTheme: ReadingCustomThemeState,
+): boolean {
+  return customTheme.bg === otherCustomTheme.bg
+    && customTheme.fg === otherCustomTheme.fg
+    && customTheme.accent === otherCustomTheme.accent
+}
+
 function isReadingThemeChoice(value: unknown): value is ReadingThemeChoice {
-  return value === 'system' || value === 'light' || value === 'dark' || value === 'sepia'
+  return value === 'system' || value === 'light' || value === 'dark' || value === 'sepia' || value === 'custom'
 }
 
 function isReadingContrast(value: unknown): value is ReadingContrastId {
