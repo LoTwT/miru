@@ -289,6 +289,18 @@ test('exposes document input through the top-bar command surface', async ({ page
   await page.goto('/')
 
   const button = page.getByTestId('floating-affordance-button')
+  const topBarRect = await page.getByTestId('app-top-bar').evaluate((element) => {
+    const rect = element.getBoundingClientRect()
+    return { width: rect.width }
+  })
+  const markRect = await page.getByRole('button', { name: '回到当前阅读' }).evaluate((element) => {
+    const rect = element.getBoundingClientRect()
+    return { width: rect.width }
+  })
+
+  if (isWideViewport(page)) {
+    expect(markRect.width).toBeLessThan(topBarRect.width * 0.45)
+  }
 
   await button.click()
   await expect(page.getByTestId('floating-affordance-menu')).toBeVisible()
@@ -966,6 +978,48 @@ test('reading settings use a bottom sheet on narrow screens', async ({ page }) =
   await page.keyboard.press('Escape')
   await expect(panel).not.toBeVisible()
   await expect(page.getByTestId('reading-settings-button')).toBeFocused()
+})
+
+test('locks page scroll while mobile command sheets are open', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/')
+  await pasteText(page, [
+    '# Scroll lock doc',
+    '',
+    Array.from({ length: 70 }, (_, index) => `Paragraph ${index + 1}.`).join('\n\n'),
+  ].join('\n'))
+  await expect(page.getByRole('heading', { name: 'Scroll lock doc' })).toBeVisible()
+
+  await page.evaluate(() => window.scrollTo(0, 520))
+  const scrollBeforeSettings = await page.evaluate(() => Math.round(window.scrollY))
+  expect(scrollBeforeSettings).toBeGreaterThan(300)
+
+  await page.getByTestId('reading-settings-button').click()
+  await expect(page.getByTestId('reading-settings-panel')).toBeVisible()
+  await expect.poll(() => page.evaluate(() => getComputedStyle(document.body).position)).toBe('fixed')
+  await expect.poll(() => page.evaluate(() => document.body.style.top)).toBe(`-${scrollBeforeSettings}px`)
+
+  await page.mouse.wheel(0, 800)
+  await expect.poll(() => page.evaluate(() => document.body.style.top)).toBe(`-${scrollBeforeSettings}px`)
+  await expect.poll(() => page.evaluate(() => Math.round(window.scrollY))).toBe(0)
+
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('reading-settings-panel')).not.toBeVisible()
+  await expect.poll(() => page.evaluate(() => getComputedStyle(document.body).position)).not.toBe('fixed')
+  await expect.poll(() => page.evaluate(() => Math.round(window.scrollY))).toBe(scrollBeforeSettings)
+
+  await page.getByTestId('floating-affordance-button').click()
+  await expect(page.getByTestId('floating-affordance-menu')).toBeVisible()
+  await expect.poll(() => page.evaluate(() => getComputedStyle(document.body).position)).toBe('fixed')
+
+  await page.mouse.wheel(0, 800)
+  await expect.poll(() => page.evaluate(() => document.body.style.top)).toBe(`-${scrollBeforeSettings}px`)
+  await expect.poll(() => page.evaluate(() => Math.round(window.scrollY))).toBe(0)
+
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('floating-affordance-menu')).not.toBeVisible()
+  await expect.poll(() => page.evaluate(() => getComputedStyle(document.body).position)).not.toBe('fixed')
+  await expect.poll(() => page.evaluate(() => Math.round(window.scrollY))).toBe(scrollBeforeSettings)
 })
 
 test('follows OS color scheme changes for reading and code surfaces', async ({ page }) => {
