@@ -936,6 +936,8 @@ function focusLibraryView(): void {
         @update-page-margin="readingSettings.updatePageMargin"
         @update-font-family="readingSettings.updateFontFamily"
         @update-theme="readingSettings.updateTheme"
+        @update-custom-theme="readingSettings.updateCustomTheme"
+        @auto-fix-custom-theme="readingSettings.autoFixCustomTheme"
         @update-contrast="readingSettings.updateContrast"
         @update-outline-position="readingSettings.updateOutlinePosition"
         @reset="readingSettings.reset"

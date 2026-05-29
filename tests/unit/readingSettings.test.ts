@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import {
   contrastTokenOverridesByThemeAndChoice,
   darkThemeTokenOverrides,
+  deriveCustomThemeTokenOverrides,
   lightThemeTokenOverrides,
   sepiaThemeTokenOverrides,
 } from '@/features/settings/readingSettingsOptions'
@@ -124,6 +125,47 @@ describe('reading customization settings', () => {
     expect(persisted?.presetId).toBe('system')
     expect(persisted?.contrast).toBe('soft')
     expect(persisted?.tokenOverrides).toBeUndefined()
+  })
+
+  it('persists a custom theme and can auto-fix it to AA contrast', () => {
+    const settings = useReadingSettings({ root, storage })
+
+    settings.updateTheme('custom')
+    settings.updateCustomTheme({
+      bg: '#ffffff',
+      fg: '#bbbbbb',
+      accent: '#cccccc',
+    })
+
+    expect(root.dataset.readingTheme).toBe('custom')
+    expect(root.style.getPropertyValue('--reading-bg')).toBe('#ffffff')
+    expect(root.style.getPropertyValue('--reading-fg')).toBe('#bbbbbb')
+    expect(root.style.getPropertyValue('--reading-accent')).toBe('#cccccc')
+
+    const persisted = readPersistedReadingSettings(storage)
+
+    expect(persisted?.presetId).toBe('custom')
+    expect(persisted?.customTheme).toEqual({
+      bg: '#ffffff',
+      fg: '#bbbbbb',
+      accent: '#cccccc',
+    })
+
+    settings.autoFixCustomTheme()
+
+    const fixed = readPersistedReadingSettings(storage)?.customTheme
+
+    expect(fixed).toBeDefined()
+    expect(contrastRatio(fixed?.fg ?? '', fixed?.bg ?? '')).toBeGreaterThanOrEqual(4.5)
+    expect(contrastRatio(fixed?.accent ?? '', fixed?.bg ?? '')).toBeGreaterThanOrEqual(4.5)
+    expect(root.style.getPropertyValue('--reading-fg')).toBe(fixed?.fg)
+    expect(root.style.getPropertyValue('--reading-accent')).toBe(fixed?.accent)
+
+    const fixedTokens = deriveCustomThemeTokenOverrides(fixed ?? { bg: '', fg: '', accent: '' })
+
+    expect(contrastRatio(fixedTokens['--reading-fg-muted'], fixedTokens['--reading-bg'])).toBeGreaterThanOrEqual(4.5)
+    expect(contrastRatio(fixedTokens['--reading-link'], fixedTokens['--reading-bg'])).toBeGreaterThanOrEqual(4.5)
+    expect(contrastRatio(fixedTokens['--reading-code-fg'], fixedTokens['--reading-code-bg'])).toBeGreaterThanOrEqual(4.5)
   })
 
   it('reads legacy fontBody settings as the matching font option', () => {

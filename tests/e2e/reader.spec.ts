@@ -1214,6 +1214,64 @@ test('system contrast adjustment follows the resolved OS theme and keeps AA cont
   expect(contrastRatio(strongLightColors.fgMuted, strongLightColors.bg)).toBeGreaterThanOrEqual(4.5)
 })
 
+test('custom theme editor warns and auto-fixes AA contrast', async ({ page }) => {
+  await page.goto('/')
+
+  await page.getByTestId('reading-settings-button').click()
+  await page.getByRole('radio', { name: '主题 自定义' }).click()
+  await page.getByRole('button', { name: /编辑自定义主题/ }).click()
+  await expect(page.getByTestId('reading-settings-custom-theme-panel')).toBeVisible()
+
+  await page.getByLabel('自定义主题 背景').fill('#ffffff')
+  await page.getByLabel('自定义主题 正文').fill('#bbbbbb')
+  await page.getByLabel('自定义主题 强调').fill('#cccccc')
+
+  const contrastWarning = page.locator('.reading-settings__warning')
+
+  await expect(page.getByText('正文与强调色对比不足，正文几乎无法阅读。')).toBeVisible()
+  await expect(contrastWarning).toHaveAttribute('data-severity', 'critical')
+  await expect.poll(() => readInlineReadingTokens(page)).toMatchObject({
+    bg: '#ffffff',
+    fg: '#bbbbbb',
+    accent: '#cccccc',
+    readingTheme: 'custom',
+  })
+
+  await page.getByLabel('自定义主题 正文').fill('#111111')
+  await expect(page.getByText('强调色对比不足，链接和重点可能不清晰。')).toBeVisible()
+  await expect(contrastWarning).toHaveAttribute('data-severity', 'notice')
+
+  await page.getByRole('button', { name: /自动修正到 AA/ }).click()
+
+  await expect(contrastWarning).not.toBeVisible()
+  const fixedTokens = await readInlineReadingTokens(page)
+
+  expect(contrastRatio(fixedTokens.fg, fixedTokens.bg)).toBeGreaterThanOrEqual(4.5)
+  expect(contrastRatio(fixedTokens.fgMuted, fixedTokens.bg)).toBeGreaterThanOrEqual(4.5)
+  expect(contrastRatio(fixedTokens.accent, fixedTokens.bg)).toBeGreaterThanOrEqual(4.5)
+  expect(contrastRatio(fixedTokens.codeFg, fixedTokens.codeBg)).toBeGreaterThanOrEqual(4.5)
+
+  const persisted = await page.evaluate(() => JSON.parse(localStorage.getItem('miru:reading-settings:v1') ?? '{}'))
+
+  expect(persisted.presetId).toBe('custom')
+  expect(persisted.customTheme.bg).toBe('#ffffff')
+  expect(contrastRatio(persisted.customTheme.fg, persisted.customTheme.bg)).toBeGreaterThanOrEqual(4.5)
+  expect(contrastRatio(persisted.customTheme.accent, persisted.customTheme.bg)).toBeGreaterThanOrEqual(4.5)
+
+  await page.reload()
+
+  await expect.poll(() => readInlineReadingTokens(page)).toMatchObject({
+    bg: '#ffffff',
+    readingTheme: 'custom',
+  })
+  const reloadedTokens = await readInlineReadingTokens(page)
+
+  expect(contrastRatio(reloadedTokens.fg, reloadedTokens.bg)).toBeGreaterThanOrEqual(4.5)
+  expect(contrastRatio(reloadedTokens.fgMuted, reloadedTokens.bg)).toBeGreaterThanOrEqual(4.5)
+  expect(contrastRatio(reloadedTokens.accent, reloadedTokens.bg)).toBeGreaterThanOrEqual(4.5)
+  expect(contrastRatio(reloadedTokens.codeFg, reloadedTokens.codeBg)).toBeGreaterThanOrEqual(4.5)
+})
+
 test('reading settings use a bottom sheet on narrow screens', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/')
@@ -1460,7 +1518,9 @@ async function readInlineReadingTokens(page: import('@playwright/test').Page) {
       bg: root.style.getPropertyValue('--reading-bg').trim(),
       fg: root.style.getPropertyValue('--reading-fg').trim(),
       fgMuted: root.style.getPropertyValue('--reading-fg-muted').trim(),
+      accent: root.style.getPropertyValue('--reading-accent').trim(),
       rule: root.style.getPropertyValue('--reading-rule').trim(),
+      codeFg: root.style.getPropertyValue('--reading-code-fg').trim(),
       codeBg: root.style.getPropertyValue('--reading-code-bg').trim(),
       fontBody: root.style.getPropertyValue('--reading-font-body').trim(),
       readingTheme: root.dataset.readingTheme ?? '',

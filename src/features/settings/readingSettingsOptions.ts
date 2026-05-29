@@ -8,7 +8,8 @@ export type ReadingLetterSpacingId = 'tight' | 'standard' | 'loose'
 export type ReadingParagraphGapId = 'compact' | 'standard' | 'loose'
 export type ReadingPageMarginId = 'compact' | 'standard' | 'spacious'
 export type ReadingFontFamilyId = 'serif' | 'system-serif' | 'system-sans' | 'mono'
-export type ReadingThemeChoice = 'system' | 'light' | 'dark' | 'sepia'
+export type ReadingThemeChoice = 'system' | 'light' | 'dark' | 'sepia' | 'custom'
+export type PresetReadingThemeChoice = Exclude<ReadingThemeChoice, 'system' | 'custom'>
 export type ReadingContrastId = 'soft' | 'standard' | 'strong'
 export type ReadingOutlinePositionId = 'left' | 'right'
 
@@ -18,6 +19,25 @@ export interface ReadingSettingOption<T extends string> {
   ariaLabel: string
   tokenValue: string
 }
+
+export interface ReadingCustomThemeState {
+  bg: string
+  fg: string
+  accent: string
+}
+
+export interface ReadingCustomThemeCheck {
+  id: keyof ReadingCustomThemeState
+  label: string
+  ratio: number
+  passes: boolean
+}
+
+export const defaultCustomTheme = {
+  bg: '#fbf8f1',
+  fg: '#24211d',
+  accent: '#9d5f34',
+} as const satisfies ReadingCustomThemeState
 
 export const serifFontStack = '"Newsreader", Georgia, "Songti SC", "Noto Serif CJK SC", serif'
 export const systemSerifFontStack = 'Georgia, "Songti SC", "Noto Serif CJK SC", serif'
@@ -77,6 +97,7 @@ export const readingThemeOptions = [
   { id: 'light', label: '浅', ariaLabel: '主题 浅色' },
   { id: 'dark', label: '深', ariaLabel: '主题 深色' },
   { id: 'sepia', label: 'Sepia', ariaLabel: '主题 Sepia' },
+  { id: 'custom', label: '自定义', ariaLabel: '主题 自定义' },
 ] as const
 
 export const readingContrastOptions = [
@@ -101,6 +122,7 @@ export const defaultReadingSettings = {
   theme: 'system',
   contrast: 'standard',
   outlinePosition: 'right',
+  customTheme: defaultCustomTheme,
 } as const
 
 export const customizableTypographyTokens = [
@@ -188,12 +210,12 @@ export const contrastTokenOverridesByThemeAndChoice = {
     },
   },
 } as const satisfies Record<
-  Exclude<ReadingThemeChoice, 'system'>,
+  PresetReadingThemeChoice,
   Record<ReadingContrastId, Partial<Record<(typeof customizableThemeTokens)[number], string>>>
 >
 
 export function resolveThemeTokenOverrides(
-  theme: Exclude<ReadingThemeChoice, 'system'>,
+  theme: PresetReadingThemeChoice,
   contrast: ReadingContrastId,
 ): Record<(typeof customizableThemeTokens)[number], string> {
   return {
@@ -202,9 +224,169 @@ export function resolveThemeTokenOverrides(
   }
 }
 
+export function deriveCustomThemeTokenOverrides(
+  customTheme: ReadingCustomThemeState,
+): Record<(typeof customizableThemeTokens)[number], string> {
+  const bg = normalizeHexColor(customTheme.bg) ?? defaultCustomTheme.bg
+  const fg = normalizeHexColor(customTheme.fg) ?? defaultCustomTheme.fg
+  const accent = normalizeHexColor(customTheme.accent) ?? defaultCustomTheme.accent
+  const muted = ensureContrast(mixHex(fg, bg, 0.28), bg)
+  const link = accent
+  const codeBg = tintTowardTextWithContrast(bg, fg)
+
+  return {
+    '--reading-bg': bg,
+    '--reading-fg': fg,
+    '--reading-fg-muted': muted,
+    '--reading-link': link,
+    '--reading-link-hover': ensureContrast(mixHex(link, fg, 0.18), bg),
+    '--reading-accent': accent,
+    '--reading-rule': muted,
+    '--reading-code-fg': fg,
+    '--reading-code-bg': codeBg,
+  }
+}
+
+export function getCustomThemeChecks(customTheme: ReadingCustomThemeState): ReadingCustomThemeCheck[] {
+  const tokens = deriveCustomThemeTokenOverrides(customTheme)
+  const bg = tokens['--reading-bg']
+  const fgRatio = contrastRatio(tokens['--reading-fg'], bg)
+  const accentRatio = contrastRatio(tokens['--reading-accent'], bg)
+
+  return [
+    { id: 'fg', label: '正文', ratio: fgRatio, passes: fgRatio >= 4.5 },
+    { id: 'accent', label: '强调', ratio: accentRatio, passes: accentRatio >= 4.5 },
+    { id: 'bg', label: '背景', ratio: 21, passes: true },
+  ]
+}
+
+export function hasReadableCustomTheme(customTheme: ReadingCustomThemeState): boolean {
+  return getCustomThemeChecks(customTheme).every(check => check.passes)
+}
+
+export function fixCustomThemeToAA(customTheme: ReadingCustomThemeState): ReadingCustomThemeState {
+  const bg = normalizeHexColor(customTheme.bg) ?? defaultCustomTheme.bg
+
+  return {
+    bg,
+    fg: ensureContrast(customTheme.fg, bg),
+    accent: ensureContrast(customTheme.accent, bg),
+  }
+}
+
+export function normalizeHexColor(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined
+  }
+
+  const normalized = value.trim().toLowerCase()
+
+  if (/^#[\da-f]{6}$/.test(normalized)) {
+    return normalized
+  }
+
+  if (/^#[\da-f]{3}$/.test(normalized)) {
+    const red = normalized[1] ?? '0'
+    const green = normalized[2] ?? '0'
+    const blue = normalized[3] ?? '0'
+    return `#${red}${red}${green}${green}${blue}${blue}`
+  }
+
+  return undefined
+}
+
+export function contrastRatio(colorA: string, colorB: string): number {
+  const luminanceA = relativeLuminance(colorA)
+  const luminanceB = relativeLuminance(colorB)
+  const lighter = Math.max(luminanceA, luminanceB)
+  const darker = Math.min(luminanceA, luminanceB)
+
+  return (lighter + 0.05) / (darker + 0.05)
+}
+
 function pickThemeTokens(tokens: Record<ReadingTokenName, string>): Record<(typeof customizableThemeTokens)[number], string> {
   return Object.fromEntries(customizableThemeTokens.map(token => [token, tokens[token]])) as Record<
     (typeof customizableThemeTokens)[number],
     string
   >
+}
+
+function ensureContrast(color: string, bg: string, targetRatio = 4.5): string {
+  const normalizedColor = normalizeHexColor(color) ?? defaultCustomTheme.fg
+  const normalizedBg = normalizeHexColor(bg) ?? defaultCustomTheme.bg
+
+  if (contrastRatio(normalizedColor, normalizedBg) >= targetRatio) {
+    return normalizedColor
+  }
+
+  const target = relativeLuminance(normalizedBg) > 0.5 ? '#000000' : '#ffffff'
+
+  for (let step = 1; step <= 100; step += 1) {
+    const candidate = mixHex(normalizedColor, target, step / 100)
+
+    if (contrastRatio(candidate, normalizedBg) >= targetRatio) {
+      return candidate
+    }
+  }
+
+  return target
+}
+
+function tintTowardTextWithContrast(bg: string, fg: string, preferredAmount = 0.08, targetRatio = 4.5): string {
+  const normalizedBg = normalizeHexColor(bg) ?? defaultCustomTheme.bg
+  const normalizedFg = normalizeHexColor(fg) ?? defaultCustomTheme.fg
+  const preferred = mixHex(normalizedBg, normalizedFg, preferredAmount)
+
+  if (contrastRatio(normalizedFg, preferred) >= targetRatio) {
+    return preferred
+  }
+
+  for (let step = Math.floor(preferredAmount * 100) - 1; step >= 0; step -= 1) {
+    const candidate = mixHex(normalizedBg, normalizedFg, step / 100)
+
+    if (contrastRatio(normalizedFg, candidate) >= targetRatio) {
+      return candidate
+    }
+  }
+
+  return normalizedBg
+}
+
+function mixHex(colorA: string, colorB: string, amountB: number): string {
+  const [redA, greenA, blueA] = hexToRgb(colorA)
+  const [redB, greenB, blueB] = hexToRgb(colorB)
+  const amountA = 1 - amountB
+
+  return rgbToHex([
+    Math.round((redA * amountA) + (redB * amountB)),
+    Math.round((greenA * amountA) + (greenB * amountB)),
+    Math.round((blueA * amountA) + (blueB * amountB)),
+  ])
+}
+
+function relativeLuminance(hexColor: string): number {
+  const [red, green, blue] = hexToRgb(hexColor).map((channel) => {
+    const value = channel / 255
+    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+  }) as [number, number, number]
+
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+}
+
+function hexToRgb(hexColor: string): [number, number, number] {
+  const normalized = normalizeHexColor(hexColor) ?? '#000000'
+
+  return [
+    Number.parseInt(normalized.slice(1, 3), 16),
+    Number.parseInt(normalized.slice(3, 5), 16),
+    Number.parseInt(normalized.slice(5, 7), 16),
+  ]
+}
+
+function rgbToHex([red, green, blue]: [number, number, number]): string {
+  return `#${toHexChannel(red)}${toHexChannel(green)}${toHexChannel(blue)}`
+}
+
+function toHexChannel(value: number): string {
+  return Math.max(0, Math.min(255, value)).toString(16).padStart(2, '0')
 }
