@@ -549,6 +549,39 @@ test('collapses H1 sections while preserving heading permalinks', async ({ page 
   await expect(page).toHaveURL(/#first-section$/)
 })
 
+test('keeps heading permalinks below the sticky top bar', async ({ page }) => {
+  await page.goto('/')
+
+  await pasteText(page, [
+    '# Sticky anchor offset',
+    '',
+    Array.from({ length: 14 }, (_, index) => `Before paragraph ${index + 1}.`).join('\n\n'),
+    '',
+    '## Target heading',
+    '',
+    'Target body.',
+    '',
+    Array.from({ length: 40 }, (_, index) => `After paragraph ${index + 1}.`).join('\n\n'),
+  ].join('\n'))
+
+  const targetHeading = page.locator('h2#target-heading')
+  await targetHeading.scrollIntoViewIfNeeded()
+  await targetHeading.locator('a.header-anchor').click()
+  await expect(page).toHaveURL(/#target-heading$/)
+
+  const positions = await page.evaluate(() => {
+    const header = document.querySelector<HTMLElement>('[data-testid="app-top-bar"]')
+    const heading = document.querySelector<HTMLElement>('h2#target-heading')
+
+    return {
+      headerBottom: header?.getBoundingClientRect().bottom ?? 0,
+      headingTop: heading?.getBoundingClientRect().top ?? 0,
+    }
+  })
+
+  expect(positions.headingTop).toBeGreaterThanOrEqual(positions.headerBottom + 8)
+})
+
 test('separates heading, body link, permalink, and collapse control styles', async ({ page }) => {
   await page.goto('/')
 
@@ -926,8 +959,9 @@ test('customizes reading settings, persists them, and resets to defaults', async
     paragraphGap: '1.55em',
     pageMargin: 'clamp(2rem, 7vw, 6rem)',
     bg: '#efe1bd',
-    fg: '#332817',
-    fgMuted: '#55462e',
+    fg: '#2a2012',
+    fgMuted: '#3e3220',
+    rule: '#ab8b48',
     codeBg: '#e2cb99',
     fontBody: '-apple-system, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif',
     readingTheme: 'sepia',
@@ -950,8 +984,9 @@ test('customizes reading settings, persists them, and resets to defaults', async
     paragraphGap: '1.55em',
     pageMargin: 'clamp(2rem, 7vw, 6rem)',
     bg: '#efe1bd',
-    fg: '#332817',
-    fgMuted: '#55462e',
+    fg: '#2a2012',
+    fgMuted: '#3e3220',
+    rule: '#ab8b48',
     codeBg: '#e2cb99',
     readingTheme: 'sepia',
     readingContrast: 'strong',
@@ -1033,6 +1068,15 @@ test('system contrast adjustment follows the resolved OS theme and keeps AA cont
   const lightColors = await readComputedReadingColors(page)
   expect(lightColors.fg).toBe('#4a453d')
   expect(contrastRatio(lightColors.fg, lightColors.bg)).toBeGreaterThanOrEqual(4.5)
+
+  await page.getByRole('radio', { name: '对比 醒目' }).click()
+
+  const strongLightColors = await readComputedReadingColors(page)
+  expect(strongLightColors.fg).toBe('#17130f')
+  expect(strongLightColors.fgMuted).toBe('#322d26')
+  expect(strongLightColors.rule).toBe('#c7b8a0')
+  expect(contrastRatio(strongLightColors.fg, strongLightColors.bg)).toBeGreaterThanOrEqual(4.5)
+  expect(contrastRatio(strongLightColors.fgMuted, strongLightColors.bg)).toBeGreaterThanOrEqual(4.5)
 })
 
 test('reading settings use a bottom sheet on narrow screens', async ({ page }) => {
@@ -1280,6 +1324,7 @@ async function readInlineReadingTokens(page: import('@playwright/test').Page) {
       bg: root.style.getPropertyValue('--reading-bg').trim(),
       fg: root.style.getPropertyValue('--reading-fg').trim(),
       fgMuted: root.style.getPropertyValue('--reading-fg-muted').trim(),
+      rule: root.style.getPropertyValue('--reading-rule').trim(),
       codeBg: root.style.getPropertyValue('--reading-code-bg').trim(),
       fontBody: root.style.getPropertyValue('--reading-font-body').trim(),
       readingTheme: root.dataset.readingTheme ?? '',
@@ -1312,6 +1357,8 @@ async function readComputedReadingColors(page: import('@playwright/test').Page) 
     return {
       bg: rootStyle.getPropertyValue('--reading-bg').trim(),
       fg: rootStyle.getPropertyValue('--reading-fg').trim(),
+      fgMuted: rootStyle.getPropertyValue('--reading-fg-muted').trim(),
+      rule: rootStyle.getPropertyValue('--reading-rule').trim(),
     }
   })
 }

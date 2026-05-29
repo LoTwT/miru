@@ -147,7 +147,8 @@ export const contrastTokenOverridesByThemeAndChoice = {
     standard: {},
     strong: {
       '--reading-fg': '#17130f',
-      '--reading-fg-muted': '#4b453d',
+      '--reading-fg-muted': '#322d26',
+      '--reading-rule': '#c7b8a0',
     },
   },
   dark: {
@@ -168,8 +169,9 @@ export const contrastTokenOverridesByThemeAndChoice = {
     },
     standard: {},
     strong: {
-      '--reading-fg': '#332817',
-      '--reading-fg-muted': '#55462e',
+      '--reading-fg': '#2a2012',
+      '--reading-fg-muted': '#3e3220',
+      '--reading-rule': '#ab8b48',
     },
   },
 } as const satisfies Record<

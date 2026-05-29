@@ -13,6 +13,7 @@
   --reading-rule: #ded3c4;
   --reading-code-fg: #24211d;
   --reading-code-bg: #f0eadf;
+  --reading-anchor-offset: 5.5rem;
   --reading-measure: 65ch;
   --reading-font-size: 18px;
   --reading-line-height: 1.7;
@@ -40,7 +41,8 @@
 
 :root[data-reading-contrast="strong"] {
   --reading-fg: #17130f;
-  --reading-fg-muted: #4b453d;
+  --reading-fg-muted: #322d26;
+  --reading-rule: #c7b8a0;
 }
 
 body {
@@ -79,6 +81,7 @@ a:focus-visible {
   font-family: var(--reading-font-heading);
   font-weight: 660;
   line-height: 1.18;
+  scroll-margin-top: var(--reading-anchor-offset);
   text-decoration: none;
   text-wrap: balance;
 }
@@ -392,8 +395,9 @@ a:focus-visible {
 }
 
 :root[data-reading-theme="sepia"][data-reading-contrast="strong"] {
-  --reading-fg: #332817;
-  --reading-fg-muted: #55462e;
+  --reading-fg: #2a2012;
+  --reading-fg-muted: #3e3220;
+  --reading-rule: #ab8b48;
 }
 
 :root[data-reading-theme="dark"] .reader-surface__content .shiki,
@@ -412,6 +416,7 @@ a:focus-visible {
   :root {
     --reading-font-size: 18px;
     --reading-measure: 100%;
+    --reading-anchor-offset: 5rem;
   }
 
   .reader-surface__content {
