@@ -697,6 +697,15 @@ test('separates heading, body link, permalink, and collapse control styles', asy
     await expect.poll(() => h2Anchor.evaluate(element => getComputedStyle(element, '::after').opacity)).toBe('0')
   }
 
+  if (await page.evaluate(() => window.matchMedia('(hover: hover) and (pointer: fine)').matches)) {
+    await expect.poll(() => h2Toggle.evaluate(element => Number(getComputedStyle(element).opacity))).toBeLessThan(0.2)
+    await expect.poll(() => h2Toggle.evaluate(element => Number(getComputedStyle(element).opacity))).toBeGreaterThan(0.1)
+  }
+  else {
+    await expect.poll(() => h2Toggle.evaluate(element => Number(getComputedStyle(element).opacity))).toBeLessThan(0.35)
+    await expect.poll(() => h2Toggle.evaluate(element => Number(getComputedStyle(element).opacity))).toBeGreaterThan(0.25)
+  }
+
   await h2Anchor.focus()
   await expect.poll(() => h2Anchor.evaluate(element => getComputedStyle(element).outlineStyle)).not.toBe('none')
 
