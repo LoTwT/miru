@@ -30,11 +30,14 @@ import type {
   ReadingParagraphGapId,
   ReadingThemeChoice,
 } from '@/features/settings/readingSettingsOptions'
+import type { ReadingPreset } from '@/features/settings/readingPresets'
 import type { ReadingCustomizationState } from '@/features/settings/useReadingSettings'
 
 const props = defineProps<{
+  activePresetName: string
   isDefault: boolean
   isOpen: boolean
+  presets: readonly ReadingPreset[]
   settings: Readonly<ReadingCustomizationState>
   showOutlinePositionControl: boolean
 }>()
@@ -50,6 +53,10 @@ const emit = defineEmits<{
   updateTheme: [value: ReadingThemeChoice]
   updateCustomTheme: [value: Partial<ReadingCustomThemeState>]
   autoFixCustomTheme: []
+  savePreset: [name: string]
+  applyPreset: [id: string]
+  renamePreset: [id: string, name: string]
+  deletePreset: [id: string]
   updateContrast: [value: ReadingContrastId]
   updateOutlinePosition: [value: ReadingOutlinePositionId]
   reset: []
@@ -58,6 +65,10 @@ const emit = defineEmits<{
 
 const isDesktopOutlineViewport = shallowRef(false)
 const activePanel = shallowRef<'main' | 'custom-theme' | 'presets'>('main')
+const presetNameInput = shallowRef('')
+const renamingPresetId = shallowRef<string | null>(null)
+const renamePresetInput = shallowRef('')
+const pendingDeletePresetId = shallowRef<string | null>(null)
 const rootRef = useTemplateRef<HTMLElement>('root')
 const showOutlinePositionControl = computed(() => props.showOutlinePositionControl && isDesktopOutlineViewport.value)
 const settingsPanelTitle = computed(() => {
@@ -74,7 +85,15 @@ const settingsPanelCaption = computed(() => {
 
   return activePanel.value === 'main' ? '即时预览当前正文' : '外观快照'
 })
-const currentPresetName = computed(() => props.isDefault ? '默认' : '自定义（未保存）')
+const currentPresetName = computed(() => props.activePresetName)
+const normalizedPresetNameInput = computed(() => normalizePresetNameInput(presetNameInput.value))
+const normalizedRenamePresetInput = computed(() => normalizePresetNameInput(renamePresetInput.value))
+const canSavePreset = computed(() => Boolean(normalizedPresetNameInput.value) && !hasPresetName(normalizedPresetNameInput.value))
+const canRenamePreset = computed(() =>
+  Boolean(normalizedRenamePresetInput.value)
+  && Boolean(renamingPresetId.value)
+  && !hasPresetName(normalizedRenamePresetInput.value, renamingPresetId.value ?? undefined),
+)
 const customThemeChecks = computed(() => getCustomThemeChecks(props.settings.customTheme))
 const isCustomThemeReadable = computed(() => hasReadableCustomTheme(props.settings.customTheme))
 const hasCustomThemeBodyContrastIssue = computed(() => customThemeChecks.value.some(check => check.id === 'fg' && !check.passes))
@@ -137,7 +156,72 @@ function returnToMainPanel(): void {
 
 function applyDefaultPreset(): void {
   emit('reset')
+  pendingDeletePresetId.value = null
   returnToMainPanel()
+}
+
+function saveCurrentPreset(): void {
+  if (!canSavePreset.value) {
+    return
+  }
+
+  emit('savePreset', normalizedPresetNameInput.value)
+  presetNameInput.value = ''
+  pendingDeletePresetId.value = null
+}
+
+function applyPreset(id: string): void {
+  emit('applyPreset', id)
+  pendingDeletePresetId.value = null
+}
+
+function startRenamePreset(preset: ReadingPreset): void {
+  renamingPresetId.value = preset.id
+  renamePresetInput.value = preset.name
+  pendingDeletePresetId.value = null
+}
+
+function cancelRenamePreset(): void {
+  renamingPresetId.value = null
+  renamePresetInput.value = ''
+}
+
+function confirmRenamePreset(): void {
+  if (!renamingPresetId.value || !canRenamePreset.value) {
+    return
+  }
+
+  emit('renamePreset', renamingPresetId.value, normalizedRenamePresetInput.value)
+  cancelRenamePreset()
+}
+
+function requestDeletePreset(id: string): void {
+  if (pendingDeletePresetId.value === id) {
+    emit('deletePreset', id)
+    pendingDeletePresetId.value = null
+    cancelRenamePreset()
+    return
+  }
+
+  pendingDeletePresetId.value = id
+  cancelRenamePreset()
+}
+
+function describePreset(preset: ReadingPreset): string {
+  const themeLabel = readingThemeOptions.find(option => option.id === preset.settings.theme)?.label ?? '主题'
+  const fontLabel = readingFontFamilyOptions.find(option => option.id === preset.settings.fontFamily)?.label ?? '字体'
+  const fontSize = readingFontSizeOptions.find(option => option.id === preset.settings.fontSize)?.tokenValue ?? '18px'
+
+  return `${fontLabel} · ${fontSize} · ${themeLabel}`
+}
+
+function hasPresetName(name: string, ignoredPresetId?: string): boolean {
+  const normalizedName = normalizePresetNameInput(name).toLowerCase()
+  return props.presets.some(preset => preset.id !== ignoredPresetId && preset.name.toLowerCase() === normalizedName)
+}
+
+function normalizePresetNameInput(name: string): string {
+  return name.trim().replace(/\s+/g, ' ').slice(0, 32)
 }
 
 function onRadioKeydown<T extends string>(
@@ -225,6 +309,8 @@ function selectOutlinePosition(value: ReadingOutlinePositionId): void {
 watch(() => props.isOpen, async (value) => {
   if (!value) {
     activePanel.value = 'main'
+    pendingDeletePresetId.value = null
+    cancelRenamePreset()
     return
   }
 
@@ -719,6 +805,44 @@ function syncOutlineViewport(): void {
       >
         <section class="reading-settings__group reading-settings__group--subpanel" aria-labelledby="reading-settings-presets-title">
           <h3 id="reading-settings-presets-title" class="reading-settings__group-title">
+            当前快照
+          </h3>
+          <div class="reading-settings__preset-save">
+            <label class="reading-settings__preset-input-label" for="reading-preset-name">
+              存为预设
+            </label>
+            <div class="reading-settings__preset-input-row">
+              <input
+                id="reading-preset-name"
+                v-model="presetNameInput"
+                class="reading-settings__preset-input"
+                type="text"
+                maxlength="32"
+                placeholder="例如 夜间长文"
+                data-settings-item
+                @keydown.enter.prevent="saveCurrentPreset"
+              >
+              <button
+                class="reading-settings__preset-action"
+                type="button"
+                :disabled="!canSavePreset"
+                data-settings-item
+                @click="saveCurrentPreset"
+              >
+                保存
+              </button>
+            </div>
+            <p v-if="normalizedPresetNameInput && hasPresetName(normalizedPresetNameInput)" class="reading-settings__subpanel-note">
+              已有同名预设，不会覆盖。
+            </p>
+            <p v-else class="reading-settings__subpanel-note">
+              保存当前字体、版面、主题、对比和大纲位置。
+            </p>
+          </div>
+        </section>
+
+        <section class="reading-settings__group reading-settings__group--subpanel" aria-labelledby="reading-settings-presets-built-in-title">
+          <h3 id="reading-settings-presets-built-in-title" class="reading-settings__group-title">
             内置预设
           </h3>
           <button
@@ -733,6 +857,85 @@ function syncOutlineViewport(): void {
             </span>
             <span aria-hidden="true">应用</span>
           </button>
+        </section>
+
+        <section class="reading-settings__group reading-settings__group--subpanel" aria-labelledby="reading-settings-presets-saved-title">
+          <h3 id="reading-settings-presets-saved-title" class="reading-settings__group-title">
+            已保存
+          </h3>
+          <div v-if="props.presets.length > 0" class="reading-settings__saved-presets">
+            <article
+              v-for="preset in props.presets"
+              :key="preset.id"
+              class="reading-settings__saved-preset"
+              :data-pending-delete="pendingDeletePresetId === preset.id"
+            >
+              <div v-if="renamingPresetId === preset.id" class="reading-settings__preset-rename">
+                <input
+                  v-model="renamePresetInput"
+                  class="reading-settings__preset-input"
+                  type="text"
+                  maxlength="32"
+                  :aria-label="`重命名预设 ${preset.name}`"
+                  data-settings-item
+                  @keydown.enter.prevent="confirmRenamePreset"
+                  @keydown.escape.prevent="cancelRenamePreset"
+                >
+                <button
+                  class="reading-settings__preset-action"
+                  type="button"
+                  :disabled="!canRenamePreset"
+                  data-settings-item
+                  @click="confirmRenamePreset"
+                >
+                  保存
+                </button>
+                <button
+                  class="reading-settings__preset-action reading-settings__preset-action--muted"
+                  type="button"
+                  data-settings-item
+                  @click="cancelRenamePreset"
+                >
+                  取消
+                </button>
+              </div>
+              <template v-else>
+                <div class="reading-settings__saved-preset-summary">
+                  <strong>{{ preset.name }}</strong>
+                  <span>{{ describePreset(preset) }}</span>
+                </div>
+                <div class="reading-settings__saved-preset-actions">
+                  <button
+                    class="reading-settings__preset-action"
+                    type="button"
+                    data-settings-item
+                    @click="applyPreset(preset.id)"
+                  >
+                    应用
+                  </button>
+                  <button
+                    class="reading-settings__preset-action reading-settings__preset-action--muted"
+                    type="button"
+                    data-settings-item
+                    @click="startRenamePreset(preset)"
+                  >
+                    重命名
+                  </button>
+                  <button
+                    class="reading-settings__preset-action reading-settings__preset-action--danger"
+                    type="button"
+                    data-settings-item
+                    @click="requestDeletePreset(preset.id)"
+                  >
+                    {{ pendingDeletePresetId === preset.id ? '确认删除' : '删除' }}
+                  </button>
+                </div>
+              </template>
+            </article>
+          </div>
+          <p v-else class="reading-settings__subpanel-note">
+            还没有保存的预设。
+          </p>
           <p class="reading-settings__subpanel-note">
             当前: {{ currentPresetName }}
           </p>
@@ -1055,6 +1258,95 @@ function syncOutlineViewport(): void {
 .reading-settings__preset-item > span:first-child > span {
   color: var(--reading-fg-muted);
   font-size: 0.78rem;
+}
+
+.reading-settings__preset-save,
+.reading-settings__saved-presets {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.reading-settings__preset-input-label {
+  color: var(--reading-fg-muted);
+  font-size: 0.78rem;
+}
+
+.reading-settings__preset-input-row,
+.reading-settings__preset-rename {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.45rem;
+}
+
+.reading-settings__preset-rename {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.reading-settings__preset-input {
+  min-block-size: 44px;
+  min-inline-size: 0;
+  border: 1px solid var(--reading-rule);
+  border-radius: 12px;
+  background: var(--reading-bg);
+  color: var(--reading-fg);
+  font: inherit;
+  padding-inline: 0.7rem;
+}
+
+.reading-settings__preset-action {
+  min-block-size: 44px;
+  border: 1px solid var(--reading-rule);
+  border-radius: 12px;
+  background: var(--reading-bg);
+  color: var(--reading-fg);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 700;
+  padding-inline: 0.7rem;
+}
+
+.reading-settings__preset-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.reading-settings__preset-action--muted {
+  color: var(--reading-fg-muted);
+}
+
+.reading-settings__preset-action--danger {
+  color: var(--reading-accent);
+}
+
+.reading-settings__saved-preset {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.62rem;
+  border: 1px solid var(--reading-rule);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--reading-bg) 96%, var(--reading-fg));
+}
+
+.reading-settings__saved-preset[data-pending-delete="true"] {
+  border-color: var(--reading-accent);
+  box-shadow: inset 0 0 0 1px var(--reading-accent);
+}
+
+.reading-settings__saved-preset-summary {
+  display: grid;
+  gap: 0.16rem;
+}
+
+.reading-settings__saved-preset-summary > span {
+  color: var(--reading-fg-muted);
+  font-size: 0.78rem;
+}
+
+.reading-settings__saved-preset-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.4rem;
 }
 
 .reading-settings__subpanel-note {

@@ -1272,6 +1272,77 @@ test('custom theme editor warns and auto-fixes AA contrast', async ({ page }) =>
   expect(contrastRatio(reloadedTokens.codeFg, reloadedTokens.codeBg)).toBeGreaterThanOrEqual(4.5)
 })
 
+test('saves, applies, renames, and deletes reading presets', async ({ page }) => {
+  await page.goto('/')
+
+  await page.getByTestId('reading-settings-button').click()
+
+  const fontSizeSlider = page.getByRole('slider', { name: '字号' })
+  await fontSizeSlider.press('ArrowRight')
+  await fontSizeSlider.press('ArrowRight')
+  await page.getByRole('radio', { name: '字间距 松' }).click()
+  await page.getByRole('radio', { name: '主题 自定义' }).click()
+  await page.getByRole('button', { name: /编辑自定义主题/ }).click()
+  await page.getByLabel('自定义主题 背景').fill('#ffffff')
+  await page.getByLabel('自定义主题 正文').fill('#111111')
+  await page.getByLabel('自定义主题 强调').fill('#767676')
+  await page.getByRole('button', { name: '返回阅读设置' }).click()
+
+  await page.getByRole('button', { name: /管理预设/ }).click()
+  await page.getByLabel('存为预设').fill('Focus preset')
+  await page.getByRole('button', { name: '保存' }).click()
+  await expect(page.locator('.reading-settings__saved-preset').filter({ hasText: 'Focus preset' })).toBeVisible()
+  await page.getByLabel('存为预设').fill('Focus preset')
+  await expect(page.getByText('已有同名预设，不会覆盖。')).toBeVisible()
+
+  const persistedAfterSave = await page.evaluate(() => JSON.parse(localStorage.getItem('miru:reading-presets:v1') ?? '{}'))
+  expect(persistedAfterSave.presets).toHaveLength(1)
+  expect(persistedAfterSave.presets[0].name).toBe('Focus preset')
+  expect(persistedAfterSave.presets[0].settings).toMatchObject({
+    fontSize: '20',
+    letterSpacing: 'loose',
+    theme: 'custom',
+    customTheme: {
+      bg: '#ffffff',
+      fg: '#111111',
+      accent: '#767676',
+    },
+  })
+
+  await page.getByRole('button', { name: '恢复默认' }).click()
+  await expect.poll(() => readInlineReadingTokens(page)).toMatchObject({
+    fontSize: '',
+    letterSpacing: '',
+    bg: '',
+    readingTheme: '',
+  })
+
+  await page.locator('.reading-settings__saved-preset').filter({ hasText: 'Focus preset' }).getByRole('button', { name: '应用' }).click()
+  await expect.poll(() => readInlineReadingTokens(page)).toMatchObject({
+    fontSize: '20px',
+    letterSpacing: '0.03em',
+    bg: '#ffffff',
+    fg: '#111111',
+    accent: '#767676',
+    readingTheme: 'custom',
+  })
+  await expect(page.getByText('当前: Focus preset')).toBeVisible()
+
+  const savedPreset = page.locator('.reading-settings__saved-preset').filter({ hasText: 'Focus preset' })
+  await savedPreset.getByRole('button', { name: '重命名' }).click()
+  await page.getByLabel('重命名预设 Focus preset').fill('Deep focus')
+  await page.locator('.reading-settings__saved-preset').getByRole('button', { name: '保存' }).click()
+  await expect(page.locator('.reading-settings__saved-preset').filter({ hasText: 'Deep focus' })).toBeVisible()
+  await expect(page.getByText('当前: Deep focus')).toBeVisible()
+
+  const renamedPreset = page.locator('.reading-settings__saved-preset').filter({ hasText: 'Deep focus' })
+  await renamedPreset.getByRole('button', { name: '删除' }).click()
+  await expect(renamedPreset).toHaveAttribute('data-pending-delete', 'true')
+  await renamedPreset.getByRole('button', { name: '确认删除' }).click()
+  await expect(page.getByText('Deep focus')).not.toBeVisible()
+  expect(await page.evaluate(() => localStorage.getItem('miru:reading-presets:v1'))).toBeNull()
+})
+
 test('reading settings use a bottom sheet on narrow screens', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/')
