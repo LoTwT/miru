@@ -390,6 +390,30 @@ test('collapses the floating menu and focuses the reader after URL fetch success
   await expect(page.getByRole('button', { name: /粘贴/ })).toBeFocused()
 })
 
+test('uses a clean display title for URL imports without leaking the full URL into the header or library title', async ({ page }) => {
+  await page.route('https://example.com/guides/daily-note.md', async route => route.fulfill({
+    contentType: 'text/markdown',
+    body: 'Plain remote note without a heading.',
+  }))
+
+  await page.goto('/')
+
+  await page.getByTestId('floating-affordance-button').click()
+  await page.getByLabel('URL').fill('https://example.com/guides/daily-note.md')
+  await page.getByRole('button', { name: '拉取' }).click()
+
+  await expect(page.getByText('Plain remote note without a heading.')).toBeVisible()
+  await expect(page.locator('.app-shell__document-title')).toHaveText('daily-note')
+  await expect(page.locator('.reader-surface__meta')).toHaveText('daily-note')
+
+  await page.getByTestId('library-open-button').click()
+  const entry = page.getByTestId('library-entry').filter({ hasText: 'daily-note' })
+  await expect(entry).toBeVisible()
+  await expect(entry).toContainText('URL · example.com')
+  await expect(entry.locator('.library-entry__title-button')).toHaveText('daily-note')
+  await expect(page.getByTestId('library-entry').filter({ hasText: 'https://example.com/guides/daily-note.md' })).toHaveCount(0)
+})
+
 test('auto-fetches a bare URL pasted into the reader', async ({ page }) => {
   await page.route('https://example.com/readme.md', async route => route.fulfill({
     contentType: 'text/markdown',
@@ -423,7 +447,7 @@ test('converts GitHub blob URLs to raw markdown before fetching', async ({ page 
 
   await expect(page.getByRole('heading', { name: 'GitHub doc' })).toBeVisible()
   expect(requestedRawUrl).toBe('https://raw.githubusercontent.com/LoTwT/miru/main/README.md')
-  await expect(page.locator('.reader-surface__meta')).toHaveText('https://github.com/LoTwT/miru/blob/main/README.md')
+  await expect(page.locator('.reader-surface__meta')).toHaveText('GitHub doc')
 })
 
 test('keeps the current document when pasted URL fetch is not markdown-readable', async ({ page }) => {
