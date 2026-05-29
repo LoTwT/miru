@@ -1,4 +1,5 @@
-const collapsibleHeadingSelector = ':scope > h1'
+const collapsibleHeadingSelector = ':scope > h1, :scope > h2, :scope > h3'
+const maxCollapsibleHeadingLevel = 3
 
 interface CollapsibleHeadingRecord {
   button: HTMLButtonElement
@@ -14,10 +15,27 @@ export function enhanceCollapsibleHeadings(content: HTMLElement): () => void {
   }
 
   const records: CollapsibleHeadingRecord[] = []
-  const headings = Array.from(content.querySelectorAll<HTMLHeadingElement>(collapsibleHeadingSelector))
+  enhanceHeadingContainer(content, records)
 
-  headings.forEach((heading, index) => {
-    const sectionNodes = collectSectionNodes(heading)
+  return () => cleanupCollapsibleHeadings(records)
+}
+
+function enhanceHeadingContainer(container: HTMLElement, records: CollapsibleHeadingRecord[]): void {
+  const directHeadings = Array.from(container.querySelectorAll<HTMLHeadingElement>(collapsibleHeadingSelector))
+    .filter(heading => heading.parentElement === container)
+  const levels = directHeadings
+    .map(heading => getHeadingLevel(heading))
+    .filter((level): level is number => level !== null && level <= maxCollapsibleHeadingLevel)
+
+  if (levels.length === 0) {
+    return
+  }
+
+  const currentLevel = Math.min(...levels)
+  const headings = directHeadings.filter(heading => getHeadingLevel(heading) === currentLevel)
+
+  headings.forEach((heading) => {
+    const sectionNodes = collectSectionNodes(heading, currentLevel)
 
     if (sectionNodes.length === 0) {
       return
@@ -26,14 +44,16 @@ export function enhanceCollapsibleHeadings(content: HTMLElement): () => void {
     const row = document.createElement('div')
     row.className = 'reader-heading-row'
     row.dataset.readerHeadingRow = ''
+    row.dataset.readerHeadingLevel = String(currentLevel)
 
     const section = document.createElement('div')
     section.className = 'reader-section'
-    section.id = `reader-section-${index + 1}`
+    section.id = `reader-section-${records.length + 1}`
     section.dataset.readerSection = ''
+    section.dataset.readerHeadingLevel = String(currentLevel)
 
     const title = normalizeHeadingTitle(heading)
-    const button = createToggleButton(title, section.id)
+    const button = createToggleButton(title, section.id, currentLevel)
 
     heading.before(row)
     row.append(button, heading)
@@ -50,16 +70,21 @@ export function enhanceCollapsibleHeadings(content: HTMLElement): () => void {
 
     button.addEventListener('click', onClick)
     records.push({ button, onClick, row, section, heading })
+    enhanceHeadingContainer(section, records)
   })
-
-  return () => cleanupCollapsibleHeadings(records)
 }
 
-function collectSectionNodes(heading: HTMLHeadingElement): Element[] {
+function collectSectionNodes(heading: HTMLHeadingElement, level: number): Element[] {
   const nodes: Element[] = []
   let sibling = heading.nextElementSibling
 
-  while (sibling && sibling.tagName !== 'H1') {
+  while (sibling) {
+    const siblingLevel = getHeadingLevel(sibling)
+
+    if (siblingLevel !== null && siblingLevel <= level) {
+      break
+    }
+
     nodes.push(sibling)
     sibling = sibling.nextElementSibling
   }
@@ -67,11 +92,12 @@ function collectSectionNodes(heading: HTMLHeadingElement): Element[] {
   return nodes
 }
 
-function createToggleButton(title: string, sectionId: string): HTMLButtonElement {
+function createToggleButton(title: string, sectionId: string, level: number): HTMLButtonElement {
   const button = document.createElement('button')
   button.type = 'button'
   button.className = 'reader-heading-toggle'
   button.dataset.readerHeadingToggle = ''
+  button.dataset.readerHeadingLevel = String(level)
   button.setAttribute('aria-controls', sectionId)
   setExpanded(button, null, title, true)
 
@@ -82,6 +108,11 @@ function createToggleButton(title: string, sectionId: string): HTMLButtonElement
   ].join('')
 
   return button
+}
+
+function getHeadingLevel(element: Element): number | null {
+  const match = /^H([1-6])$/.exec(element.tagName)
+  return match ? Number(match[1]) : null
 }
 
 function setExpanded(

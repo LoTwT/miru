@@ -190,17 +190,21 @@ function findHeadingById(id: string): HTMLElement | null {
 }
 
 function expandCollapsedParentSection(heading: HTMLElement): void {
-  const section = heading.closest<HTMLElement>('[data-reader-section]')
+  let current: HTMLElement | null = heading
 
-  if (!section?.hidden) {
-    return
-  }
+  while (current.parentElement) {
+    current = current.parentElement
 
-  const row = section.previousElementSibling
-  const toggle = row?.querySelector<HTMLButtonElement>('[data-reader-heading-toggle]')
+    if (!current.matches('[data-reader-section]') || !current.hidden) {
+      continue
+    }
 
-  if (toggle?.getAttribute('aria-expanded') === 'false') {
-    toggle.click()
+    const row = current.previousElementSibling
+    const toggle = row?.querySelector<HTMLButtonElement>('[data-reader-heading-toggle]')
+
+    if (toggle?.getAttribute('aria-expanded') === 'false') {
+      toggle.click()
+    }
   }
 }
 
