@@ -1,4 +1,4 @@
-import { computed, readonly, reactive } from 'vue'
+import { computed, readonly, reactive, shallowRef } from 'vue'
 
 import {
   clearPersistedReadingSettings,
@@ -39,6 +39,15 @@ import type {
   ReadingOutlinePositionId,
   ReadingThemeChoice,
 } from './readingSettingsOptions'
+import {
+  arePresetSnapshotsEqual,
+  createReadingPresetId,
+  createSnapshotFromSettings,
+  normalizePresetName,
+  readPersistedReadingPresets,
+  writePersistedReadingPresets,
+} from './readingPresets'
+import type { ReadingPreset, ReadingPresetSnapshot } from './readingPresets'
 
 export interface ReadingCustomizationState {
   fontSize: ReadingFontSizeId
@@ -63,6 +72,7 @@ export function useReadingSettings(options: {
   const persisted = readPersistedReadingSettings(storage)
   const remoteImageMode = persisted?.remoteImageMode
   const state = reactive<ReadingCustomizationState>(stateFromPersistedSettings(persisted))
+  const presets = shallowRef<ReadingPreset[]>(readPersistedReadingPresets(storage))
 
   const isDefault = computed(() =>
     state.fontSize === defaultReadingSettings.fontSize
@@ -77,6 +87,14 @@ export function useReadingSettings(options: {
     && state.outlinePosition === defaultReadingSettings.outlinePosition
     && isSameCustomTheme(state.customTheme, defaultReadingSettings.customTheme),
   )
+  const activePresetName = computed(() => {
+    if (isDefault.value) {
+      return '默认'
+    }
+
+    const currentSnapshot = createSnapshotFromSettings(state)
+    return presets.value.find(preset => arePresetSnapshotsEqual(preset.settings, currentSnapshot))?.name ?? '自定义（未保存）'
+  })
 
   function applyCurrent(): void {
     const overrides = buildTokenOverrides(state)
@@ -178,6 +196,91 @@ export function useReadingSettings(options: {
     clearPersistedReadingSettings(storage)
   }
 
+  function savePreset(name: string): ReadingPreset | null {
+    const normalizedName = normalizePresetName(name)
+
+    if (!normalizedName || hasPresetName(normalizedName)) {
+      return null
+    }
+
+    const timestamp = new Date().toISOString()
+    const preset: ReadingPreset = {
+      id: createReadingPresetId(),
+      name: normalizedName,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      settings: createSnapshotFromSettings(state),
+    }
+
+    presets.value = [preset, ...presets.value]
+    persistPresets()
+    return preset
+  }
+
+  function applyPreset(id: string): boolean {
+    const preset = presets.value.find(item => item.id === id)
+
+    if (!preset) {
+      return false
+    }
+
+    applySnapshotToState(state, preset.settings)
+    commit()
+    return true
+  }
+
+  function renamePreset(id: string, name: string): boolean {
+    const normalizedName = normalizePresetName(name)
+
+    if (!normalizedName || hasPresetName(normalizedName, id)) {
+      return false
+    }
+
+    const presetExists = presets.value.some(preset => preset.id === id)
+
+    if (!presetExists) {
+      return false
+    }
+
+    const timestamp = new Date().toISOString()
+    const nextPresets = presets.value.map((preset) => {
+      if (preset.id !== id) {
+        return preset
+      }
+
+      return {
+        ...preset,
+        name: normalizedName,
+        updatedAt: timestamp,
+      }
+    })
+
+    presets.value = nextPresets
+    persistPresets()
+    return true
+  }
+
+  function deletePreset(id: string): boolean {
+    const nextPresets = presets.value.filter(preset => preset.id !== id)
+
+    if (nextPresets.length === presets.value.length) {
+      return false
+    }
+
+    presets.value = nextPresets
+    persistPresets()
+    return true
+  }
+
+  function hasPresetName(name: string, ignoredPresetId?: string): boolean {
+    const normalizedName = normalizePresetName(name).toLowerCase()
+    return presets.value.some(preset => preset.id !== ignoredPresetId && preset.name.toLowerCase() === normalizedName)
+  }
+
+  function persistPresets(): void {
+    writePersistedReadingPresets(presets.value, storage)
+  }
+
   function commit(): void {
     applyCurrent()
     persist()
@@ -219,9 +322,15 @@ export function useReadingSettings(options: {
 
   return {
     state: readonly(state),
+    presets: readonly(presets),
     isDefault,
+    activePresetName,
     applyCurrent,
     reset,
+    savePreset,
+    applyPreset,
+    renamePreset,
+    deletePreset,
     updateFontSize,
     updateMeasure,
     updateLineHeight,
@@ -235,6 +344,20 @@ export function useReadingSettings(options: {
     updateContrast,
     updateOutlinePosition,
   }
+}
+
+function applySnapshotToState(state: ReadingCustomizationState, snapshot: ReadingPresetSnapshot): void {
+  state.fontSize = snapshot.fontSize
+  state.measure = snapshot.measure
+  state.lineHeight = snapshot.lineHeight
+  state.letterSpacing = snapshot.letterSpacing
+  state.paragraphGap = snapshot.paragraphGap
+  state.pageMargin = snapshot.pageMargin
+  state.fontFamily = snapshot.fontFamily
+  state.theme = snapshot.theme
+  state.contrast = snapshot.contrast
+  state.outlinePosition = snapshot.outlinePosition
+  state.customTheme = { ...snapshot.customTheme }
 }
 
 function stateFromPersistedSettings(settings: PersistedReadingSettings | null): ReadingCustomizationState {

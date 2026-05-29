@@ -8,6 +8,7 @@ import {
   sepiaThemeTokenOverrides,
 } from '@/features/settings/readingSettingsOptions'
 import { useReadingSettings } from '@/features/settings/useReadingSettings'
+import { readPersistedReadingPresets } from '@/features/settings/readingPresets'
 import { readPersistedReadingSettings } from '@/lib/theme/tokens'
 
 function createStorage(): Storage {
@@ -166,6 +167,42 @@ describe('reading customization settings', () => {
     expect(contrastRatio(fixedTokens['--reading-fg-muted'], fixedTokens['--reading-bg'])).toBeGreaterThanOrEqual(4.5)
     expect(contrastRatio(fixedTokens['--reading-link'], fixedTokens['--reading-bg'])).toBeGreaterThanOrEqual(4.5)
     expect(contrastRatio(fixedTokens['--reading-code-fg'], fixedTokens['--reading-code-bg'])).toBeGreaterThanOrEqual(4.5)
+  })
+
+  it('saves, applies, renames, and deletes named reading presets', () => {
+    const settings = useReadingSettings({ root, storage })
+
+    settings.updateFontSize('22')
+    settings.updateLetterSpacing('loose')
+    settings.updateTheme('custom')
+    settings.updateCustomTheme({
+      bg: '#ffffff',
+      fg: '#111111',
+      accent: '#767676',
+    })
+
+    const preset = settings.savePreset(' Focus preset ')
+
+    expect(preset?.name).toBe('Focus preset')
+    expect(settings.activePresetName.value).toBe('Focus preset')
+    expect(settings.savePreset('Focus preset')).toBeNull()
+    expect(readPersistedReadingPresets(storage)).toHaveLength(1)
+
+    settings.reset()
+
+    expect(root.style.getPropertyValue('--reading-font-size')).toBe('')
+    expect(settings.applyPreset(preset?.id ?? '')).toBe(true)
+    expect(root.style.getPropertyValue('--reading-font-size')).toBe('22px')
+    expect(root.style.getPropertyValue('--reading-letter-spacing')).toBe('0.03em')
+    expect(root.dataset.readingTheme).toBe('custom')
+    expect(root.style.getPropertyValue('--reading-bg')).toBe('#ffffff')
+    expect(settings.activePresetName.value).toBe('Focus preset')
+
+    expect(settings.renamePreset(preset?.id ?? '', 'Renamed preset')).toBe(true)
+    expect(readPersistedReadingPresets(storage)[0]?.name).toBe('Renamed preset')
+    expect(settings.activePresetName.value).toBe('Renamed preset')
+    expect(settings.deletePreset(preset?.id ?? '')).toBe(true)
+    expect(readPersistedReadingPresets(storage)).toHaveLength(0)
   })
 
   it('reads legacy fontBody settings as the matching font option', () => {

@@ -95,6 +95,8 @@ const shouldUseDarkCommandScrim = computed(() =>
   || (readingSettings.state.theme === 'system' && isSystemDarkTheme.value),
 )
 const shouldAnimateCommandScrim = computed(() => !isReducedMotion.value)
+const readingPresetList = computed(() => readingSettings.presets.value)
+const activeReadingPresetName = computed(() => readingSettings.activePresetName.value)
 const activeDocumentTitle = computed(() => {
   if (appMode.value === 'library') {
     return '文库'
@@ -926,6 +928,8 @@ function focusLibraryView(): void {
         v-else-if="isSettingsSurfaceOpen && appMode === 'reader'"
         :is-open="isSettingsSurfaceOpen"
         :settings="readingSettings.state"
+        :presets="readingPresetList"
+        :active-preset-name="activeReadingPresetName"
         :is-default="readingSettings.isDefault.value"
         :show-outline-position-control="outlineItems.length > 0"
         @update-font-size="readingSettings.updateFontSize"
@@ -938,6 +942,10 @@ function focusLibraryView(): void {
         @update-theme="readingSettings.updateTheme"
         @update-custom-theme="readingSettings.updateCustomTheme"
         @auto-fix-custom-theme="readingSettings.autoFixCustomTheme"
+        @save-preset="readingSettings.savePreset"
+        @apply-preset="readingSettings.applyPreset"
+        @rename-preset="readingSettings.renamePreset"
+        @delete-preset="readingSettings.deletePreset"
         @update-contrast="readingSettings.updateContrast"
         @update-outline-position="readingSettings.updateOutlinePosition"
         @reset="readingSettings.reset"
