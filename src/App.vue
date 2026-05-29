@@ -772,11 +772,11 @@ function focusLibraryView(): void {
     @drop="onDrop"
   >
     <header ref="topBar" class="app-shell__header" data-testid="app-top-bar">
-      <button class="app-shell__mark" type="button" aria-label="回到当前阅读" @click="returnToActiveDocument">
+      <div class="app-shell__mark">
         <span>miru</span>
         <span class="app-shell__mark-separator" aria-hidden="true">›</span>
         <span class="app-shell__document-title">{{ activeDocumentTitle }}</span>
-      </button>
+      </div>
       <button
         class="app-shell__library-button"
         type="button"
@@ -994,16 +994,10 @@ function focusLibraryView(): void {
   border-radius: 999px;
   color: var(--reading-fg);
   background: transparent;
-  cursor: pointer;
   font-family: var(--reading-font-heading);
   font-size: 1rem;
   font-weight: 650;
   text-decoration: none;
-}
-
-.app-shell__mark:hover,
-.app-shell__mark:focus-visible {
-  background: color-mix(in srgb, var(--reading-code-bg) 60%, transparent);
 }
 
 .app-shell__mark-separator,
