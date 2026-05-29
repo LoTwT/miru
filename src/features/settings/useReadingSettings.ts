@@ -16,14 +16,19 @@ import {
   readingFontSizeOptions,
   readingLineHeightOptions,
   readingMeasureOptions,
+  readingPageMarginOptions,
   readingOutlinePositionOptions,
-  themeTokenOverridesByChoice,
+  readingParagraphGapOptions,
+  resolveThemeTokenOverrides,
 } from './readingSettingsOptions'
 import type {
+  ReadingContrastId,
   ReadingFontFamilyId,
   ReadingFontSizeId,
   ReadingLineHeightId,
   ReadingMeasureId,
+  ReadingPageMarginId,
+  ReadingParagraphGapId,
   ReadingOutlinePositionId,
   ReadingThemeChoice,
 } from './readingSettingsOptions'
@@ -32,8 +37,11 @@ export interface ReadingCustomizationState {
   fontSize: ReadingFontSizeId
   measure: ReadingMeasureId
   lineHeight: ReadingLineHeightId
+  paragraphGap: ReadingParagraphGapId
+  pageMargin: ReadingPageMarginId
   fontFamily: ReadingFontFamilyId
   theme: ReadingThemeChoice
+  contrast: ReadingContrastId
   outlinePosition: ReadingOutlinePositionId
 }
 
@@ -51,8 +59,11 @@ export function useReadingSettings(options: {
     state.fontSize === defaultReadingSettings.fontSize
     && state.measure === defaultReadingSettings.measure
     && state.lineHeight === defaultReadingSettings.lineHeight
+    && state.paragraphGap === defaultReadingSettings.paragraphGap
+    && state.pageMargin === defaultReadingSettings.pageMargin
     && state.fontFamily === defaultReadingSettings.fontFamily
     && state.theme === defaultReadingSettings.theme
+    && state.contrast === defaultReadingSettings.contrast
     && state.outlinePosition === defaultReadingSettings.outlinePosition,
   )
 
@@ -61,6 +72,7 @@ export function useReadingSettings(options: {
 
     clearInlineReadingOverrides(root)
     syncThemeAttribute(root, state.theme)
+    syncContrastAttribute(root, state.contrast)
 
     for (const [token, value] of Object.entries(overrides)) {
       setReadingToken(token as ReadingTokenName, value, root)
@@ -82,6 +94,16 @@ export function useReadingSettings(options: {
     commit()
   }
 
+  function updateParagraphGap(value: ReadingParagraphGapId): void {
+    state.paragraphGap = value
+    commit()
+  }
+
+  function updatePageMargin(value: ReadingPageMarginId): void {
+    state.pageMargin = value
+    commit()
+  }
+
   function updateFontFamily(value: ReadingFontFamilyId): void {
     state.fontFamily = value
     commit()
@@ -89,6 +111,11 @@ export function useReadingSettings(options: {
 
   function updateTheme(value: ReadingThemeChoice): void {
     state.theme = value
+    commit()
+  }
+
+  function updateContrast(value: ReadingContrastId): void {
+    state.contrast = value
     commit()
   }
 
@@ -101,12 +128,16 @@ export function useReadingSettings(options: {
     state.fontSize = defaultReadingSettings.fontSize
     state.measure = defaultReadingSettings.measure
     state.lineHeight = defaultReadingSettings.lineHeight
+    state.paragraphGap = defaultReadingSettings.paragraphGap
+    state.pageMargin = defaultReadingSettings.pageMargin
     state.fontFamily = defaultReadingSettings.fontFamily
     state.theme = defaultReadingSettings.theme
+    state.contrast = defaultReadingSettings.contrast
     state.outlinePosition = defaultReadingSettings.outlinePosition
 
     clearInlineReadingOverrides(root)
     syncThemeAttribute(root, state.theme)
+    syncContrastAttribute(root, state.contrast)
 
     if (remoteImageMode) {
       writePersistedReadingSettings({ version: 1, remoteImageMode }, storage)
@@ -125,8 +156,9 @@ export function useReadingSettings(options: {
     const tokenOverrides = buildTokenOverrides(state)
     const hasTokenOverrides = Object.keys(tokenOverrides).length > 0
     const hasOutlinePositionOverride = state.outlinePosition !== defaultReadingSettings.outlinePosition
+    const hasContrastOverride = state.contrast !== defaultReadingSettings.contrast
 
-    if (!hasTokenOverrides && state.theme === 'system' && !hasOutlinePositionOverride && !remoteImageMode) {
+    if (!hasTokenOverrides && state.theme === 'system' && !hasOutlinePositionOverride && !hasContrastOverride && !remoteImageMode) {
       clearPersistedReadingSettings(storage)
       return
     }
@@ -139,6 +171,7 @@ export function useReadingSettings(options: {
         ? readingFontFamilyOptions.find(option => option.id === 'sans')?.tokenValue
         : undefined,
       remoteImageMode,
+      contrast: hasContrastOverride ? state.contrast : undefined,
       outlinePosition: hasOutlinePositionOverride ? state.outlinePosition : undefined,
     }
 
@@ -153,8 +186,11 @@ export function useReadingSettings(options: {
     updateFontSize,
     updateMeasure,
     updateLineHeight,
+    updateParagraphGap,
+    updatePageMargin,
     updateFontFamily,
     updateTheme,
+    updateContrast,
     updateOutlinePosition,
   }
 }
@@ -169,9 +205,14 @@ function stateFromPersistedSettings(settings: PersistedReadingSettings | null): 
       ?? defaultReadingSettings.measure,
     lineHeight: matchTokenValue(readingLineHeightOptions, tokenOverrides?.['--reading-line-height'])
       ?? defaultReadingSettings.lineHeight,
+    paragraphGap: matchTokenValue(readingParagraphGapOptions, tokenOverrides?.['--reading-paragraph-gap'])
+      ?? defaultReadingSettings.paragraphGap,
+    pageMargin: matchTokenValue(readingPageMarginOptions, tokenOverrides?.['--reading-page-margin'])
+      ?? defaultReadingSettings.pageMargin,
     fontFamily: matchTokenValue(readingFontFamilyOptions, settings?.fontBody ?? tokenOverrides?.['--reading-font-body'])
       ?? defaultReadingSettings.fontFamily,
     theme: isReadingThemeChoice(settings?.presetId) ? settings.presetId : defaultReadingSettings.theme,
+    contrast: isReadingContrast(settings?.contrast) ? settings.contrast : defaultReadingSettings.contrast,
     outlinePosition: matchSimpleValue(readingOutlinePositionOptions, settings?.outlinePosition)
       ?? defaultReadingSettings.outlinePosition,
   }
@@ -205,6 +246,20 @@ function buildTokenOverrides(state: ReadingCustomizationState): Record<ReadingTo
   )
   addTypographyOverride(
     tokenOverrides,
+    '--reading-paragraph-gap',
+    readingParagraphGapOptions,
+    state.paragraphGap,
+    defaultReadingSettings.paragraphGap,
+  )
+  addTypographyOverride(
+    tokenOverrides,
+    '--reading-page-margin',
+    readingPageMarginOptions,
+    state.pageMargin,
+    defaultReadingSettings.pageMargin,
+  )
+  addTypographyOverride(
+    tokenOverrides,
     '--reading-font-body',
     readingFontFamilyOptions,
     state.fontFamily,
@@ -212,7 +267,7 @@ function buildTokenOverrides(state: ReadingCustomizationState): Record<ReadingTo
   )
 
   if (state.theme !== 'system') {
-    Object.assign(tokenOverrides, themeTokenOverridesByChoice[state.theme])
+    Object.assign(tokenOverrides, resolveThemeTokenOverrides(state.theme, state.contrast))
   }
 
   return tokenOverrides
@@ -246,6 +301,10 @@ function isReadingThemeChoice(value: unknown): value is ReadingThemeChoice {
   return value === 'system' || value === 'light' || value === 'dark' || value === 'sepia'
 }
 
+function isReadingContrast(value: unknown): value is ReadingContrastId {
+  return value === 'soft' || value === 'standard' || value === 'strong'
+}
+
 function syncThemeAttribute(root: HTMLElement, theme: ReadingThemeChoice): void {
   if (theme === 'system') {
     delete root.dataset.readingTheme
@@ -253,4 +312,13 @@ function syncThemeAttribute(root: HTMLElement, theme: ReadingThemeChoice): void 
   }
 
   root.dataset.readingTheme = theme
+}
+
+function syncContrastAttribute(root: HTMLElement, contrast: ReadingContrastId): void {
+  if (contrast === 'standard') {
+    delete root.dataset.readingContrast
+    return
+  }
+
+  root.dataset.readingContrast = contrast
 }

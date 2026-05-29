@@ -12,6 +12,7 @@ export interface PersistedReadingSettings {
   tokenOverrides?: Record<ReadingTokenName, string>
   fontBody?: string
   remoteImageMode?: 'auto' | 'prompt' | 'block'
+  contrast?: 'soft' | 'standard' | 'strong'
   outlinePosition?: 'left' | 'right'
 }
 
@@ -33,6 +34,7 @@ export const defaultReadingTheme: ReadingTheme = {
     '--reading-measure': '65ch',
     '--reading-font-size': '18px',
     '--reading-line-height': '1.7',
+    '--reading-page-margin': 'clamp(1.25rem, 4vw, 4rem)',
     '--reading-font-body': 'Newsreader, Georgia, serif',
     '--reading-font-heading': 'Newsreader, Georgia, serif',
     '--reading-font-mono': '"Space Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
@@ -108,6 +110,7 @@ export function readPersistedReadingSettings(storage: Storage = localStorage): P
       tokenOverrides: sanitizeTokenOverrides(parsed.tokenOverrides),
       fontBody: typeof parsed.fontBody === 'string' ? parsed.fontBody : undefined,
       remoteImageMode: isRemoteImageMode(parsed.remoteImageMode) ? parsed.remoteImageMode : undefined,
+      contrast: isContrastMode(parsed.contrast) ? parsed.contrast : undefined,
       outlinePosition: isOutlinePosition(parsed.outlinePosition) ? parsed.outlinePosition : undefined,
     }
   }
@@ -130,6 +133,13 @@ export function applyPersistedReadingSettings(settings: PersistedReadingSettings
       setReadingToken(token as `--reading-${string}`, value, root)
     }
   }
+
+  if (settings.contrast && settings.contrast !== 'standard') {
+    root.dataset.readingContrast = settings.contrast
+    return
+  }
+
+  delete root.dataset.readingContrast
 }
 
 function sanitizeTokenOverrides(value: unknown): Record<ReadingTokenName, string> | undefined {
@@ -154,4 +164,8 @@ function isRemoteImageMode(value: unknown): value is PersistedReadingSettings['r
 
 function isOutlinePosition(value: unknown): value is PersistedReadingSettings['outlinePosition'] {
   return value === 'left' || value === 'right'
+}
+
+function isContrastMode(value: unknown): value is PersistedReadingSettings['contrast'] {
+  return value === 'soft' || value === 'standard' || value === 'strong'
 }

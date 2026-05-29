@@ -2,19 +2,25 @@
 import { computed, nextTick, onMounted, onUnmounted, shallowRef, useTemplateRef, watch } from 'vue'
 
 import {
+  readingContrastOptions,
   readingFontFamilyOptions,
   readingFontSizeOptions,
   readingLineHeightOptions,
   readingMeasureOptions,
   readingOutlinePositionOptions,
+  readingPageMarginOptions,
+  readingParagraphGapOptions,
   readingThemeOptions,
 } from '@/features/settings/readingSettingsOptions'
 import type {
+  ReadingContrastId,
   ReadingFontFamilyId,
   ReadingFontSizeId,
   ReadingLineHeightId,
   ReadingMeasureId,
   ReadingOutlinePositionId,
+  ReadingPageMarginId,
+  ReadingParagraphGapId,
   ReadingThemeChoice,
 } from '@/features/settings/readingSettingsOptions'
 import type { ReadingCustomizationState } from '@/features/settings/useReadingSettings'
@@ -30,8 +36,11 @@ const emit = defineEmits<{
   updateFontSize: [value: ReadingFontSizeId]
   updateMeasure: [value: ReadingMeasureId]
   updateLineHeight: [value: ReadingLineHeightId]
+  updateParagraphGap: [value: ReadingParagraphGapId]
+  updatePageMargin: [value: ReadingPageMarginId]
   updateFontFamily: [value: ReadingFontFamilyId]
   updateTheme: [value: ReadingThemeChoice]
+  updateContrast: [value: ReadingContrastId]
   updateOutlinePosition: [value: ReadingOutlinePositionId]
   reset: []
   close: []
@@ -40,8 +49,19 @@ const emit = defineEmits<{
 const isDesktopOutlineViewport = shallowRef(false)
 const rootRef = useTemplateRef<HTMLElement>('root')
 const showOutlinePositionControl = computed(() => props.showOutlinePositionControl && isDesktopOutlineViewport.value)
+const fontSizeSliderValue = computed(() => {
+  const index = readingFontSizeOptions.findIndex(option => option.id === props.settings.fontSize)
+  return index === -1 ? defaultFontSizeIndex : index
+})
+const fontSizeOption = computed(() => readingFontSizeOptions[fontSizeSliderValue.value] ?? readingFontSizeOptions[defaultFontSizeIndex])
+const fontSizeValueText = computed(() => `字号 ${fontSizeOption.value?.tokenValue ?? '18px'}`)
+const fontSizeProgress = computed(() => {
+  const max = Math.max(readingFontSizeOptions.length - 1, 1)
+  return `${(fontSizeSliderValue.value / max) * 100}%`
+})
 
 let outlineViewportMediaQuery: MediaQueryList | undefined
+const defaultFontSizeIndex = Math.max(readingFontSizeOptions.findIndex(option => option.id === '18'), 0)
 
 function focusFirstPanelItem(): void {
   window.setTimeout(() => {
@@ -80,15 +100,21 @@ function onRadioKeydown<T extends string>(
   if (nextValue) {
     selectValue(nextValue)
     void nextTick(() => {
-      Array.from(rootRef.value?.querySelectorAll<HTMLElement>('[data-option-id]') ?? [])
+      Array.from((event.currentTarget as HTMLElement | null)?.querySelectorAll<HTMLElement>('[data-option-id]') ?? [])
         .find(element => element.dataset.optionId === nextValue)
         ?.focus()
     })
   }
 }
 
-function selectFontSize(value: ReadingFontSizeId): void {
-  emit('updateFontSize', value)
+function onFontSizeSliderInput(event: Event): void {
+  const slider = event.currentTarget as HTMLInputElement
+  const nextIndex = Number.parseInt(slider.value, 10)
+  const nextOption = readingFontSizeOptions[nextIndex]
+
+  if (nextOption && nextOption.id !== props.settings.fontSize) {
+    emit('updateFontSize', nextOption.id)
+  }
 }
 
 function selectMeasure(value: ReadingMeasureId): void {
@@ -99,12 +125,24 @@ function selectLineHeight(value: ReadingLineHeightId): void {
   emit('updateLineHeight', value)
 }
 
+function selectParagraphGap(value: ReadingParagraphGapId): void {
+  emit('updateParagraphGap', value)
+}
+
+function selectPageMargin(value: ReadingPageMarginId): void {
+  emit('updatePageMargin', value)
+}
+
 function selectFontFamily(value: ReadingFontFamilyId): void {
   emit('updateFontFamily', value)
 }
 
 function selectTheme(value: ReadingThemeChoice): void {
   emit('updateTheme', value)
+}
+
+function selectContrast(value: ReadingContrastId): void {
+  emit('updateContrast', value)
 }
 
 function selectOutlinePosition(value: ReadingOutlinePositionId): void {
@@ -179,28 +217,32 @@ function syncOutlineViewport(): void {
       </header>
 
       <fieldset class="reading-settings__field">
-        <legend class="reading-settings__legend">字号</legend>
-        <div
-          class="reading-settings__segments reading-settings__segments--font-size"
-          role="radiogroup"
+        <legend class="reading-settings__legend reading-settings__legend--range">字号</legend>
+        <div class="reading-settings__range-header">
+          <span class="reading-settings__range-note">滑块 · 8 档 snap</span>
+          <output class="reading-settings__range-value" for="reading-font-size-slider">
+            {{ fontSizeOption?.tokenValue }}
+          </output>
+        </div>
+        <input
+          id="reading-font-size-slider"
+          class="reading-settings__range"
+          type="range"
+          min="0"
+          :max="readingFontSizeOptions.length - 1"
+          step="1"
+          :value="fontSizeSliderValue"
           aria-label="字号"
-          @keydown="onRadioKeydown($event, readingFontSizeOptions, props.settings.fontSize, selectFontSize)"
+          :aria-valuetext="fontSizeValueText"
+          data-settings-item
+          :style="{ '--font-size-progress': fontSizeProgress }"
+          @input="onFontSizeSliderInput"
         >
-          <button
+        <div class="reading-settings__range-ticks" aria-hidden="true">
+          <span
             v-for="option in readingFontSizeOptions"
             :key="option.id"
-            class="reading-settings__segment reading-settings__segment--font-size"
-            type="button"
-            role="radio"
-            :aria-checked="props.settings.fontSize === option.id"
-            :aria-label="option.ariaLabel"
-            :data-option-id="option.id"
-            data-settings-item
-            :style="{ fontSize: option.tokenValue }"
-            @click="selectFontSize(option.id)"
-          >
-            {{ option.label }}
-          </button>
+          />
         </div>
       </fieldset>
 
@@ -255,49 +297,49 @@ function syncOutlineViewport(): void {
       </fieldset>
 
       <fieldset class="reading-settings__field">
-        <legend class="reading-settings__legend">主题</legend>
+        <legend class="reading-settings__legend">段间距</legend>
         <div
-          class="reading-settings__segments reading-settings__segments--theme"
+          class="reading-settings__segments"
           role="radiogroup"
-          aria-label="主题"
-          @keydown="onRadioKeydown($event, readingThemeOptions, props.settings.theme, selectTheme)"
+          aria-label="段间距"
+          @keydown="onRadioKeydown($event, readingParagraphGapOptions, props.settings.paragraphGap, selectParagraphGap)"
         >
           <button
-            v-for="option in readingThemeOptions"
+            v-for="option in readingParagraphGapOptions"
             :key="option.id"
             class="reading-settings__segment"
             type="button"
             role="radio"
-            :aria-checked="props.settings.theme === option.id"
+            :aria-checked="props.settings.paragraphGap === option.id"
             :aria-label="option.ariaLabel"
             :data-option-id="option.id"
             data-settings-item
-            @click="selectTheme(option.id)"
+            @click="selectParagraphGap(option.id)"
           >
             {{ option.label }}
           </button>
         </div>
       </fieldset>
 
-      <fieldset v-if="showOutlinePositionControl" class="reading-settings__field">
-        <legend class="reading-settings__legend">大纲位置</legend>
+      <fieldset class="reading-settings__field">
+        <legend class="reading-settings__legend">页边距</legend>
         <div
-          class="reading-settings__segments reading-settings__segments--outline-position"
+          class="reading-settings__segments"
           role="radiogroup"
-          aria-label="大纲位置"
-          @keydown="onRadioKeydown($event, readingOutlinePositionOptions, props.settings.outlinePosition, selectOutlinePosition)"
+          aria-label="页边距"
+          @keydown="onRadioKeydown($event, readingPageMarginOptions, props.settings.pageMargin, selectPageMargin)"
         >
           <button
-            v-for="option in readingOutlinePositionOptions"
+            v-for="option in readingPageMarginOptions"
             :key="option.id"
             class="reading-settings__segment"
             type="button"
             role="radio"
-            :aria-checked="props.settings.outlinePosition === option.id"
+            :aria-checked="props.settings.pageMargin === option.id"
             :aria-label="option.ariaLabel"
             :data-option-id="option.id"
             data-settings-item
-            @click="selectOutlinePosition(option.id)"
+            @click="selectPageMargin(option.id)"
           >
             {{ option.label }}
           </button>
@@ -329,25 +371,112 @@ function syncOutlineViewport(): void {
         </div>
       </fieldset>
 
-      <button
-        class="reading-settings__reset"
-        type="button"
-        :disabled="props.isDefault"
-        data-settings-item
-        @click="emit('reset')"
-      >
-        恢复默认
-      </button>
+      <fieldset class="reading-settings__field">
+        <legend class="reading-settings__legend">主题</legend>
+        <div
+          class="reading-settings__segments reading-settings__segments--theme"
+          role="radiogroup"
+          aria-label="主题"
+          @keydown="onRadioKeydown($event, readingThemeOptions, props.settings.theme, selectTheme)"
+        >
+          <button
+            v-for="option in readingThemeOptions"
+            :key="option.id"
+            class="reading-settings__segment"
+            type="button"
+            role="radio"
+            :aria-checked="props.settings.theme === option.id"
+            :aria-label="option.ariaLabel"
+            :data-option-id="option.id"
+            data-settings-item
+            @click="selectTheme(option.id)"
+          >
+            {{ option.label }}
+          </button>
+        </div>
+      </fieldset>
+
+      <fieldset class="reading-settings__field">
+        <legend class="reading-settings__legend">对比微调</legend>
+        <div
+          class="reading-settings__segments"
+          role="radiogroup"
+          aria-label="对比微调"
+          @keydown="onRadioKeydown($event, readingContrastOptions, props.settings.contrast, selectContrast)"
+        >
+          <button
+            v-for="option in readingContrastOptions"
+            :key="option.id"
+            class="reading-settings__segment"
+            type="button"
+            role="radio"
+            :aria-checked="props.settings.contrast === option.id"
+            :aria-label="option.ariaLabel"
+            :data-option-id="option.id"
+            data-settings-item
+            @click="selectContrast(option.id)"
+          >
+            {{ option.label }}
+          </button>
+        </div>
+      </fieldset>
+
+      <fieldset v-if="showOutlinePositionControl" class="reading-settings__field">
+        <legend class="reading-settings__legend">大纲位置</legend>
+        <div
+          class="reading-settings__segments reading-settings__segments--outline-position"
+          role="radiogroup"
+          aria-label="大纲位置"
+          @keydown="onRadioKeydown($event, readingOutlinePositionOptions, props.settings.outlinePosition, selectOutlinePosition)"
+        >
+          <button
+            v-for="option in readingOutlinePositionOptions"
+            :key="option.id"
+            class="reading-settings__segment"
+            type="button"
+            role="radio"
+            :aria-checked="props.settings.outlinePosition === option.id"
+            :aria-label="option.ariaLabel"
+            :data-option-id="option.id"
+            data-settings-item
+            @click="selectOutlinePosition(option.id)"
+          >
+            {{ option.label }}
+          </button>
+        </div>
+      </fieldset>
+
+      <footer class="reading-settings__actions">
+        <button
+          class="reading-settings__reset"
+          type="button"
+          :disabled="props.isDefault"
+          data-settings-item
+          @click="emit('reset')"
+        >
+          恢复默认
+        </button>
+        <button
+          class="reading-settings__done"
+          type="button"
+          data-settings-item
+          @click="emit('close')"
+        >
+          关闭
+        </button>
+      </footer>
     </div>
   </section>
 </template>
 
 <style scoped>
 .reading-settings {
-  inline-size: min(22rem, calc(100vw - 2rem));
+  inline-size: min(24rem, calc(100vw - 2rem));
 }
 
 .reading-settings__panel {
+  max-block-size: min(82vh, 44rem);
+  overflow-y: auto;
   padding: 0.8rem;
   border: 1px solid var(--reading-rule);
   border-radius: 18px;
@@ -415,14 +544,108 @@ function syncOutlineViewport(): void {
   font-size: 0.78rem;
 }
 
+.reading-settings__range-header {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.5rem;
+  align-items: baseline;
+  margin-block-end: 0.35rem;
+}
+
+.reading-settings__legend--range {
+  margin-block-end: 0;
+}
+
+.reading-settings__range-note,
+.reading-settings__range-value {
+  color: var(--reading-fg-muted);
+  font-size: 0.78rem;
+}
+
+.reading-settings__range-value {
+  color: var(--reading-accent);
+  font-weight: 700;
+}
+
+.reading-settings__range {
+  --font-size-progress: 42.857%;
+  display: block;
+  inline-size: 100%;
+  block-size: 44px;
+  margin: 0;
+  appearance: none;
+  background: transparent;
+  color: var(--reading-accent);
+  cursor: pointer;
+}
+
+.reading-settings__range::-webkit-slider-runnable-track {
+  block-size: 4px;
+  border-radius: 999px;
+  background:
+    linear-gradient(
+      to right,
+      var(--reading-accent) 0 var(--font-size-progress),
+      color-mix(in srgb, var(--reading-rule) 78%, var(--reading-bg)) var(--font-size-progress) 100%
+    );
+}
+
+.reading-settings__range::-moz-range-track {
+  block-size: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--reading-rule) 78%, var(--reading-bg));
+}
+
+.reading-settings__range::-moz-range-progress {
+  block-size: 4px;
+  border-radius: 999px;
+  background: var(--reading-accent);
+}
+
+.reading-settings__range::-webkit-slider-thumb {
+  appearance: none;
+  inline-size: 30px;
+  block-size: 30px;
+  margin-block-start: -13px;
+  border: 3px solid var(--reading-accent);
+  border-radius: 50%;
+  background: var(--reading-bg);
+  box-shadow: 0 4px 12px rgb(0 0 0 / 18%);
+}
+
+.reading-settings__range::-moz-range-thumb {
+  inline-size: 30px;
+  block-size: 30px;
+  border: 3px solid var(--reading-accent);
+  border-radius: 50%;
+  background: var(--reading-bg);
+  box-shadow: 0 4px 12px rgb(0 0 0 / 18%);
+}
+
+.reading-settings__range:focus-visible {
+  outline: 2px solid var(--reading-accent);
+  outline-offset: 4px;
+}
+
+.reading-settings__range-ticks {
+  display: flex;
+  justify-content: space-between;
+  padding-inline: 2px;
+  transform: translateY(-12px);
+  pointer-events: none;
+}
+
+.reading-settings__range-ticks > span {
+  inline-size: 2px;
+  block-size: 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--reading-fg-muted) 38%, transparent);
+}
+
 .reading-settings__segments {
   display: grid;
   grid-template-columns: repeat(var(--segment-count, 3), minmax(0, 1fr));
   gap: 0.35rem;
-}
-
-.reading-settings__segments--font-size {
-  --segment-count: 5;
 }
 
 .reading-settings__segments--theme {
@@ -434,7 +657,8 @@ function syncOutlineViewport(): void {
 }
 
 .reading-settings__segment,
-.reading-settings__reset {
+.reading-settings__reset,
+.reading-settings__done {
   min-block-size: 44px;
   border: 1px solid var(--reading-rule);
   border-radius: 12px;
@@ -449,16 +673,12 @@ function syncOutlineViewport(): void {
   overflow-wrap: anywhere;
 }
 
-.reading-settings__segment--font-size {
-  font-family: var(--reading-font-body);
-  line-height: 1;
-}
-
 .reading-settings__segment[aria-checked="true"] {
-  border-color: #b9a8ed;
-  background: #ece6fb;
-  color: #4a3f7a;
+  border-color: var(--reading-accent);
+  background: color-mix(in srgb, var(--reading-accent) 13%, var(--reading-bg));
+  color: var(--reading-fg);
   font-weight: 700;
+  box-shadow: inset 0 0 0 1px var(--reading-accent);
 }
 
 .reading-settings__segment:hover,
@@ -466,14 +686,35 @@ function syncOutlineViewport(): void {
 .reading-settings__close:hover,
 .reading-settings__close:focus-visible,
 .reading-settings__reset:hover,
-.reading-settings__reset:focus-visible {
+.reading-settings__reset:focus-visible,
+.reading-settings__done:hover,
+.reading-settings__done:focus-visible {
   border-color: var(--reading-accent);
 }
 
+.reading-settings__actions {
+  position: sticky;
+  inset-block-end: -0.8rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  margin: 1rem -0.8rem -0.8rem;
+  padding: 0.75rem 0.8rem 0.8rem;
+  border-block-start: 1px solid var(--reading-rule);
+  background: color-mix(in srgb, var(--reading-bg) 97%, transparent);
+  backdrop-filter: blur(12px);
+}
+
 .reading-settings__reset {
-  inline-size: 100%;
-  margin-block-start: 0.85rem;
   color: var(--reading-fg-muted);
+}
+
+.reading-settings__done {
+  min-inline-size: 5.2rem;
+  border-color: var(--reading-accent);
+  background: var(--reading-accent);
+  color: var(--reading-bg);
+  font-weight: 700;
 }
 
 .reading-settings__reset:disabled {
@@ -503,6 +744,12 @@ function syncOutlineViewport(): void {
     margin: 0 auto 0.7rem;
     border-radius: 999px;
     background: var(--reading-rule);
+  }
+
+  .reading-settings__actions {
+    inset-block-end: calc(-1 * max(1rem, calc(env(safe-area-inset-bottom) + 1rem)));
+    margin: 1rem -1rem calc(-1 * max(1rem, calc(env(safe-area-inset-bottom) + 1rem)));
+    padding: 0.75rem 1rem max(1rem, calc(env(safe-area-inset-bottom) + 1rem));
   }
 }
 

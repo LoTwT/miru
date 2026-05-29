@@ -16,6 +16,7 @@
   --reading-measure: 65ch;
   --reading-font-size: 18px;
   --reading-line-height: 1.7;
+  --reading-page-margin: clamp(1.25rem, 4vw, 4rem);
   --reading-font-body: Newsreader, Georgia, serif;
   --reading-font-heading: Newsreader, Georgia, serif;
   --reading-font-mono: "Space Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -30,6 +31,16 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
+}
+
+:root[data-reading-contrast="soft"] {
+  --reading-fg: #4a453d;
+  --reading-fg-muted: #71695f;
+}
+
+:root[data-reading-contrast="strong"] {
+  --reading-fg: #17130f;
+  --reading-fg-muted: #4b453d;
 }
 
 body {
@@ -350,6 +361,16 @@ a:focus-visible {
     --reading-code-bg: #22201e;
   }
 
+  :root[data-reading-contrast="soft"]:not([data-reading-theme="light"]):not([data-reading-theme="sepia"]) {
+    --reading-fg: #cfc5b8;
+    --reading-fg-muted: #9f9587;
+  }
+
+  :root[data-reading-contrast="strong"]:not([data-reading-theme="light"]):not([data-reading-theme="sepia"]) {
+    --reading-fg: #fff8ed;
+    --reading-fg-muted: #cdc2b3;
+  }
+
   .reader-surface__content .shiki,
   .reader-surface__content .shiki span {
     color: var(--shiki-dark) !important;
@@ -363,6 +384,16 @@ a:focus-visible {
 :root[data-reading-theme="light"],
 :root[data-reading-theme="sepia"] {
   color-scheme: light;
+}
+
+:root[data-reading-theme="sepia"][data-reading-contrast="soft"] {
+  --reading-fg: #66553c;
+  --reading-fg-muted: #705f45;
+}
+
+:root[data-reading-theme="sepia"][data-reading-contrast="strong"] {
+  --reading-fg: #332817;
+  --reading-fg-muted: #55462e;
 }
 
 :root[data-reading-theme="dark"] .reader-surface__content .shiki,
@@ -431,6 +462,7 @@ a:focus-visible {
     --reading-code-fg: #161616 !important;
     --reading-code-bg: #f6f6f6 !important;
     --reading-measure: 100% !important;
+    --reading-page-margin: 0 !important;
   }
 
   html,
