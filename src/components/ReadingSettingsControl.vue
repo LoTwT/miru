@@ -47,8 +47,16 @@ const emit = defineEmits<{
 }>()
 
 const isDesktopOutlineViewport = shallowRef(false)
+const activePanel = shallowRef<'main' | 'presets'>('main')
 const rootRef = useTemplateRef<HTMLElement>('root')
 const showOutlinePositionControl = computed(() => props.showOutlinePositionControl && isDesktopOutlineViewport.value)
+const settingsPanelTitle = computed(() => activePanel.value === 'main' ? '阅读设置' : '管理预设')
+const settingsPanelCaption = computed(() =>
+  activePanel.value === 'main'
+    ? '即时预览当前正文'
+    : '外观快照',
+)
+const currentPresetName = computed(() => props.isDefault ? '默认' : '自定义（未保存）')
 const fontSizeSliderValue = computed(() => {
   const index = readingFontSizeOptions.findIndex(option => option.id === props.settings.fontSize)
   return index === -1 ? defaultFontSizeIndex : index
@@ -74,6 +82,21 @@ function onPanelKeydown(event: KeyboardEvent): void {
     event.preventDefault()
     emit('close')
   }
+}
+
+function openPanel(panel: typeof activePanel.value): void {
+  activePanel.value = panel
+  focusFirstPanelItem()
+}
+
+function returnToMainPanel(): void {
+  activePanel.value = 'main'
+  focusFirstPanelItem()
+}
+
+function applyDefaultPreset(): void {
+  emit('reset')
+  returnToMainPanel()
 }
 
 function onRadioKeydown<T extends string>(
@@ -151,6 +174,7 @@ function selectOutlinePosition(value: ReadingOutlinePositionId): void {
 
 watch(() => props.isOpen, async (value) => {
   if (!value) {
+    activePanel.value = 'main'
     return
   }
 
@@ -198,12 +222,22 @@ function syncOutlineViewport(): void {
       <div class="reading-settings__handle" aria-hidden="true" />
 
       <header class="reading-settings__header">
+        <button
+          v-if="activePanel !== 'main'"
+          class="reading-settings__back"
+          type="button"
+          aria-label="返回阅读设置"
+          data-settings-item
+          @click="returnToMainPanel"
+        >
+          ←
+        </button>
         <div>
           <h2 id="reading-settings-title" class="reading-settings__title">
-            阅读设置
+            {{ settingsPanelTitle }}
           </h2>
           <p class="reading-settings__caption">
-            即时预览当前正文
+            {{ settingsPanelCaption }}
           </p>
         </div>
         <button
@@ -216,235 +250,307 @@ function syncOutlineViewport(): void {
         </button>
       </header>
 
-      <fieldset class="reading-settings__field">
-        <legend class="reading-settings__legend reading-settings__legend--range">字号</legend>
-        <div class="reading-settings__range-header">
-          <span class="reading-settings__range-note">滑块 · 8 档 snap</span>
-          <output class="reading-settings__range-value" for="reading-font-size-slider">
-            {{ fontSizeOption?.tokenValue }}
-          </output>
-        </div>
-        <input
-          id="reading-font-size-slider"
-          class="reading-settings__range"
-          type="range"
-          min="0"
-          :max="readingFontSizeOptions.length - 1"
-          step="1"
-          :value="fontSizeSliderValue"
-          aria-label="字号"
-          :aria-valuetext="fontSizeValueText"
-          data-settings-item
-          :style="{ '--font-size-progress': fontSizeProgress }"
-          @input="onFontSizeSliderInput"
-        >
-        <div class="reading-settings__range-ticks" aria-hidden="true">
-          <span
-            v-for="option in readingFontSizeOptions"
-            :key="option.id"
-          />
-        </div>
-      </fieldset>
+      <div
+        v-if="activePanel === 'main'"
+        class="reading-settings__content"
+        data-testid="reading-settings-main-panel"
+      >
+        <section class="reading-settings__group" aria-labelledby="reading-settings-group-type">
+          <h3 id="reading-settings-group-type" class="reading-settings__group-title">
+            文字
+          </h3>
 
-      <fieldset class="reading-settings__field">
-        <legend class="reading-settings__legend">行宽</legend>
-        <div
-          class="reading-settings__segments"
-          role="radiogroup"
-          aria-label="行宽"
-          @keydown="onRadioKeydown($event, readingMeasureOptions, props.settings.measure, selectMeasure)"
-        >
-          <button
-            v-for="option in readingMeasureOptions"
-            :key="option.id"
-            class="reading-settings__segment"
-            type="button"
-            role="radio"
-            :aria-checked="props.settings.measure === option.id"
-            :aria-label="option.ariaLabel"
-            :data-option-id="option.id"
-            data-settings-item
-            @click="selectMeasure(option.id)"
-          >
-            {{ option.label }}
-          </button>
-        </div>
-      </fieldset>
+          <fieldset class="reading-settings__field">
+            <legend class="reading-settings__legend">正文字体</legend>
+            <div
+              class="reading-settings__segments"
+              role="radiogroup"
+              aria-label="正文字体"
+              @keydown="onRadioKeydown($event, readingFontFamilyOptions, props.settings.fontFamily, selectFontFamily)"
+            >
+              <button
+                v-for="option in readingFontFamilyOptions"
+                :key="option.id"
+                class="reading-settings__segment"
+                type="button"
+                role="radio"
+                :aria-checked="props.settings.fontFamily === option.id"
+                :aria-label="option.ariaLabel"
+                :data-option-id="option.id"
+                data-settings-item
+                @click="selectFontFamily(option.id)"
+              >
+                {{ option.label }}
+              </button>
+            </div>
+          </fieldset>
 
-      <fieldset class="reading-settings__field">
-        <legend class="reading-settings__legend">行距</legend>
-        <div
-          class="reading-settings__segments"
-          role="radiogroup"
-          aria-label="行距"
-          @keydown="onRadioKeydown($event, readingLineHeightOptions, props.settings.lineHeight, selectLineHeight)"
-        >
-          <button
-            v-for="option in readingLineHeightOptions"
-            :key="option.id"
-            class="reading-settings__segment"
-            type="button"
-            role="radio"
-            :aria-checked="props.settings.lineHeight === option.id"
-            :aria-label="option.ariaLabel"
-            :data-option-id="option.id"
-            data-settings-item
-            @click="selectLineHeight(option.id)"
-          >
-            {{ option.label }}
-          </button>
-        </div>
-      </fieldset>
+          <fieldset class="reading-settings__field">
+            <legend class="reading-settings__legend reading-settings__legend--range">字号</legend>
+            <div class="reading-settings__range-header">
+              <span class="reading-settings__range-note">滑块 · 8 档 snap</span>
+              <output class="reading-settings__range-value" for="reading-font-size-slider">
+                {{ fontSizeOption?.tokenValue }}
+              </output>
+            </div>
+            <input
+              id="reading-font-size-slider"
+              class="reading-settings__range"
+              type="range"
+              min="0"
+              :max="readingFontSizeOptions.length - 1"
+              step="1"
+              :value="fontSizeSliderValue"
+              aria-label="字号"
+              :aria-valuetext="fontSizeValueText"
+              data-settings-item
+              :style="{ '--font-size-progress': fontSizeProgress }"
+              @input="onFontSizeSliderInput"
+            >
+            <div class="reading-settings__range-ticks" aria-hidden="true">
+              <span
+                v-for="option in readingFontSizeOptions"
+                :key="option.id"
+              />
+            </div>
+          </fieldset>
 
-      <fieldset class="reading-settings__field">
-        <legend class="reading-settings__legend">段间距</legend>
-        <div
-          class="reading-settings__segments"
-          role="radiogroup"
-          aria-label="段间距"
-          @keydown="onRadioKeydown($event, readingParagraphGapOptions, props.settings.paragraphGap, selectParagraphGap)"
-        >
-          <button
-            v-for="option in readingParagraphGapOptions"
-            :key="option.id"
-            class="reading-settings__segment"
-            type="button"
-            role="radio"
-            :aria-checked="props.settings.paragraphGap === option.id"
-            :aria-label="option.ariaLabel"
-            :data-option-id="option.id"
-            data-settings-item
-            @click="selectParagraphGap(option.id)"
-          >
-            {{ option.label }}
-          </button>
-        </div>
-      </fieldset>
+          <fieldset class="reading-settings__field">
+            <legend class="reading-settings__legend">行距</legend>
+            <div
+              class="reading-settings__segments"
+              role="radiogroup"
+              aria-label="行距"
+              @keydown="onRadioKeydown($event, readingLineHeightOptions, props.settings.lineHeight, selectLineHeight)"
+            >
+              <button
+                v-for="option in readingLineHeightOptions"
+                :key="option.id"
+                class="reading-settings__segment"
+                type="button"
+                role="radio"
+                :aria-checked="props.settings.lineHeight === option.id"
+                :aria-label="option.ariaLabel"
+                :data-option-id="option.id"
+                data-settings-item
+                @click="selectLineHeight(option.id)"
+              >
+                {{ option.label }}
+              </button>
+            </div>
+          </fieldset>
+        </section>
 
-      <fieldset class="reading-settings__field">
-        <legend class="reading-settings__legend">页边距</legend>
-        <div
-          class="reading-settings__segments"
-          role="radiogroup"
-          aria-label="页边距"
-          @keydown="onRadioKeydown($event, readingPageMarginOptions, props.settings.pageMargin, selectPageMargin)"
-        >
-          <button
-            v-for="option in readingPageMarginOptions"
-            :key="option.id"
-            class="reading-settings__segment"
-            type="button"
-            role="radio"
-            :aria-checked="props.settings.pageMargin === option.id"
-            :aria-label="option.ariaLabel"
-            :data-option-id="option.id"
-            data-settings-item
-            @click="selectPageMargin(option.id)"
-          >
-            {{ option.label }}
-          </button>
-        </div>
-      </fieldset>
+        <section class="reading-settings__group" aria-labelledby="reading-settings-group-layout">
+          <h3 id="reading-settings-group-layout" class="reading-settings__group-title">
+            版面
+          </h3>
 
-      <fieldset class="reading-settings__field">
-        <legend class="reading-settings__legend">正文字体</legend>
-        <div
-          class="reading-settings__segments"
-          role="radiogroup"
-          aria-label="正文字体"
-          @keydown="onRadioKeydown($event, readingFontFamilyOptions, props.settings.fontFamily, selectFontFamily)"
-        >
-          <button
-            v-for="option in readingFontFamilyOptions"
-            :key="option.id"
-            class="reading-settings__segment"
-            type="button"
-            role="radio"
-            :aria-checked="props.settings.fontFamily === option.id"
-            :aria-label="option.ariaLabel"
-            :data-option-id="option.id"
-            data-settings-item
-            @click="selectFontFamily(option.id)"
-          >
-            {{ option.label }}
-          </button>
-        </div>
-      </fieldset>
+          <fieldset class="reading-settings__field">
+            <legend class="reading-settings__legend">行宽</legend>
+            <div
+              class="reading-settings__segments"
+              role="radiogroup"
+              aria-label="行宽"
+              @keydown="onRadioKeydown($event, readingMeasureOptions, props.settings.measure, selectMeasure)"
+            >
+              <button
+                v-for="option in readingMeasureOptions"
+                :key="option.id"
+                class="reading-settings__segment"
+                type="button"
+                role="radio"
+                :aria-checked="props.settings.measure === option.id"
+                :aria-label="option.ariaLabel"
+                :data-option-id="option.id"
+                data-settings-item
+                @click="selectMeasure(option.id)"
+              >
+                {{ option.label }}
+              </button>
+            </div>
+          </fieldset>
 
-      <fieldset class="reading-settings__field">
-        <legend class="reading-settings__legend">主题</legend>
-        <div
-          class="reading-settings__segments reading-settings__segments--theme"
-          role="radiogroup"
-          aria-label="主题"
-          @keydown="onRadioKeydown($event, readingThemeOptions, props.settings.theme, selectTheme)"
-        >
-          <button
-            v-for="option in readingThemeOptions"
-            :key="option.id"
-            class="reading-settings__segment"
-            type="button"
-            role="radio"
-            :aria-checked="props.settings.theme === option.id"
-            :aria-label="option.ariaLabel"
-            :data-option-id="option.id"
-            data-settings-item
-            @click="selectTheme(option.id)"
-          >
-            {{ option.label }}
-          </button>
-        </div>
-      </fieldset>
+          <fieldset class="reading-settings__field">
+            <legend class="reading-settings__legend">段间距</legend>
+            <div
+              class="reading-settings__segments"
+              role="radiogroup"
+              aria-label="段间距"
+              @keydown="onRadioKeydown($event, readingParagraphGapOptions, props.settings.paragraphGap, selectParagraphGap)"
+            >
+              <button
+                v-for="option in readingParagraphGapOptions"
+                :key="option.id"
+                class="reading-settings__segment"
+                type="button"
+                role="radio"
+                :aria-checked="props.settings.paragraphGap === option.id"
+                :aria-label="option.ariaLabel"
+                :data-option-id="option.id"
+                data-settings-item
+                @click="selectParagraphGap(option.id)"
+              >
+                {{ option.label }}
+              </button>
+            </div>
+          </fieldset>
 
-      <fieldset class="reading-settings__field">
-        <legend class="reading-settings__legend">对比微调</legend>
-        <div
-          class="reading-settings__segments"
-          role="radiogroup"
-          aria-label="对比微调"
-          @keydown="onRadioKeydown($event, readingContrastOptions, props.settings.contrast, selectContrast)"
-        >
-          <button
-            v-for="option in readingContrastOptions"
-            :key="option.id"
-            class="reading-settings__segment"
-            type="button"
-            role="radio"
-            :aria-checked="props.settings.contrast === option.id"
-            :aria-label="option.ariaLabel"
-            :data-option-id="option.id"
-            data-settings-item
-            @click="selectContrast(option.id)"
-          >
-            {{ option.label }}
-          </button>
-        </div>
-      </fieldset>
+          <fieldset class="reading-settings__field">
+            <legend class="reading-settings__legend">页边距</legend>
+            <div
+              class="reading-settings__segments"
+              role="radiogroup"
+              aria-label="页边距"
+              @keydown="onRadioKeydown($event, readingPageMarginOptions, props.settings.pageMargin, selectPageMargin)"
+            >
+              <button
+                v-for="option in readingPageMarginOptions"
+                :key="option.id"
+                class="reading-settings__segment"
+                type="button"
+                role="radio"
+                :aria-checked="props.settings.pageMargin === option.id"
+                :aria-label="option.ariaLabel"
+                :data-option-id="option.id"
+                data-settings-item
+                @click="selectPageMargin(option.id)"
+              >
+                {{ option.label }}
+              </button>
+            </div>
+          </fieldset>
 
-      <fieldset v-if="showOutlinePositionControl" class="reading-settings__field">
-        <legend class="reading-settings__legend">大纲位置</legend>
-        <div
-          class="reading-settings__segments reading-settings__segments--outline-position"
-          role="radiogroup"
-          aria-label="大纲位置"
-          @keydown="onRadioKeydown($event, readingOutlinePositionOptions, props.settings.outlinePosition, selectOutlinePosition)"
-        >
+          <fieldset v-if="showOutlinePositionControl" class="reading-settings__field">
+            <legend class="reading-settings__legend">大纲位置</legend>
+            <div
+              class="reading-settings__segments reading-settings__segments--outline-position"
+              role="radiogroup"
+              aria-label="大纲位置"
+              @keydown="onRadioKeydown($event, readingOutlinePositionOptions, props.settings.outlinePosition, selectOutlinePosition)"
+            >
+              <button
+                v-for="option in readingOutlinePositionOptions"
+                :key="option.id"
+                class="reading-settings__segment"
+                type="button"
+                role="radio"
+                :aria-checked="props.settings.outlinePosition === option.id"
+                :aria-label="option.ariaLabel"
+                :data-option-id="option.id"
+                data-settings-item
+                @click="selectOutlinePosition(option.id)"
+              >
+                {{ option.label }}
+              </button>
+            </div>
+          </fieldset>
+        </section>
+
+        <section class="reading-settings__group" aria-labelledby="reading-settings-group-theme">
+          <h3 id="reading-settings-group-theme" class="reading-settings__group-title">
+            主题
+          </h3>
+
+          <fieldset class="reading-settings__field">
+            <legend class="reading-settings__legend">主题</legend>
+            <div
+              class="reading-settings__segments reading-settings__segments--theme"
+              role="radiogroup"
+              aria-label="主题"
+              @keydown="onRadioKeydown($event, readingThemeOptions, props.settings.theme, selectTheme)"
+            >
+              <button
+                v-for="option in readingThemeOptions"
+                :key="option.id"
+                class="reading-settings__segment"
+                type="button"
+                role="radio"
+                :aria-checked="props.settings.theme === option.id"
+                :aria-label="option.ariaLabel"
+                :data-option-id="option.id"
+                data-settings-item
+                @click="selectTheme(option.id)"
+              >
+                {{ option.label }}
+              </button>
+            </div>
+          </fieldset>
+
+          <fieldset class="reading-settings__field">
+            <legend class="reading-settings__legend">对比微调</legend>
+            <div
+              class="reading-settings__segments"
+              role="radiogroup"
+              aria-label="对比微调"
+              @keydown="onRadioKeydown($event, readingContrastOptions, props.settings.contrast, selectContrast)"
+            >
+              <button
+                v-for="option in readingContrastOptions"
+                :key="option.id"
+                class="reading-settings__segment"
+                type="button"
+                role="radio"
+                :aria-checked="props.settings.contrast === option.id"
+                :aria-label="option.ariaLabel"
+                :data-option-id="option.id"
+                data-settings-item
+                @click="selectContrast(option.id)"
+              >
+                {{ option.label }}
+              </button>
+            </div>
+          </fieldset>
+        </section>
+
+        <section class="reading-settings__group" aria-labelledby="reading-settings-group-presets">
+          <h3 id="reading-settings-group-presets" class="reading-settings__group-title">
+            预设
+          </h3>
+          <div class="reading-settings__summary-row">
+            <span class="reading-settings__summary-label">当前</span>
+            <strong>{{ currentPresetName }}</strong>
+          </div>
           <button
-            v-for="option in readingOutlinePositionOptions"
-            :key="option.id"
-            class="reading-settings__segment"
+            class="reading-settings__drilldown"
             type="button"
-            role="radio"
-            :aria-checked="props.settings.outlinePosition === option.id"
-            :aria-label="option.ariaLabel"
-            :data-option-id="option.id"
             data-settings-item
-            @click="selectOutlinePosition(option.id)"
+            aria-controls="reading-settings-presets-panel"
+            @click="openPanel('presets')"
           >
-            {{ option.label }}
+            <span>管理预设</span>
+            <span aria-hidden="true">→</span>
           </button>
-        </div>
-      </fieldset>
+        </section>
+      </div>
+
+      <div
+        v-else-if="activePanel === 'presets'"
+        id="reading-settings-presets-panel"
+        class="reading-settings__content"
+        data-testid="reading-settings-presets-panel"
+      >
+        <section class="reading-settings__group reading-settings__group--subpanel" aria-labelledby="reading-settings-presets-title">
+          <h3 id="reading-settings-presets-title" class="reading-settings__group-title">
+            内置预设
+          </h3>
+          <button
+            class="reading-settings__preset-item"
+            type="button"
+            data-settings-item
+            @click="applyDefaultPreset"
+          >
+            <span>
+              <strong>默认</strong>
+              <span>Newsreader · 标准版面 · 跟随系统</span>
+            </span>
+            <span aria-hidden="true">应用</span>
+          </button>
+          <p class="reading-settings__subpanel-note">
+            当前: {{ currentPresetName }}
+          </p>
+        </section>
+      </div>
 
       <footer class="reading-settings__actions">
         <button
@@ -497,6 +603,11 @@ function syncOutlineViewport(): void {
   margin-block-end: 0.8rem;
 }
 
+.reading-settings__header > div {
+  min-inline-size: 0;
+  flex: 1;
+}
+
 .reading-settings__title,
 .reading-settings__caption,
 .reading-settings__field {
@@ -516,6 +627,7 @@ function syncOutlineViewport(): void {
   font-size: 0.82rem;
 }
 
+.reading-settings__back,
 .reading-settings__close {
   display: grid;
   place-items: center;
@@ -527,6 +639,34 @@ function syncOutlineViewport(): void {
   color: var(--reading-fg-muted);
   cursor: pointer;
   font: inherit;
+}
+
+.reading-settings__back {
+  border-radius: 14px;
+}
+
+.reading-settings__content {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.reading-settings__group {
+  padding-block-start: 0.72rem;
+  border-block-start: 1px solid color-mix(in srgb, var(--reading-rule) 72%, transparent);
+}
+
+.reading-settings__group:first-child {
+  padding-block-start: 0;
+  border-block-start: 0;
+}
+
+.reading-settings__group-title {
+  margin: 0 0 0.58rem;
+  color: var(--reading-fg-muted);
+  font-family: var(--reading-font-code);
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.2;
 }
 
 .reading-settings__field {
@@ -657,6 +797,8 @@ function syncOutlineViewport(): void {
 }
 
 .reading-settings__segment,
+.reading-settings__drilldown,
+.reading-settings__preset-item,
 .reading-settings__reset,
 .reading-settings__done {
   min-block-size: 44px;
@@ -673,6 +815,47 @@ function syncOutlineViewport(): void {
   overflow-wrap: anywhere;
 }
 
+.reading-settings__summary-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-block-end: 0.45rem;
+  color: var(--reading-fg);
+  font-size: 0.9rem;
+}
+
+.reading-settings__summary-label,
+.reading-settings__subpanel-note {
+  color: var(--reading-fg-muted);
+  font-size: 0.82rem;
+}
+
+.reading-settings__drilldown,
+.reading-settings__preset-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  inline-size: 100%;
+  padding: 0.45rem 0.65rem;
+  text-align: start;
+}
+
+.reading-settings__preset-item > span:first-child {
+  display: grid;
+  gap: 0.18rem;
+}
+
+.reading-settings__preset-item > span:first-child > span {
+  color: var(--reading-fg-muted);
+  font-size: 0.78rem;
+}
+
+.reading-settings__subpanel-note {
+  margin: 0.65rem 0 0;
+}
+
 .reading-settings__segment[aria-checked="true"] {
   border-color: var(--reading-accent);
   background: color-mix(in srgb, var(--reading-accent) 13%, var(--reading-bg));
@@ -683,6 +866,12 @@ function syncOutlineViewport(): void {
 
 .reading-settings__segment:hover,
 .reading-settings__segment:focus-visible,
+.reading-settings__drilldown:hover,
+.reading-settings__drilldown:focus-visible,
+.reading-settings__preset-item:hover,
+.reading-settings__preset-item:focus-visible,
+.reading-settings__back:hover,
+.reading-settings__back:focus-visible,
 .reading-settings__close:hover,
 .reading-settings__close:focus-visible,
 .reading-settings__reset:hover,
