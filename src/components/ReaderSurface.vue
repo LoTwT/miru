@@ -145,6 +145,10 @@ function syncActiveHeading(): void {
     return
   }
 
+  if (isPageScrollLocked()) {
+    return
+  }
+
   const visibleHeadings = outlineItems.value
     .map(item => ({ id: item.id, heading: findHeadingById(item.id) }))
     .filter((entry): entry is { id: string, heading: HTMLElement } =>
@@ -215,6 +219,10 @@ function updateHash(id: string): void {
 
 function prefersReducedMotion(): boolean {
   return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+}
+
+function isPageScrollLocked(): boolean {
+  return document.body.style.position === 'fixed' && document.body.style.top.startsWith('-')
 }
 </script>
 

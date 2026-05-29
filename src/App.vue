@@ -20,7 +20,7 @@ import type { ReaderDocument, RemoteImageMode } from '@/types/reader'
 import type { ReaderOutlineItem } from '@/features/reader/outlineNavigation'
 
 type AppMode = 'reader' | 'library' | 'pdf'
-type CommandSurfaceId = 'actions' | 'settings'
+type CommandSurfaceId = 'actions' | 'outline' | 'settings'
 
 const documentState = reactive<ReaderDocument>({
   source: 'sample',
@@ -41,9 +41,11 @@ const openSurfaceId = shallowRef<CommandSurfaceId | null>(null)
 const liveStatus = shallowRef('')
 const outlineItems = shallowRef<ReaderOutlineItem[]>([])
 const activeOutlineId = shallowRef('')
+const isNarrowOutlineViewport = shallowRef(false)
 const topBarRef = useTemplateRef<HTMLElement>('topBar')
 const commandSurfaceRef = useTemplateRef<HTMLElement>('commandSurface')
 const actionsButtonRef = useTemplateRef<HTMLButtonElement>('actionsButton')
+const outlineButtonRef = useTemplateRef<HTMLButtonElement>('outlineButton')
 const settingsButtonRef = useTemplateRef<HTMLButtonElement>('settingsButton')
 const readerRef = useTemplateRef<InstanceType<typeof ReaderSurface>>('reader')
 const pdfViewerRef = useTemplateRef<InstanceType<typeof PdfViewer>>('pdfViewer')
@@ -60,6 +62,9 @@ let pageScrollLock: {
   htmlOverscrollBehavior: string
   scrollY: number
 } | null = null
+let outlineViewportMediaQuery: MediaQueryList | undefined
+let systemDarkThemeMediaQuery: MediaQueryList | undefined
+let reducedMotionMediaQuery: MediaQueryList | undefined
 
 const { error, isFetchingUrl, loadFromClipboard, loadFromFile, loadFromText, loadFromUrl } = useDocumentInput({
   onDocument(document) {
@@ -77,7 +82,18 @@ const rendered = useRenderedMarkdown({
 
 const status = computed(() => rendered.error.value ?? error.value?.detail ?? inputMenuStatus.value ?? '')
 const isActionsSurfaceOpen = computed(() => openSurfaceId.value === 'actions')
+const isOutlineSurfaceOpen = computed(() => openSurfaceId.value === 'outline')
 const isSettingsSurfaceOpen = computed(() => openSurfaceId.value === 'settings')
+const hasReaderOutline = computed(() => appMode.value === 'reader' && outlineItems.value.length > 0)
+const shouldRenderOutlineRail = computed(() => hasReaderOutline.value && !isNarrowOutlineViewport.value)
+const shouldShowOutlineCommand = computed(() => hasReaderOutline.value && isNarrowOutlineViewport.value)
+const isSystemDarkTheme = shallowRef(false)
+const isReducedMotion = shallowRef(false)
+const shouldUseDarkCommandScrim = computed(() =>
+  readingSettings.state.theme === 'dark'
+  || (readingSettings.state.theme === 'system' && isSystemDarkTheme.value),
+)
+const shouldAnimateCommandScrim = computed(() => !isReducedMotion.value)
 const activeDocumentTitle = computed(() => {
   if (appMode.value === 'library') {
     return '文库'
@@ -104,19 +120,37 @@ watch(isFetchingUrl, (value) => {
 })
 
 watch(openSurfaceId, (value) => {
-  setPageScrollLocked(value !== null)
+  setPageScrollLocked(shouldLockPageForSurface(value))
+})
+
+watch([hasReaderOutline, isNarrowOutlineViewport], () => {
+  if (!shouldShowOutlineCommand.value && openSurfaceId.value === 'outline') {
+    closeSurface()
+  }
 })
 
 onMounted(async () => {
   await loadDefaultReadingFonts()
   readingSettings.applyCurrent()
   await refreshLibraryEntries()
+  outlineViewportMediaQuery = window.matchMedia('(max-width: 1099px)')
+  syncOutlineViewport()
+  outlineViewportMediaQuery.addEventListener('change', syncOutlineViewport)
+  systemDarkThemeMediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
+  syncSystemDarkTheme()
+  systemDarkThemeMediaQuery.addEventListener('change', syncSystemDarkTheme)
+  reducedMotionMediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
+  syncReducedMotion()
+  reducedMotionMediaQuery.addEventListener('change', syncReducedMotion)
   window.addEventListener('scroll', onWindowScroll, { passive: true })
   document.addEventListener('pointerdown', onDocumentPointerDown)
 })
 
 onUnmounted(() => {
   window.clearTimeout(positionSaveTimer)
+  outlineViewportMediaQuery?.removeEventListener('change', syncOutlineViewport)
+  systemDarkThemeMediaQuery?.removeEventListener('change', syncSystemDarkTheme)
+  reducedMotionMediaQuery?.removeEventListener('change', syncReducedMotion)
   window.removeEventListener('scroll', onWindowScroll)
   document.removeEventListener('pointerdown', onDocumentPointerDown)
   setPageScrollLocked(false)
@@ -179,7 +213,7 @@ function toggleSurface(surfaceId: CommandSurfaceId): void {
 
 function openSurface(surfaceId: CommandSurfaceId): void {
   openSurfaceId.value = surfaceId
-  setPageScrollLocked(true)
+  setPageScrollLocked(shouldLockPageForSurface(surfaceId))
 }
 
 function setActionsSurfaceOpen(value: boolean): void {
@@ -202,9 +236,17 @@ function closeSurface(options: { restoreFocus?: boolean, previousSurfaceId?: Com
   }
 }
 
+function closeOutlineSurface(options: { restoreFocus?: boolean } = {}): void {
+  closeSurface({ restoreFocus: options.restoreFocus, previousSurfaceId: 'outline' })
+}
+
 function getSurfaceTrigger(surfaceId: CommandSurfaceId | null): HTMLButtonElement | null {
   if (surfaceId === 'actions') {
     return actionsButtonRef.value
+  }
+
+  if (surfaceId === 'outline') {
+    return outlineButtonRef.value
   }
 
   if (surfaceId === 'settings') {
@@ -214,11 +256,19 @@ function getSurfaceTrigger(surfaceId: CommandSurfaceId | null): HTMLButtonElemen
   return null
 }
 
-function setPageScrollLocked(isLocked: boolean): void {
-  if (isLocked && !window.matchMedia('(max-width: 640px)').matches) {
-    return
+function shouldLockPageForSurface(surfaceId: CommandSurfaceId | null): boolean {
+  if (!surfaceId) {
+    return false
   }
 
+  if (surfaceId === 'outline') {
+    return window.matchMedia('(max-width: 1099px)').matches
+  }
+
+  return window.matchMedia('(max-width: 640px)').matches
+}
+
+function setPageScrollLocked(isLocked: boolean): void {
   if (isLocked && !pageScrollLock) {
     const body = document.body
     const root = document.documentElement
@@ -260,6 +310,25 @@ function setPageScrollLocked(isLocked: boolean): void {
     pageScrollLock = null
     window.scrollTo({ top: scrollY, behavior: 'auto' })
   }
+}
+
+function syncOutlineViewport(): void {
+  isNarrowOutlineViewport.value = outlineViewportMediaQuery?.matches ?? false
+
+  if (openSurfaceId.value === 'outline' && !shouldShowOutlineCommand.value) {
+    closeSurface()
+    return
+  }
+
+  setPageScrollLocked(shouldLockPageForSurface(openSurfaceId.value))
+}
+
+function syncSystemDarkTheme(): void {
+  isSystemDarkTheme.value = systemDarkThemeMediaQuery?.matches ?? false
+}
+
+function syncReducedMotion(): void {
+  isReducedMotion.value = reducedMotionMediaQuery?.matches ?? false
 }
 
 function onDocumentPointerDown(event: PointerEvent): void {
@@ -719,6 +788,23 @@ function focusLibraryView(): void {
       </button>
       <div class="app-shell__command-actions" aria-label="阅读命令">
         <button
+          v-if="shouldShowOutlineCommand"
+          ref="outlineButton"
+          class="app-shell__command-button app-shell__command-button--outline"
+          :class="{ 'app-shell__command-button--active': isOutlineSurfaceOpen }"
+          type="button"
+          aria-label="文档大纲"
+          :aria-expanded="isOutlineSurfaceOpen"
+          aria-controls="reader-outline-panel"
+          data-testid="reader-outline-button"
+          @click="toggleSurface('outline')"
+          @keydown.escape.prevent="closeSurface({ restoreFocus: true })"
+        >
+          <svg class="app-shell__outline-icon" viewBox="0 0 18 18" aria-hidden="true" focusable="false">
+            <path d="M4 5h10M4 9h10M4 13h10" />
+          </svg>
+        </button>
+        <button
           v-if="appMode === 'reader'"
           ref="settingsButton"
           class="app-shell__command-button"
@@ -786,8 +872,11 @@ function focusLibraryView(): void {
       />
 
       <ReaderOutlineNavigation
+        v-if="shouldRenderOutlineRail"
+        mode="rail"
         :items="outlineItems"
         :active-id="activeOutlineId"
+        :is-open="false"
         :position="readingSettings.state.outlinePosition"
         @navigate="navigateToOutlineItem"
       />
@@ -801,9 +890,21 @@ function focusLibraryView(): void {
       v-if="openSurfaceId"
       ref="commandSurface"
       class="app-shell__command-surface"
+      :class="`app-shell__command-surface--${openSurfaceId}`"
       data-command-surface="true"
       @keydown.capture="onCommandSurfaceKeydown"
     >
+      <div
+        class="app-shell__command-scrim"
+        :class="{
+          'app-shell__command-scrim--animated': shouldAnimateCommandScrim,
+          'app-shell__command-scrim--dark': shouldUseDarkCommandScrim,
+        }"
+        aria-hidden="true"
+        data-testid="command-scrim"
+        @click="closeSurface({ restoreFocus: true })"
+      />
+
       <FloatingInputMenu
         v-if="isActionsSurfaceOpen"
         :is-open="isActionsSurfaceOpen"
@@ -832,6 +933,17 @@ function focusLibraryView(): void {
         @update-outline-position="readingSettings.updateOutlinePosition"
         @reset="readingSettings.reset"
         @close="closeSurface({ restoreFocus: true })"
+      />
+
+      <ReaderOutlineNavigation
+        v-else-if="isOutlineSurfaceOpen && appMode === 'reader'"
+        mode="sheet"
+        :items="outlineItems"
+        :active-id="activeOutlineId"
+        :is-open="isOutlineSurfaceOpen"
+        :position="readingSettings.state.outlinePosition"
+        @navigate="navigateToOutlineItem"
+        @close="closeOutlineSurface"
       />
     </div>
   </main>
@@ -950,6 +1062,15 @@ function focusLibraryView(): void {
   opacity: 0.65;
 }
 
+.app-shell__outline-icon {
+  inline-size: 1.05rem;
+  block-size: 1.05rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-width: 1.7;
+}
+
 .app-shell__command-actions {
   display: flex;
   flex: 0 0 auto;
@@ -982,6 +1103,10 @@ function focusLibraryView(): void {
   z-index: 40;
 }
 
+.app-shell__command-scrim {
+  display: none;
+}
+
 .app-shell__live-status {
   position: absolute;
   width: 1px;
@@ -992,6 +1117,24 @@ function focusLibraryView(): void {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+@media (max-width: 1099px) {
+  .app-shell__command-surface--outline {
+    top: auto;
+    right: 0;
+    bottom: 0;
+    left: 0;
+  }
+
+  .app-shell__command-surface--outline .app-shell__command-scrim {
+    position: fixed;
+    inset-inline: 0;
+    inset-block-start: max(4.35rem, calc(env(safe-area-inset-top) + 4.35rem));
+    inset-block-end: 0;
+    display: block;
+    background: rgb(0 0 0 / 28%);
+  }
 }
 
 @media (max-width: 640px) {
@@ -1029,6 +1172,35 @@ function focusLibraryView(): void {
     right: 0;
     bottom: 0;
     left: 0;
+  }
+
+  .app-shell__command-scrim {
+    position: fixed;
+    inset-inline: 0;
+    inset-block-start: max(4.35rem, calc(env(safe-area-inset-top) + 4.35rem));
+    inset-block-end: 0;
+    display: block;
+    background: rgb(0 0 0 / 28%);
+  }
+}
+
+.app-shell__command-scrim.app-shell__command-scrim--animated {
+  animation: command-scrim-fade 120ms ease-out;
+}
+
+.app-shell__command-scrim.app-shell__command-scrim--dark {
+  background: rgb(0 0 0 / 40%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell__command-scrim.app-shell__command-scrim--animated {
+    animation: none;
+  }
+}
+
+@keyframes command-scrim-fade {
+  from {
+    opacity: 0;
   }
 }
 
