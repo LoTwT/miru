@@ -33,14 +33,43 @@ test('renders the reader footer with privacy copy and safe links', async ({ page
   const footer = page.getByTestId('reader-footer')
   await footer.scrollIntoViewIfNeeded()
   await expect(footer).toContainText('安静地读 Markdown · 文档留在本机 · 隐私是默认')
-  await expect(footer.getByRole('link', { name: '源码 (GitHub)' })).toHaveAttribute('rel', 'noreferrer')
+  await expect(footer.getByRole('link', { name: '源码 · GitHub' })).toHaveAttribute('rel', 'noreferrer')
   await expect(footer.getByRole('link', { name: 'CommonMark' })).toHaveAttribute('rel', 'noreferrer')
   await expect.poll(() =>
-    footer.getByRole('link', { name: '源码 (GitHub)' }).evaluate((link) => link.getBoundingClientRect().height),
+    footer.getByRole('link', { name: '源码 · GitHub' }).evaluate((link) => link.getBoundingClientRect().height),
   ).toBeGreaterThanOrEqual(44)
+})
 
-  await footer.getByRole('button', { name: '↑ 回到顶部' }).click()
+test('shows the back-to-top button only for long scrolled reader content', async ({ page }) => {
+  await page.goto('/')
+
+  await expect(page.getByTestId('back-to-top')).toHaveCount(0)
+
+  await pasteText(page, [
+    '# Long footer test',
+    '',
+    Array.from({ length: 70 }, (_, index) => `Paragraph ${index + 1}.`).join('\n\n'),
+  ].join('\n'))
+  await expect(page.getByRole('heading', { name: 'Long footer test' })).toBeVisible()
+  await page.evaluate(() => {
+    window.scrollTo({
+      top: window.innerHeight + 96,
+      behavior: 'auto',
+    })
+  })
+  await expect.poll(() => page.evaluate(() => window.scrollY > window.innerHeight)).toBe(true)
+
+  const backToTop = page.getByTestId('back-to-top')
+  await expect(backToTop).toBeVisible()
+
+  await page.getByTestId('floating-affordance-button').click()
+  await expect(backToTop).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await expect(backToTop).toBeVisible()
+
+  await backToTop.click()
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBeLessThan(24)
+  await expect(page.getByTestId('back-to-top')).toHaveCount(0)
 })
 
 test('adds pasted markdown to the local library and reopens it from the bookshelf', async ({ page }) => {
