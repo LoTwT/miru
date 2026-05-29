@@ -4,9 +4,10 @@ import type { ReadingTokenName } from '@/lib/theme/tokens'
 export type ReadingFontSizeId = '15' | '16' | '17' | '18' | '19' | '20' | '22' | '24'
 export type ReadingMeasureId = '55' | '65' | '75'
 export type ReadingLineHeightId = '1.5' | '1.7' | '1.9'
+export type ReadingLetterSpacingId = 'tight' | 'standard' | 'loose'
 export type ReadingParagraphGapId = 'compact' | 'standard' | 'loose'
 export type ReadingPageMarginId = 'compact' | 'standard' | 'spacious'
-export type ReadingFontFamilyId = 'serif' | 'sans'
+export type ReadingFontFamilyId = 'serif' | 'system-serif' | 'system-sans' | 'mono'
 export type ReadingThemeChoice = 'system' | 'light' | 'dark' | 'sepia'
 export type ReadingContrastId = 'soft' | 'standard' | 'strong'
 export type ReadingOutlinePositionId = 'left' | 'right'
@@ -19,7 +20,9 @@ export interface ReadingSettingOption<T extends string> {
 }
 
 export const serifFontStack = '"Newsreader", Georgia, "Songti SC", "Noto Serif CJK SC", serif'
-export const sansFontStack = '-apple-system, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif'
+export const systemSerifFontStack = 'Georgia, "Songti SC", "Noto Serif CJK SC", serif'
+export const systemSansFontStack = '-apple-system, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif'
+export const monoFontStack = '"Space Mono", ui-monospace, SFMono-Regular, Menlo, "PingFang SC", "Noto Sans CJK SC", monospace'
 
 export const readingFontSizeOptions = [
   { id: '15', label: '15', ariaLabel: '字号 15px', tokenValue: '15px' },
@@ -44,6 +47,12 @@ export const readingLineHeightOptions = [
   { id: '1.9', label: '松', ariaLabel: '行距 松', tokenValue: '1.9' },
 ] as const satisfies readonly ReadingSettingOption<ReadingLineHeightId>[]
 
+export const readingLetterSpacingOptions = [
+  { id: 'tight', label: '紧', ariaLabel: '字间距 紧', tokenValue: '-0.01em' },
+  { id: 'standard', label: '标准', ariaLabel: '字间距 标准', tokenValue: '0' },
+  { id: 'loose', label: '松', ariaLabel: '字间距 松', tokenValue: '0.03em' },
+] as const satisfies readonly ReadingSettingOption<ReadingLetterSpacingId>[]
+
 export const readingParagraphGapOptions = [
   { id: 'compact', label: '紧', ariaLabel: '段间距 紧', tokenValue: '0.8em' },
   { id: 'standard', label: '标准', ariaLabel: '段间距 标准', tokenValue: '1.12em' },
@@ -57,8 +66,10 @@ export const readingPageMarginOptions = [
 ] as const satisfies readonly ReadingSettingOption<ReadingPageMarginId>[]
 
 export const readingFontFamilyOptions = [
-  { id: 'serif', label: '衬线', ariaLabel: '正文字体 衬线', tokenValue: serifFontStack },
-  { id: 'sans', label: '无衬线', ariaLabel: '正文字体 无衬线', tokenValue: sansFontStack },
+  { id: 'serif', label: 'Newsreader', ariaLabel: '正文字体 Newsreader', tokenValue: serifFontStack },
+  { id: 'system-serif', label: '系统衬线', ariaLabel: '正文字体 系统衬线', tokenValue: systemSerifFontStack },
+  { id: 'system-sans', label: '系统无衬线', ariaLabel: '正文字体 系统无衬线', tokenValue: systemSansFontStack },
+  { id: 'mono', label: 'Space Mono', ariaLabel: '正文字体 Space Mono', tokenValue: monoFontStack },
 ] as const satisfies readonly ReadingSettingOption<ReadingFontFamilyId>[]
 
 export const readingThemeOptions = [
@@ -83,6 +94,7 @@ export const defaultReadingSettings = {
   fontSize: '18',
   measure: '65',
   lineHeight: '1.7',
+  letterSpacing: 'standard',
   paragraphGap: 'standard',
   pageMargin: 'standard',
   fontFamily: 'serif',
@@ -95,6 +107,7 @@ export const customizableTypographyTokens = [
   '--reading-font-size',
   '--reading-measure',
   '--reading-line-height',
+  '--reading-letter-spacing',
   '--reading-paragraph-gap',
   '--reading-page-margin',
   '--reading-font-body',

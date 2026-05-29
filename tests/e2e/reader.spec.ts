@@ -1076,15 +1076,17 @@ test('customizes reading settings, persists them, and resets to defaults', async
   await fontSizeSlider.press('ArrowRight')
   await expect(fontSizeSlider).toHaveAttribute('aria-valuetext', '字号 20px')
   await page.getByRole('radio', { name: '行宽 宽' }).click()
+  await page.getByRole('radio', { name: '字间距 松' }).click()
   await page.getByRole('radio', { name: '段间距 松' }).click()
   await page.getByRole('radio', { name: '页边距 宽松' }).click()
   await page.getByRole('radio', { name: '主题 Sepia' }).click()
   await page.getByRole('radio', { name: '对比 醒目' }).click()
-  await page.getByRole('radio', { name: '正文字体 无衬线' }).click()
+  await page.getByRole('radio', { name: '正文字体 系统无衬线' }).click()
 
   await expect.poll(() => readInlineReadingTokens(page)).toMatchObject({
     fontSize: '20px',
     measure: '75ch',
+    letterSpacing: '0.03em',
     paragraphGap: '1.55em',
     pageMargin: 'clamp(2rem, 7vw, 6rem)',
     bg: '#efe1bd',
@@ -1098,6 +1100,7 @@ test('customizes reading settings, persists them, and resets to defaults', async
   })
   await expect.poll(() => readReadingTypography(page)).toMatchObject({
     body: 20,
+    paragraphLetterSpacing: 0.6,
   })
   const enlargedTypography = await readReadingTypography(page)
 
@@ -1110,6 +1113,7 @@ test('customizes reading settings, persists them, and resets to defaults', async
   await expect.poll(() => readInlineReadingTokens(page)).toMatchObject({
     fontSize: '20px',
     measure: '75ch',
+    letterSpacing: '0.03em',
     paragraphGap: '1.55em',
     pageMargin: 'clamp(2rem, 7vw, 6rem)',
     bg: '#efe1bd',
@@ -1122,6 +1126,7 @@ test('customizes reading settings, persists them, and resets to defaults', async
   })
   await expect.poll(() => readReadingTypography(page)).toMatchObject({
     body: 20,
+    paragraphLetterSpacing: 0.6,
   })
 
   await page.getByTestId('reading-settings-button').click()
@@ -1130,6 +1135,7 @@ test('customizes reading settings, persists them, and resets to defaults', async
   await expect.poll(() => readInlineReadingTokens(page)).toMatchObject({
     fontSize: '',
     measure: '',
+    letterSpacing: '',
     paragraphGap: '',
     pageMargin: '',
     bg: '',
@@ -1224,7 +1230,7 @@ test('reading settings use a bottom sheet on narrow screens', async ({ page }) =
   const box = await panel.boundingBox()
   expect(box?.width).toBeGreaterThan(360)
   expect(box?.y).toBeGreaterThan(250)
-  await expect(page.getByRole('radio', { name: '正文字体 衬线' })).toBeFocused()
+  await expect(page.getByRole('radio', { name: '正文字体 Newsreader' })).toBeFocused()
 
   await page.keyboard.press('Escape')
   await expect(panel).not.toBeVisible()
@@ -1448,6 +1454,7 @@ async function readInlineReadingTokens(page: import('@playwright/test').Page) {
     return {
       fontSize: root.style.getPropertyValue('--reading-font-size').trim(),
       measure: root.style.getPropertyValue('--reading-measure').trim(),
+      letterSpacing: root.style.getPropertyValue('--reading-letter-spacing').trim(),
       paragraphGap: root.style.getPropertyValue('--reading-paragraph-gap').trim(),
       pageMargin: root.style.getPropertyValue('--reading-page-margin').trim(),
       bg: root.style.getPropertyValue('--reading-bg').trim(),
@@ -1468,6 +1475,10 @@ async function readReadingTypography(page: import('@playwright/test').Page) {
       const element = document.querySelector(selector)
       return element ? Number.parseFloat(getComputedStyle(element).fontSize) : 0
     }
+    const readLetterSpacingPx = (selector: string) => {
+      const element = document.querySelector(selector)
+      return element ? Number.parseFloat(getComputedStyle(element).letterSpacing) : 0
+    }
 
     return {
       body: readPx('.reader-surface__content'),
@@ -1475,6 +1486,7 @@ async function readReadingTypography(page: import('@playwright/test').Page) {
       h2: readPx('.reader-surface__content h2'),
       h3: readPx('.reader-surface__content h3'),
       h4: readPx('.reader-surface__content h4'),
+      paragraphLetterSpacing: readLetterSpacingPx('.reader-surface__content p'),
     }
   })
 }

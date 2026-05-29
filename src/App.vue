@@ -931,6 +931,7 @@ function focusLibraryView(): void {
         @update-font-size="readingSettings.updateFontSize"
         @update-measure="readingSettings.updateMeasure"
         @update-line-height="readingSettings.updateLineHeight"
+        @update-letter-spacing="readingSettings.updateLetterSpacing"
         @update-paragraph-gap="readingSettings.updateParagraphGap"
         @update-page-margin="readingSettings.updatePageMargin"
         @update-font-family="readingSettings.updateFontFamily"

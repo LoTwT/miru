@@ -38,16 +38,20 @@ describe('reading customization settings', () => {
 
     settings.updateFontSize('22')
     settings.updateMeasure('75')
+    settings.updateLetterSpacing('loose')
     settings.updateParagraphGap('loose')
     settings.updatePageMargin('spacious')
+    settings.updateFontFamily('system-sans')
     settings.updateTheme('sepia')
     settings.updateContrast('strong')
     settings.updateOutlinePosition('left')
 
     expect(root.style.getPropertyValue('--reading-font-size')).toBe('22px')
     expect(root.style.getPropertyValue('--reading-measure')).toBe('75ch')
+    expect(root.style.getPropertyValue('--reading-letter-spacing')).toBe('0.03em')
     expect(root.style.getPropertyValue('--reading-paragraph-gap')).toBe('1.55em')
     expect(root.style.getPropertyValue('--reading-page-margin')).toBe('clamp(2rem, 7vw, 6rem)')
+    expect(root.style.getPropertyValue('--reading-font-body')).toBe('-apple-system, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif')
     expect(root.style.getPropertyValue('--reading-bg')).toBe('#efe1bd')
     expect(root.style.getPropertyValue('--reading-fg')).toBe('#2a2012')
     expect(root.style.getPropertyValue('--reading-fg-muted')).toBe('#3e3220')
@@ -62,8 +66,11 @@ describe('reading customization settings', () => {
     expect(persisted?.presetId).toBe('sepia')
     expect(persisted?.tokenOverrides?.['--reading-font-size']).toBe('22px')
     expect(persisted?.tokenOverrides?.['--reading-measure']).toBe('75ch')
+    expect(persisted?.tokenOverrides?.['--reading-letter-spacing']).toBe('0.03em')
     expect(persisted?.tokenOverrides?.['--reading-paragraph-gap']).toBe('1.55em')
     expect(persisted?.tokenOverrides?.['--reading-page-margin']).toBe('clamp(2rem, 7vw, 6rem)')
+    expect(persisted?.tokenOverrides?.['--reading-font-body']).toBe('-apple-system, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif')
+    expect(persisted?.fontBody).toBeUndefined()
     expect(persisted?.tokenOverrides?.['--reading-bg']).toBe('#efe1bd')
     expect(persisted?.contrast).toBe('strong')
     expect(persisted?.outlinePosition).toBe('left')
@@ -117,6 +124,17 @@ describe('reading customization settings', () => {
     expect(persisted?.presetId).toBe('system')
     expect(persisted?.contrast).toBe('soft')
     expect(persisted?.tokenOverrides).toBeUndefined()
+  })
+
+  it('reads legacy fontBody settings as the matching font option', () => {
+    storage.setItem('miru:reading-settings:v1', JSON.stringify({
+      version: 1,
+      fontBody: '-apple-system, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif',
+    }))
+
+    const settings = useReadingSettings({ root, storage })
+
+    expect(settings.state.fontFamily).toBe('system-sans')
   })
 
   it('reset clears customization overrides without losing remote image mode', () => {
