@@ -42,13 +42,6 @@ defineExpose({
   scrollToHeading,
 })
 
-function scrollToTop(): void {
-  window.scrollTo({
-    top: 0,
-    behavior: prefersReducedMotion() ? 'auto' : 'smooth',
-  })
-}
-
 async function enhanceCurrentContent(): Promise<void> {
   cleanupCollapsibleHeadings?.()
   cleanupCollapsibleHeadings = undefined
@@ -239,23 +232,22 @@ function isPageScrollLocked(): boolean {
     <!-- v-html is restricted to TrustedHtml returned by the markdown sanitizer pipeline. -->
     <div ref="content" class="reader-surface__content" v-html="props.html.value" />
     <footer class="reader-footer" data-testid="reader-footer">
-      <p class="reader-footer__mark" aria-label="miru">
-        miru.
-      </p>
-      <p class="reader-footer__line">
-        安静地读 Markdown · 文档留在本机 · 隐私是默认
-      </p>
+      <div>
+        <p class="reader-footer__mark" aria-label="miru">
+          miru.
+        </p>
+        <p class="reader-footer__line">
+          安静地读 Markdown · 文档留在本机 · 隐私是默认
+        </p>
+      </div>
       <nav class="reader-footer__links" aria-label="miru 相关链接">
-        <button class="reader-footer__link" type="button" @click="scrollToTop">
-          ↑ 回到顶部
-        </button>
         <a
           class="reader-footer__link"
           href="https://github.com/LoTwT/miru"
           target="_blank"
           rel="noreferrer"
         >
-          源码 (GitHub)
+          源码 · GitHub<span aria-hidden="true">↗</span>
         </a>
         <a
           class="reader-footer__link"
@@ -263,8 +255,9 @@ function isPageScrollLocked(): boolean {
           target="_blank"
           rel="noreferrer"
         >
-          CommonMark
+          CommonMark<span aria-hidden="true">↗</span>
         </a>
+        <span class="reader-footer__copyright">© 2026</span>
       </nav>
     </footer>
   </article>
@@ -293,8 +286,11 @@ function isPageScrollLocked(): boolean {
 }
 
 .reader-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: clamp(1.5rem, 6vw, 4rem);
   margin-block-start: clamp(4rem, 11vw, 7rem);
-  padding-block: 1.25rem clamp(2rem, 7vw, 4.5rem);
+  padding-block: 1.4rem clamp(2.5rem, 7vw, 4.8rem);
   border-block-start: 1px solid color-mix(in srgb, var(--reading-fg-muted) 30%, transparent);
   color: var(--reading-fg-muted);
   font-family: system-ui, sans-serif;
@@ -311,14 +307,19 @@ function isPageScrollLocked(): boolean {
 
 .reader-footer__line {
   margin: 0.7rem 0 0;
+  max-inline-size: 28rem;
 }
 
 .reader-footer__links {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.3rem 0.8rem;
-  align-items: center;
-  margin-block-start: 0.75rem;
+  display: grid;
+  gap: 0.15rem;
+  justify-items: end;
+  margin: 0;
+  font-family: var(--reading-font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+  line-height: 1.5;
+  text-align: end;
 }
 
 .reader-footer__link {
@@ -328,15 +329,39 @@ function isPageScrollLocked(): boolean {
   padding: 0;
   border: 0;
   background: transparent;
-  color: var(--reading-link);
+  color: var(--reading-fg-muted);
   font: inherit;
   text-decoration: none;
   cursor: pointer;
 }
 
+.reader-footer__link span {
+  margin-inline-start: 0.25rem;
+}
+
 .reader-footer__link:hover,
 .reader-footer__link:focus-visible {
-  text-decoration: underline;
-  text-underline-offset: 0.22em;
+  color: var(--reading-accent);
+}
+
+.reader-footer__link:focus-visible {
+  outline: 3px solid var(--reading-focus);
+  outline-offset: 3px;
+}
+
+.reader-footer__copyright {
+  color: color-mix(in srgb, var(--reading-fg-muted) 76%, transparent);
+}
+
+@media (max-width: 700px) {
+  .reader-footer {
+    flex-direction: column;
+    gap: 1.1rem;
+  }
+
+  .reader-footer__links {
+    justify-items: start;
+    text-align: start;
+  }
 }
 </style>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, shallowRef, useTemplateRef, watch } from 'vue'
 
+import BackToTop from '@/components/BackToTop.vue'
 import FloatingInputMenu from '@/components/FloatingInputMenu.vue'
 import LibraryView from '@/components/LibraryView.vue'
 import PdfViewer from '@/components/PdfViewer.vue'
@@ -880,6 +881,8 @@ function focusLibraryView(): void {
         :position="readingSettings.state.outlinePosition"
         @navigate="navigateToOutlineItem"
       />
+
+      <BackToTop :is-suppressed="openSurfaceId !== null" />
     </template>
 
     <p class="app-shell__live-status" role="status" aria-live="polite">
