@@ -928,8 +928,11 @@ function focusLibraryView(): void {
         @update-font-size="readingSettings.updateFontSize"
         @update-measure="readingSettings.updateMeasure"
         @update-line-height="readingSettings.updateLineHeight"
+        @update-paragraph-gap="readingSettings.updateParagraphGap"
+        @update-page-margin="readingSettings.updatePageMargin"
         @update-font-family="readingSettings.updateFontFamily"
         @update-theme="readingSettings.updateTheme"
+        @update-contrast="readingSettings.updateContrast"
         @update-outline-position="readingSettings.updateOutlinePosition"
         @reset="readingSettings.reset"
         @close="closeSurface({ restoreFocus: true })"
@@ -952,7 +955,7 @@ function focusLibraryView(): void {
 <style scoped>
 .app-shell {
   min-height: 100vh;
-  padding: 1rem clamp(1.25rem, 4vw, 4rem);
+  padding: 1rem var(--reading-page-margin);
   background: var(--reading-bg);
   color: var(--reading-fg);
 }

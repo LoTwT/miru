@@ -896,21 +896,32 @@ test('customizes reading settings, persists them, and resets to defaults', async
 
   await settingsButton.click()
   await expect(page.getByTestId('reading-settings-panel')).toBeVisible()
-  await expect(page.getByRole('radio', { name: '字号 很小' })).toBeFocused()
+  const fontSizeSlider = page.getByRole('slider', { name: '字号' })
+  await expect(fontSizeSlider).toBeFocused()
+  await expect(fontSizeSlider).toHaveAttribute('aria-valuetext', '字号 18px')
 
-  await page.getByRole('radio', { name: '字号 大' }).click()
+  await fontSizeSlider.press('ArrowRight')
+  await fontSizeSlider.press('ArrowRight')
+  await expect(fontSizeSlider).toHaveAttribute('aria-valuetext', '字号 20px')
   await page.getByRole('radio', { name: '行宽 宽' }).click()
+  await page.getByRole('radio', { name: '段间距 松' }).click()
+  await page.getByRole('radio', { name: '页边距 宽松' }).click()
   await page.getByRole('radio', { name: '主题 Sepia' }).click()
+  await page.getByRole('radio', { name: '对比 醒目' }).click()
   await page.getByRole('radio', { name: '正文字体 无衬线' }).click()
 
   await expect.poll(() => readInlineReadingTokens(page)).toMatchObject({
     fontSize: '20px',
     measure: '75ch',
+    paragraphGap: '1.55em',
+    pageMargin: 'clamp(2rem, 7vw, 6rem)',
     bg: '#efe1bd',
-    fgMuted: '#64553e',
+    fg: '#332817',
+    fgMuted: '#55462e',
     codeBg: '#e2cb99',
     fontBody: '-apple-system, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif',
     readingTheme: 'sepia',
+    readingContrast: 'strong',
   })
   await expect.poll(() => readReadingTypography(page)).toMatchObject({
     body: 20,
@@ -926,10 +937,14 @@ test('customizes reading settings, persists them, and resets to defaults', async
   await expect.poll(() => readInlineReadingTokens(page)).toMatchObject({
     fontSize: '20px',
     measure: '75ch',
+    paragraphGap: '1.55em',
+    pageMargin: 'clamp(2rem, 7vw, 6rem)',
     bg: '#efe1bd',
-    fgMuted: '#64553e',
+    fg: '#332817',
+    fgMuted: '#55462e',
     codeBg: '#e2cb99',
     readingTheme: 'sepia',
+    readingContrast: 'strong',
   })
   await expect.poll(() => readReadingTypography(page)).toMatchObject({
     body: 20,
@@ -941,9 +956,12 @@ test('customizes reading settings, persists them, and resets to defaults', async
   await expect.poll(() => readInlineReadingTokens(page)).toMatchObject({
     fontSize: '',
     measure: '',
+    paragraphGap: '',
+    pageMargin: '',
     bg: '',
     fontBody: '',
     readingTheme: '',
+    readingContrast: '',
   })
   await expect.poll(() => readThemeSnapshot(page)).toMatchObject({
     readingBg: '#fbf8f1',
@@ -983,6 +1001,30 @@ test('system theme clears explicit theme overrides and keeps OS dark following',
   })
 })
 
+test('system contrast adjustment follows the resolved OS theme and keeps AA contrast', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await page.goto('/')
+
+  await page.getByTestId('reading-settings-button').click()
+  await page.getByRole('radio', { name: '对比 柔和' }).click()
+
+  await expect.poll(() => readInlineReadingTokens(page)).toMatchObject({
+    fg: '',
+    readingTheme: '',
+    readingContrast: 'soft',
+  })
+
+  const darkColors = await readComputedReadingColors(page)
+  expect(darkColors.fg).toBe('#cfc5b8')
+  expect(contrastRatio(darkColors.fg, darkColors.bg)).toBeGreaterThanOrEqual(4.5)
+
+  await page.emulateMedia({ colorScheme: 'light' })
+
+  const lightColors = await readComputedReadingColors(page)
+  expect(lightColors.fg).toBe('#4a453d')
+  expect(contrastRatio(lightColors.fg, lightColors.bg)).toBeGreaterThanOrEqual(4.5)
+})
+
 test('reading settings use a bottom sheet on narrow screens', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/')
@@ -999,7 +1041,7 @@ test('reading settings use a bottom sheet on narrow screens', async ({ page }) =
   const box = await panel.boundingBox()
   expect(box?.width).toBeGreaterThan(360)
   expect(box?.y).toBeGreaterThan(250)
-  await expect(page.getByRole('radio', { name: '字号 很小' })).toBeFocused()
+  await expect(page.getByRole('slider', { name: '字号' })).toBeFocused()
 
   await page.keyboard.press('Escape')
   await expect(panel).not.toBeVisible()
@@ -1223,11 +1265,15 @@ async function readInlineReadingTokens(page: import('@playwright/test').Page) {
     return {
       fontSize: root.style.getPropertyValue('--reading-font-size').trim(),
       measure: root.style.getPropertyValue('--reading-measure').trim(),
+      paragraphGap: root.style.getPropertyValue('--reading-paragraph-gap').trim(),
+      pageMargin: root.style.getPropertyValue('--reading-page-margin').trim(),
       bg: root.style.getPropertyValue('--reading-bg').trim(),
+      fg: root.style.getPropertyValue('--reading-fg').trim(),
       fgMuted: root.style.getPropertyValue('--reading-fg-muted').trim(),
       codeBg: root.style.getPropertyValue('--reading-code-bg').trim(),
       fontBody: root.style.getPropertyValue('--reading-font-body').trim(),
       readingTheme: root.dataset.readingTheme ?? '',
+      readingContrast: root.dataset.readingContrast ?? '',
     }
   })
 }
@@ -1247,6 +1293,54 @@ async function readReadingTypography(page: import('@playwright/test').Page) {
       h4: readPx('.reader-surface__content h4'),
     }
   })
+}
+
+async function readComputedReadingColors(page: import('@playwright/test').Page) {
+  return page.evaluate(() => {
+    const rootStyle = getComputedStyle(document.documentElement)
+
+    return {
+      bg: rootStyle.getPropertyValue('--reading-bg').trim(),
+      fg: rootStyle.getPropertyValue('--reading-fg').trim(),
+    }
+  })
+}
+
+function contrastRatio(colorA: string, colorB: string): number {
+  const luminanceA = relativeLuminance(colorA)
+  const luminanceB = relativeLuminance(colorB)
+  const lighter = Math.max(luminanceA, luminanceB)
+  const darker = Math.min(luminanceA, luminanceB)
+
+  return (lighter + 0.05) / (darker + 0.05)
+}
+
+function relativeLuminance(color: string): number {
+  const [red, green, blue] = parseRgbColor(color).map((channel) => {
+    const value = channel / 255
+    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+  })
+
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+}
+
+function parseRgbColor(color: string): [number, number, number] {
+  if (color.startsWith('#')) {
+    const normalized = color.slice(1)
+    return [
+      Number.parseInt(normalized.slice(0, 2), 16),
+      Number.parseInt(normalized.slice(2, 4), 16),
+      Number.parseInt(normalized.slice(4, 6), 16),
+    ]
+  }
+
+  const channels = color.match(/\d+(\.\d+)?/g)?.slice(0, 3).map(Number)
+
+  if (!channels || channels.length < 3) {
+    throw new Error(`Unsupported color format: ${color}`)
+  }
+
+  return [channels[0]!, channels[1]!, channels[2]!]
 }
 
 async function readOutlineLayout(page: import('@playwright/test').Page) {
