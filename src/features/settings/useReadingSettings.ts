@@ -14,6 +14,7 @@ import {
   defaultReadingSettings,
   readingFontFamilyOptions,
   readingFontSizeOptions,
+  readingLetterSpacingOptions,
   readingLineHeightOptions,
   readingMeasureOptions,
   readingPageMarginOptions,
@@ -25,6 +26,7 @@ import type {
   ReadingContrastId,
   ReadingFontFamilyId,
   ReadingFontSizeId,
+  ReadingLetterSpacingId,
   ReadingLineHeightId,
   ReadingMeasureId,
   ReadingPageMarginId,
@@ -37,6 +39,7 @@ export interface ReadingCustomizationState {
   fontSize: ReadingFontSizeId
   measure: ReadingMeasureId
   lineHeight: ReadingLineHeightId
+  letterSpacing: ReadingLetterSpacingId
   paragraphGap: ReadingParagraphGapId
   pageMargin: ReadingPageMarginId
   fontFamily: ReadingFontFamilyId
@@ -59,6 +62,7 @@ export function useReadingSettings(options: {
     state.fontSize === defaultReadingSettings.fontSize
     && state.measure === defaultReadingSettings.measure
     && state.lineHeight === defaultReadingSettings.lineHeight
+    && state.letterSpacing === defaultReadingSettings.letterSpacing
     && state.paragraphGap === defaultReadingSettings.paragraphGap
     && state.pageMargin === defaultReadingSettings.pageMargin
     && state.fontFamily === defaultReadingSettings.fontFamily
@@ -91,6 +95,11 @@ export function useReadingSettings(options: {
 
   function updateLineHeight(value: ReadingLineHeightId): void {
     state.lineHeight = value
+    commit()
+  }
+
+  function updateLetterSpacing(value: ReadingLetterSpacingId): void {
+    state.letterSpacing = value
     commit()
   }
 
@@ -128,6 +137,7 @@ export function useReadingSettings(options: {
     state.fontSize = defaultReadingSettings.fontSize
     state.measure = defaultReadingSettings.measure
     state.lineHeight = defaultReadingSettings.lineHeight
+    state.letterSpacing = defaultReadingSettings.letterSpacing
     state.paragraphGap = defaultReadingSettings.paragraphGap
     state.pageMargin = defaultReadingSettings.pageMargin
     state.fontFamily = defaultReadingSettings.fontFamily
@@ -167,9 +177,6 @@ export function useReadingSettings(options: {
       version: 1,
       presetId: state.theme,
       tokenOverrides: hasTokenOverrides ? tokenOverrides : undefined,
-      fontBody: state.fontFamily === 'sans'
-        ? readingFontFamilyOptions.find(option => option.id === 'sans')?.tokenValue
-        : undefined,
       remoteImageMode,
       contrast: hasContrastOverride ? state.contrast : undefined,
       outlinePosition: hasOutlinePositionOverride ? state.outlinePosition : undefined,
@@ -186,6 +193,7 @@ export function useReadingSettings(options: {
     updateFontSize,
     updateMeasure,
     updateLineHeight,
+    updateLetterSpacing,
     updateParagraphGap,
     updatePageMargin,
     updateFontFamily,
@@ -205,11 +213,13 @@ function stateFromPersistedSettings(settings: PersistedReadingSettings | null): 
       ?? defaultReadingSettings.measure,
     lineHeight: matchTokenValue(readingLineHeightOptions, tokenOverrides?.['--reading-line-height'])
       ?? defaultReadingSettings.lineHeight,
+    letterSpacing: matchTokenValue(readingLetterSpacingOptions, tokenOverrides?.['--reading-letter-spacing'])
+      ?? defaultReadingSettings.letterSpacing,
     paragraphGap: matchTokenValue(readingParagraphGapOptions, tokenOverrides?.['--reading-paragraph-gap'])
       ?? defaultReadingSettings.paragraphGap,
     pageMargin: matchTokenValue(readingPageMarginOptions, tokenOverrides?.['--reading-page-margin'])
       ?? defaultReadingSettings.pageMargin,
-    fontFamily: matchTokenValue(readingFontFamilyOptions, settings?.fontBody ?? tokenOverrides?.['--reading-font-body'])
+    fontFamily: matchTokenValue(readingFontFamilyOptions, tokenOverrides?.['--reading-font-body'] ?? settings?.fontBody)
       ?? defaultReadingSettings.fontFamily,
     theme: isReadingThemeChoice(settings?.presetId) ? settings.presetId : defaultReadingSettings.theme,
     contrast: isReadingContrast(settings?.contrast) ? settings.contrast : defaultReadingSettings.contrast,
@@ -243,6 +253,13 @@ function buildTokenOverrides(state: ReadingCustomizationState): Record<ReadingTo
     readingLineHeightOptions,
     state.lineHeight,
     defaultReadingSettings.lineHeight,
+  )
+  addTypographyOverride(
+    tokenOverrides,
+    '--reading-letter-spacing',
+    readingLetterSpacingOptions,
+    state.letterSpacing,
+    defaultReadingSettings.letterSpacing,
   )
   addTypographyOverride(
     tokenOverrides,

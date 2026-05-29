@@ -17,8 +17,9 @@
   --reading-measure: 65ch;
   --reading-font-size: 18px;
   --reading-line-height: 1.7;
+  --reading-letter-spacing: 0;
   --reading-page-margin: clamp(1.25rem, 4vw, 4rem);
-  --reading-font-body: Newsreader, Georgia, serif;
+  --reading-font-body: "Newsreader", Georgia, "Songti SC", "Noto Serif CJK SC", serif;
   --reading-font-heading: Newsreader, Georgia, serif;
   --reading-font-mono: "Space Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   --reading-paragraph-gap: 1.12em;
@@ -191,6 +192,14 @@ a:focus-visible {
 .reader-surface__content h3 {
   font-size: var(--reading-scale-h3);
   font-weight: 600;
+}
+
+.reader-surface__content p,
+.reader-surface__content ul,
+.reader-surface__content ol,
+.reader-surface__content blockquote,
+.reader-surface__content table {
+  letter-spacing: var(--reading-letter-spacing);
 }
 
 .reader-surface__content p,

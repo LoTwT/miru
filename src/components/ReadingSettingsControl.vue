@@ -5,6 +5,7 @@ import {
   readingContrastOptions,
   readingFontFamilyOptions,
   readingFontSizeOptions,
+  readingLetterSpacingOptions,
   readingLineHeightOptions,
   readingMeasureOptions,
   readingOutlinePositionOptions,
@@ -16,6 +17,7 @@ import type {
   ReadingContrastId,
   ReadingFontFamilyId,
   ReadingFontSizeId,
+  ReadingLetterSpacingId,
   ReadingLineHeightId,
   ReadingMeasureId,
   ReadingOutlinePositionId,
@@ -36,6 +38,7 @@ const emit = defineEmits<{
   updateFontSize: [value: ReadingFontSizeId]
   updateMeasure: [value: ReadingMeasureId]
   updateLineHeight: [value: ReadingLineHeightId]
+  updateLetterSpacing: [value: ReadingLetterSpacingId]
   updateParagraphGap: [value: ReadingParagraphGapId]
   updatePageMargin: [value: ReadingPageMarginId]
   updateFontFamily: [value: ReadingFontFamilyId]
@@ -146,6 +149,10 @@ function selectMeasure(value: ReadingMeasureId): void {
 
 function selectLineHeight(value: ReadingLineHeightId): void {
   emit('updateLineHeight', value)
+}
+
+function selectLetterSpacing(value: ReadingLetterSpacingId): void {
+  emit('updateLetterSpacing', value)
 }
 
 function selectParagraphGap(value: ReadingParagraphGapId): void {
@@ -263,7 +270,7 @@ function syncOutlineViewport(): void {
           <fieldset class="reading-settings__field">
             <legend class="reading-settings__legend">正文字体</legend>
             <div
-              class="reading-settings__segments"
+              class="reading-settings__segments reading-settings__segments--font-family"
               role="radiogroup"
               aria-label="正文字体"
               @keydown="onRadioKeydown($event, readingFontFamilyOptions, props.settings.fontFamily, selectFontFamily)"
@@ -277,6 +284,7 @@ function syncOutlineViewport(): void {
                 :aria-checked="props.settings.fontFamily === option.id"
                 :aria-label="option.ariaLabel"
                 :data-option-id="option.id"
+                :style="{ fontFamily: option.tokenValue }"
                 data-settings-item
                 @click="selectFontFamily(option.id)"
               >
@@ -334,6 +342,31 @@ function syncOutlineViewport(): void {
                 :data-option-id="option.id"
                 data-settings-item
                 @click="selectLineHeight(option.id)"
+              >
+                {{ option.label }}
+              </button>
+            </div>
+          </fieldset>
+
+          <fieldset class="reading-settings__field">
+            <legend class="reading-settings__legend">字间距</legend>
+            <div
+              class="reading-settings__segments"
+              role="radiogroup"
+              aria-label="字间距"
+              @keydown="onRadioKeydown($event, readingLetterSpacingOptions, props.settings.letterSpacing, selectLetterSpacing)"
+            >
+              <button
+                v-for="option in readingLetterSpacingOptions"
+                :key="option.id"
+                class="reading-settings__segment"
+                type="button"
+                role="radio"
+                :aria-checked="props.settings.letterSpacing === option.id"
+                :aria-label="option.ariaLabel"
+                :data-option-id="option.id"
+                data-settings-item
+                @click="selectLetterSpacing(option.id)"
               >
                 {{ option.label }}
               </button>
@@ -790,6 +823,10 @@ function syncOutlineViewport(): void {
 
 .reading-settings__segments--theme {
   --segment-count: 4;
+}
+
+.reading-settings__segments--font-family {
+  --segment-count: 2;
 }
 
 .reading-settings__segments--outline-position {
