@@ -256,7 +256,12 @@ test('prints a clean full document without app chrome', async ({ page }) => {
   const firstToggle = page.locator('[data-reader-heading-toggle]').first()
   await firstToggle.click()
   await expect(page.getByText('Collapsed body.')).not.toBeVisible()
-  await expect(page.getByTestId('reader-outline')).toBeVisible()
+  if (isWideViewport(page)) {
+    await expect(page.getByTestId('reader-outline')).toBeVisible()
+  }
+  else {
+    await expect(page.getByTestId('reader-outline-button')).toBeVisible()
+  }
 
   await page.emulateMedia({ media: 'print' })
 
@@ -648,13 +653,27 @@ test('shows quiet outline navigation only for heading-rich documents', async ({ 
     'Four body.',
   ].join('\n'))
 
-  await expect(page.getByTestId('reader-outline')).toBeVisible()
-
   if (isWideViewport(page)) {
+    await expect(page.getByTestId('reader-outline')).toBeVisible()
     await expect(page.getByTestId('reader-outline-rail')).toBeVisible()
   }
   else {
-    await expect(page.getByTestId('reader-outline-button')).toBeVisible()
+    const topBar = page.getByTestId('app-top-bar')
+    const outlineButton = page.getByTestId('reader-outline-button')
+
+    await expect(page.getByTestId('reader-outline')).toHaveCount(0)
+    await expect(outlineButton).toBeVisible()
+    await expect(topBar.locator('[data-testid="reader-outline-button"]')).toBeVisible()
+    await expect(page.locator('.reader-outline__button')).toHaveCount(0)
+
+    const layout = await Promise.all([
+      topBar.boundingBox(),
+      outlineButton.boundingBox(),
+    ])
+    expect(layout[0]).not.toBeNull()
+    expect(layout[1]).not.toBeNull()
+    expect(layout[1]!.y).toBeGreaterThanOrEqual(layout[0]!.y - 1)
+    expect(layout[1]!.y + layout[1]!.height).toBeLessThanOrEqual(layout[0]!.y + layout[0]!.height + 1)
   }
 })
 
@@ -748,7 +767,13 @@ test('activates the final outline item near the page bottom', async ({ page }) =
     'The last section is intentionally short.',
   ].join('\n'))
 
-  await expect(page.getByTestId('reader-outline')).toBeVisible()
+  if (isWideViewport(page)) {
+    await expect(page.getByTestId('reader-outline')).toBeVisible()
+  }
+  else {
+    await expect(page.getByTestId('reader-outline-button')).toBeVisible()
+  }
+
   await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight))
 
   if (!isWideViewport(page)) {
@@ -801,6 +826,7 @@ test('persists desktop outline position and hides the control on narrow screens'
   await page.getByTestId('reading-settings-button').click()
   await expect(page.getByRole('radio', { name: '大纲位置 左' })).toHaveCount(0)
   await expect(page.getByTestId('reader-outline-button')).toBeVisible()
+  await expect(page.getByTestId('app-top-bar').locator('[data-testid="reader-outline-button"]')).toBeVisible()
 })
 
 test('collapses the floating menu and focuses the reader after menu paste success', async ({ page }) => {
@@ -986,6 +1012,12 @@ test('locks page scroll while mobile command sheets are open', async ({ page }) 
   await pasteText(page, [
     '# Scroll lock doc',
     '',
+    '## First section',
+    '',
+    '## Second section',
+    '',
+    '### Third section',
+    '',
     Array.from({ length: 70 }, (_, index) => `Paragraph ${index + 1}.`).join('\n\n'),
   ].join('\n'))
   await expect(page.getByRole('heading', { name: 'Scroll lock doc' })).toBeVisible()
@@ -996,6 +1028,7 @@ test('locks page scroll while mobile command sheets are open', async ({ page }) 
 
   await page.getByTestId('reading-settings-button').click()
   await expect(page.getByTestId('reading-settings-panel')).toBeVisible()
+  await expect(page.getByTestId('command-scrim')).toBeVisible()
   await expect.poll(() => page.evaluate(() => getComputedStyle(document.body).position)).toBe('fixed')
   await expect.poll(() => page.evaluate(() => document.body.style.top)).toBe(`-${scrollBeforeSettings}px`)
 
@@ -1010,6 +1043,7 @@ test('locks page scroll while mobile command sheets are open', async ({ page }) 
 
   await page.getByTestId('floating-affordance-button').click()
   await expect(page.getByTestId('floating-affordance-menu')).toBeVisible()
+  await expect(page.getByTestId('command-scrim')).toBeVisible()
   await expect.poll(() => page.evaluate(() => getComputedStyle(document.body).position)).toBe('fixed')
 
   await page.mouse.wheel(0, 800)
@@ -1020,6 +1054,129 @@ test('locks page scroll while mobile command sheets are open', async ({ page }) 
   await expect(page.getByTestId('floating-affordance-menu')).not.toBeVisible()
   await expect.poll(() => page.evaluate(() => getComputedStyle(document.body).position)).not.toBe('fixed')
   await expect.poll(() => page.evaluate(() => Math.round(window.scrollY))).toBe(scrollBeforeSettings)
+
+  await page.getByTestId('reader-outline-button').click()
+  await expect(page.getByTestId('reader-outline-panel')).toBeVisible()
+  await expect(page.getByTestId('command-scrim')).toBeVisible()
+  await expect.poll(() => page.evaluate(() => getComputedStyle(document.body).position)).toBe('fixed')
+
+  await page.mouse.wheel(0, 800)
+  await expect.poll(() => page.evaluate(() => document.body.style.top)).toBe(`-${scrollBeforeSettings}px`)
+  await expect.poll(() => page.evaluate(() => Math.round(window.scrollY))).toBe(0)
+
+  await page.getByTestId('command-scrim').click({ position: { x: 20, y: 20 } })
+  await expect(page.getByTestId('reader-outline-panel')).not.toBeVisible()
+  await expect(page.getByTestId('reader-outline-button')).toBeFocused()
+  await expect.poll(() => page.evaluate(() => getComputedStyle(document.body).position)).not.toBe('fixed')
+  await expect.poll(() => page.evaluate(() => Math.round(window.scrollY))).toBe(scrollBeforeSettings)
+})
+
+test('uses a full-width outline sheet scrim on tablet and system dark', async ({ page }) => {
+  await page.setViewportSize({ width: 768, height: 1024 })
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await page.goto('/')
+  await pasteText(page, [
+    '# Tablet outline',
+    '',
+    '## First section',
+    '',
+    '## Second section',
+    '',
+    '### Third section',
+    '',
+    Array.from({ length: 48 }, (_, index) => `Paragraph ${index + 1}.`).join('\n\n'),
+  ].join('\n'))
+  await expect(page.getByRole('heading', { name: 'Tablet outline' })).toBeVisible()
+  await expect(page.getByTestId('reader-outline-button')).toBeVisible()
+  await expect(page.getByTestId('reader-outline')).toHaveCount(0)
+
+  async function readOutlineScrimStyle(): Promise<{ animationName: string, backgroundColor: string }> {
+    await page.getByTestId('reader-outline-button').click()
+    await expect(page.getByTestId('reader-outline-panel')).toBeVisible()
+    await expect(page.getByTestId('command-scrim')).toBeVisible()
+
+    return page.evaluate(() => {
+      const scrim = document.querySelector<HTMLElement>('[data-testid="command-scrim"]')
+      const style = scrim ? getComputedStyle(scrim) : null
+
+      return {
+        animationName: style?.animationName ?? '',
+        backgroundColor: style?.backgroundColor ?? '',
+      }
+    })
+  }
+
+  async function closeOutlineScrim(): Promise<void> {
+    await page.getByTestId('command-scrim').click({ position: { x: 24, y: 24 } })
+    await expect(page.getByTestId('reader-outline-panel')).not.toBeVisible()
+    await expect(page.getByTestId('reader-outline-button')).toBeFocused()
+  }
+
+  async function selectTheme(name: string): Promise<void> {
+    await page.getByTestId('reading-settings-button').click()
+    await expect(page.getByTestId('reading-settings-panel')).toBeVisible()
+    await page.getByRole('radio', { name }).click()
+    await page.keyboard.press('Escape')
+    await expect(page.getByTestId('reading-settings-panel')).not.toBeVisible()
+  }
+
+  await page.evaluate(() => window.scrollTo(0, 520))
+  const scrollBeforeOutline = await page.evaluate(() => Math.round(window.scrollY))
+  expect(scrollBeforeOutline).toBeGreaterThan(300)
+
+  await expect(page.locator('html')).not.toHaveAttribute('data-reading-theme')
+  expect(await readOutlineScrimStyle()).toMatchObject({
+    animationName: expect.stringContaining('command-scrim-fade'),
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+  })
+  await expect.poll(() => page.evaluate(() => getComputedStyle(document.body).position)).toBe('fixed')
+  await expect.poll(() => page.evaluate(() => getComputedStyle(document.body).top)).toBe(`-${scrollBeforeOutline}px`)
+
+  const layout = await page.evaluate(() => {
+    const panel = document.querySelector<HTMLElement>('[data-testid="reader-outline-panel"]')
+
+    return {
+      panelWidth: panel?.getBoundingClientRect().width ?? 0,
+    }
+  })
+
+  expect(layout.panelWidth).toBeGreaterThan(740)
+
+  await page.mouse.wheel(0, 800)
+  await expect.poll(() => page.evaluate(() => document.body.style.top)).toBe(`-${scrollBeforeOutline}px`)
+  await expect.poll(() => page.evaluate(() => Math.round(window.scrollY))).toBe(0)
+
+  await closeOutlineScrim()
+  await expect.poll(() => page.evaluate(() => Math.round(window.scrollY))).toBe(scrollBeforeOutline)
+
+  await selectTheme('主题 浅色')
+  await expect(page.locator('html')).toHaveAttribute('data-reading-theme', 'light')
+  expect((await readOutlineScrimStyle()).backgroundColor).toBe('rgba(0, 0, 0, 0.28)')
+  await closeOutlineScrim()
+
+  await selectTheme('主题 Sepia')
+  await expect(page.locator('html')).toHaveAttribute('data-reading-theme', 'sepia')
+  expect((await readOutlineScrimStyle()).backgroundColor).toBe('rgba(0, 0, 0, 0.28)')
+  await closeOutlineScrim()
+
+  await page.emulateMedia({ colorScheme: 'light' })
+  await selectTheme('主题 深色')
+  await expect(page.locator('html')).toHaveAttribute('data-reading-theme', 'dark')
+  expect((await readOutlineScrimStyle()).backgroundColor).toBe('rgba(0, 0, 0, 0.4)')
+  await closeOutlineScrim()
+
+  await selectTheme('主题 跟随系统')
+  await expect(page.locator('html')).not.toHaveAttribute('data-reading-theme')
+  expect((await readOutlineScrimStyle()).backgroundColor).toBe('rgba(0, 0, 0, 0.28)')
+  await closeOutlineScrim()
+
+  await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' })
+  await expect.poll(() => page.evaluate(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches)).toBe(true)
+  expect(await readOutlineScrimStyle()).toMatchObject({
+    animationName: 'none',
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+  })
+  await closeOutlineScrim()
 })
 
 test('follows OS color scheme changes for reading and code surfaces', async ({ page }) => {

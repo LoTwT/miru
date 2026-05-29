@@ -4,54 +4,33 @@ import { computed, nextTick, onMounted, onUnmounted, shallowRef, useTemplateRef,
 import type { ReaderOutlineItem } from '@/features/reader/outlineNavigation'
 import type { ReadingOutlinePositionId } from '@/features/settings/readingSettingsOptions'
 
+type ReaderOutlineMode = 'rail' | 'sheet'
+
 const props = defineProps<{
   activeId: string
+  isOpen: boolean
   items: readonly ReaderOutlineItem[]
+  mode: ReaderOutlineMode
   position: ReadingOutlinePositionId
 }>()
 
 const emit = defineEmits<{
+  close: [options?: { restoreFocus?: boolean }]
   navigate: [id: string]
 }>()
 
-const isOpen = shallowRef(false)
 const isHovering = shallowRef(false)
 const isFocusWithin = shallowRef(false)
 const isReceded = shallowRef(false)
 const prefersReducedMotion = shallowRef(false)
 const rootRef = useTemplateRef<HTMLElement>('root')
 const panelRef = useTemplateRef<HTMLElement>('panel')
-const buttonRef = useTemplateRef<HTMLButtonElement>('button')
 
 let lastScrollY = 0
 let recedeTimer: ReturnType<typeof setTimeout> | undefined
 let mediaQuery: MediaQueryList | undefined
 
 const hasOutline = computed(() => props.items.length > 0)
-
-function togglePanel(): void {
-  if (isOpen.value) {
-    closePanel({ restoreFocus: true })
-    return
-  }
-
-  void openPanel()
-}
-
-async function openPanel(): Promise<void> {
-  isOpen.value = true
-  isReceded.value = false
-  await nextTick()
-  focusFirstOutlineItem()
-}
-
-function closePanel(options: { restoreFocus?: boolean } = {}): void {
-  isOpen.value = false
-
-  if (options.restoreFocus) {
-    queueButtonFocus()
-  }
-}
 
 function focusFirstOutlineItem(): void {
   window.setTimeout(() => {
@@ -62,43 +41,9 @@ function focusFirstOutlineItem(): void {
   }, 0)
 }
 
-function queueButtonFocus(): void {
-  window.requestAnimationFrame(() => {
-    buttonRef.value?.focus()
-  })
-}
-
-function queueButtonFocusAfterPointer(): void {
-  let didRestore = false
-
-  const restore = () => {
-    if (didRestore) {
-      return
-    }
-
-    didRestore = true
-    window.removeEventListener('pointerup', restore)
-    window.removeEventListener('pointercancel', restore)
-    queueButtonFocus()
-  }
-
-  window.addEventListener('pointerup', restore, { once: true })
-  window.addEventListener('pointercancel', restore, { once: true })
-  window.setTimeout(restore, 80)
-}
-
 function navigateTo(id: string): void {
+  emit('close')
   emit('navigate', id)
-  closePanel()
-}
-
-function onDocumentPointerDown(event: PointerEvent): void {
-  const target = event.target
-
-  if (isOpen.value && (!(target instanceof Node) || !rootRef.value?.contains(target))) {
-    closePanel()
-    queueButtonFocusAfterPointer()
-  }
 }
 
 function onFocusIn(): void {
@@ -125,7 +70,7 @@ function onWindowScroll(): void {
   }
   else if (delta > 6 && !prefersReducedMotion.value) {
     recedeTimer = window.setTimeout(() => {
-      if (!isOpen.value && !isFocusWithin.value && !isHovering.value) {
+      if (!props.isOpen && !isFocusWithin.value && !isHovering.value) {
         isReceded.value = true
       }
     }, 520)
@@ -135,7 +80,7 @@ function onWindowScroll(): void {
 }
 
 function onWindowMouseMove(): void {
-  if (!isOpen.value && !prefersReducedMotion.value) {
+  if (!props.isOpen && !prefersReducedMotion.value) {
     isReceded.value = false
   }
 }
@@ -145,13 +90,6 @@ function syncReducedMotion(): void {
 
   if (prefersReducedMotion.value) {
     isReceded.value = false
-  }
-}
-
-function onPanelKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Escape') {
-    event.preventDefault()
-    closePanel({ restoreFocus: true })
   }
 }
 
@@ -165,7 +103,15 @@ function outlineItemClass(item: ReaderOutlineItem) {
 
 watch(hasOutline, (value) => {
   if (!value) {
-    closePanel()
+    emit('close')
+  }
+})
+
+watch(() => props.isOpen, async (value) => {
+  if (value && props.mode === 'sheet') {
+    isReceded.value = false
+    await nextTick()
+    focusFirstOutlineItem()
   }
 })
 
@@ -174,10 +120,13 @@ onMounted(() => {
   syncReducedMotion()
   lastScrollY = window.scrollY
 
+  if (props.mode === 'sheet' && props.isOpen) {
+    focusFirstOutlineItem()
+  }
+
   mediaQuery.addEventListener('change', syncReducedMotion)
   window.addEventListener('scroll', onWindowScroll, { passive: true })
   window.addEventListener('mousemove', onWindowMouseMove, { passive: true })
-  document.addEventListener('pointerdown', onDocumentPointerDown)
 })
 
 onUnmounted(() => {
@@ -185,18 +134,19 @@ onUnmounted(() => {
   mediaQuery?.removeEventListener('change', syncReducedMotion)
   window.removeEventListener('scroll', onWindowScroll)
   window.removeEventListener('mousemove', onWindowMouseMove)
-  document.removeEventListener('pointerdown', onDocumentPointerDown)
 })
 </script>
 
 <template>
   <nav
-    v-if="hasOutline"
+    v-if="hasOutline && (props.mode === 'rail' || props.isOpen)"
     ref="root"
     class="reader-outline"
     :class="{
-      'reader-outline--dimmed': isReceded && !isOpen && !isHovering && !isFocusWithin && !prefersReducedMotion,
-      'reader-outline--open': isOpen,
+      'reader-outline--dimmed': props.mode === 'rail' && isReceded && !props.isOpen && !isHovering && !isFocusWithin && !prefersReducedMotion,
+      'reader-outline--open': props.isOpen,
+      'reader-outline--rail': props.mode === 'rail',
+      'reader-outline--sheet': props.mode === 'sheet',
       'reader-outline--left': props.position === 'left',
       'reader-outline--right': props.position === 'right',
     }"
@@ -208,7 +158,7 @@ onUnmounted(() => {
     @pointerleave="isHovering = false"
     @pointerdown="isReceded = false"
   >
-    <div class="reader-outline__rail" data-testid="reader-outline-rail">
+    <div v-if="props.mode === 'rail'" class="reader-outline__rail" data-testid="reader-outline-rail">
       <p class="reader-outline__label">
         文档大纲
       </p>
@@ -229,7 +179,7 @@ onUnmounted(() => {
     </div>
 
     <div
-      v-if="isOpen"
+      v-if="props.mode === 'sheet' && props.isOpen"
       id="reader-outline-panel"
       ref="panel"
       class="reader-outline__panel"
@@ -237,7 +187,6 @@ onUnmounted(() => {
       aria-modal="false"
       aria-labelledby="reader-outline-title"
       data-testid="reader-outline-panel"
-      @keydown="onPanelKeydown"
     >
       <div class="reader-outline__handle" aria-hidden="true" />
 
@@ -254,7 +203,7 @@ onUnmounted(() => {
           class="reader-outline__close"
           type="button"
           aria-label="关闭文档大纲"
-          @click="closePanel({ restoreFocus: true })"
+          @click="emit('close', { restoreFocus: true })"
         >
           ×
         </button>
@@ -275,25 +224,6 @@ onUnmounted(() => {
         </li>
       </ol>
     </div>
-
-    <button
-      ref="button"
-      class="reader-outline__button"
-      type="button"
-      aria-label="文档大纲"
-      :aria-expanded="isOpen"
-      aria-controls="reader-outline-panel"
-      data-testid="reader-outline-button"
-      @click="togglePanel"
-      @keydown.enter.prevent="togglePanel"
-      @keydown.space.prevent="togglePanel"
-      @keydown.arrow-up.prevent="openPanel"
-      @keydown.escape.prevent="closePanel({ restoreFocus: true })"
-    >
-      <svg class="reader-outline__button-icon" viewBox="0 0 18 18" aria-hidden="true" focusable="false">
-        <path d="M4 5h10M4 9h10M4 13h10" />
-      </svg>
-    </button>
   </nav>
 </template>
 
@@ -305,31 +235,13 @@ onUnmounted(() => {
   font-family: system-ui, sans-serif;
 }
 
+.reader-outline--sheet {
+  position: static;
+  z-index: auto;
+}
+
 .reader-outline__rail {
   display: none;
-}
-
-.reader-outline__button {
-  display: grid;
-  place-items: center;
-  inline-size: 48px;
-  block-size: 48px;
-  border: 1px solid var(--reading-rule);
-  border-radius: 50%;
-  background: color-mix(in srgb, var(--reading-bg) 92%, transparent);
-  color: var(--reading-fg);
-  box-shadow: 0 12px 30px rgb(0 0 0 / 13%);
-  cursor: pointer;
-  backdrop-filter: blur(14px);
-}
-
-.reader-outline__button-icon {
-  inline-size: 1.05rem;
-  block-size: 1.05rem;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-width: 1.7;
 }
 
 .reader-outline__panel {
@@ -386,8 +298,8 @@ onUnmounted(() => {
 .reader-outline__close {
   display: grid;
   place-items: center;
-  inline-size: 36px;
-  block-size: 36px;
+  inline-size: 44px;
+  block-size: 44px;
   border: 1px solid var(--reading-rule);
   border-radius: 50%;
   background: var(--reading-bg);
@@ -472,17 +384,8 @@ onUnmounted(() => {
 }
 
 @media (max-width: 1099px) {
-  .reader-outline {
-    right: max(1rem, calc(env(safe-area-inset-right) + 1rem));
-    bottom: max(8.7rem, calc(env(safe-area-inset-bottom) + 8.7rem));
-    display: grid;
-    justify-items: end;
-  }
-
-  .reader-outline--open .reader-outline__button {
-    position: fixed;
-    right: max(1rem, calc(env(safe-area-inset-right) + 1rem));
-    bottom: calc(min(72vh, 34rem) + max(1rem, env(safe-area-inset-bottom)));
+  .reader-outline--rail {
+    display: none;
   }
 }
 
@@ -528,7 +431,6 @@ onUnmounted(() => {
     letter-spacing: 0;
   }
 
-  .reader-outline__button,
   .reader-outline__panel {
     display: none;
   }
