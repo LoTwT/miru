@@ -50,6 +50,16 @@ const pdfViewerRef = useTemplateRef<InstanceType<typeof PdfViewer>>('pdfViewer')
 const persistedSettings = readPersistedReadingSettings()
 const remoteImageMode = shallowRef<RemoteImageMode>(persistedSettings?.remoteImageMode ?? 'auto')
 const readingSettings = useReadingSettings()
+let pageScrollLock: {
+  bodyLeft: string
+  bodyOverflow: string
+  bodyPosition: string
+  bodyRight: string
+  bodyTop: string
+  bodyWidth: string
+  htmlOverscrollBehavior: string
+  scrollY: number
+} | null = null
 
 const { error, isFetchingUrl, loadFromClipboard, loadFromFile, loadFromText, loadFromUrl } = useDocumentInput({
   onDocument(document) {
@@ -93,6 +103,10 @@ watch(isFetchingUrl, (value) => {
   }
 })
 
+watch(openSurfaceId, (value) => {
+  setPageScrollLocked(value !== null)
+})
+
 onMounted(async () => {
   await loadDefaultReadingFonts()
   readingSettings.applyCurrent()
@@ -105,6 +119,7 @@ onUnmounted(() => {
   window.clearTimeout(positionSaveTimer)
   window.removeEventListener('scroll', onWindowScroll)
   document.removeEventListener('pointerdown', onDocumentPointerDown)
+  setPageScrollLocked(false)
   void libraryStore.close()
 })
 
@@ -114,7 +129,7 @@ function resetToSample(): void {
 
 async function showLibrary(): Promise<void> {
   closeSurface()
-  const currentScrollY = window.scrollY
+  const currentScrollY = getCurrentScrollY()
   window.clearTimeout(positionSaveTimer)
   await saveActiveReadingPosition({ scrollY: currentScrollY })
   await refreshLibraryEntries()
@@ -164,6 +179,7 @@ function toggleSurface(surfaceId: CommandSurfaceId): void {
 
 function openSurface(surfaceId: CommandSurfaceId): void {
   openSurfaceId.value = surfaceId
+  setPageScrollLocked(true)
 }
 
 function setActionsSurfaceOpen(value: boolean): void {
@@ -178,6 +194,7 @@ function setActionsSurfaceOpen(value: boolean): void {
 function closeSurface(options: { restoreFocus?: boolean, previousSurfaceId?: CommandSurfaceId | null } = {}): void {
   const previousSurfaceId = options.previousSurfaceId ?? openSurfaceId.value
   openSurfaceId.value = null
+  setPageScrollLocked(false)
 
   if (options.restoreFocus) {
     const trigger = getSurfaceTrigger(previousSurfaceId)
@@ -195,6 +212,54 @@ function getSurfaceTrigger(surfaceId: CommandSurfaceId | null): HTMLButtonElemen
   }
 
   return null
+}
+
+function setPageScrollLocked(isLocked: boolean): void {
+  if (isLocked && !window.matchMedia('(max-width: 640px)').matches) {
+    return
+  }
+
+  if (isLocked && !pageScrollLock) {
+    const body = document.body
+    const root = document.documentElement
+    const scrollY = window.scrollY
+
+    pageScrollLock = {
+      bodyLeft: body.style.left,
+      bodyOverflow: body.style.overflow,
+      bodyPosition: body.style.position,
+      bodyRight: body.style.right,
+      bodyTop: body.style.top,
+      bodyWidth: body.style.width,
+      htmlOverscrollBehavior: root.style.overscrollBehavior,
+      scrollY,
+    }
+
+    body.style.position = 'fixed'
+    body.style.top = `-${scrollY}px`
+    body.style.left = '0'
+    body.style.right = '0'
+    body.style.width = '100%'
+    body.style.overflow = 'hidden'
+    root.style.overscrollBehavior = 'none'
+    return
+  }
+
+  if (!isLocked && pageScrollLock) {
+    const body = document.body
+    const root = document.documentElement
+    const { scrollY } = pageScrollLock
+
+    body.style.position = pageScrollLock.bodyPosition
+    body.style.top = pageScrollLock.bodyTop
+    body.style.left = pageScrollLock.bodyLeft
+    body.style.right = pageScrollLock.bodyRight
+    body.style.width = pageScrollLock.bodyWidth
+    body.style.overflow = pageScrollLock.bodyOverflow
+    root.style.overscrollBehavior = pageScrollLock.htmlOverscrollBehavior
+    pageScrollLock = null
+    window.scrollTo({ top: scrollY, behavior: 'auto' })
+  }
 }
 
 function onDocumentPointerDown(event: PointerEvent): void {
@@ -523,7 +588,7 @@ async function onDrop(event: DragEvent): Promise<void> {
 let positionSaveTimer: ReturnType<typeof setTimeout> | undefined
 
 function onWindowScroll(): void {
-  if (appMode.value !== 'reader' || !activeLibraryEntryId.value) {
+  if (appMode.value !== 'reader' || !activeLibraryEntryId.value || pageScrollLock) {
     return
   }
 
@@ -543,9 +608,13 @@ async function saveActiveReadingPosition(options: { scrollY?: number } = {}): Pr
   await libraryStore.saveReadingPosition({
     documentId,
     type: 'markdown',
-    scrollY: Math.max(0, Math.round(options.scrollY ?? window.scrollY)),
+    scrollY: Math.max(0, Math.round(options.scrollY ?? getCurrentScrollY())),
     activeHeadingId: activeOutlineId.value || null,
   })
+}
+
+function getCurrentScrollY(): number {
+  return pageScrollLock?.scrollY ?? window.scrollY
 }
 
 function restorePendingPositionIfReady(): void {
@@ -787,7 +856,7 @@ function focusLibraryView(): void {
   z-index: 30;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 0.55rem;
   max-width: 78rem;
   margin: 0 auto;
@@ -801,7 +870,7 @@ function focusLibraryView(): void {
 
 .app-shell__mark {
   display: flex;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   align-items: center;
   min-inline-size: 0;
   min-block-size: 44px;
@@ -836,6 +905,7 @@ function focusLibraryView(): void {
 
 .app-shell__document-title {
   overflow: hidden;
+  max-inline-size: min(40vw, 32rem);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -858,6 +928,7 @@ function focusLibraryView(): void {
 .app-shell__library-button {
   grid-auto-flow: column;
   gap: 0.35rem;
+  margin-inline-start: auto;
 }
 
 .app-shell__library-icon {
