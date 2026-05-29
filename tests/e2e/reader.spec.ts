@@ -551,7 +551,7 @@ test('keeps URL field paste inside the URL input', async ({ page, context }) => 
   await expect(page.getByRole('heading', { name: 'miru' })).toBeVisible()
 })
 
-test('collapses H1 sections while preserving heading permalinks', async ({ page }) => {
+test('collapses heading sections while preserving heading permalinks', async ({ page }) => {
   await page.goto('/')
 
   await page.evaluate(() => {
@@ -578,10 +578,21 @@ test('collapses H1 sections while preserving heading permalinks', async ({ page 
 
   const firstHeading = page.getByRole('heading', { name: 'First section' })
   const firstToggle = page.locator('[data-reader-heading-toggle]').first()
+  const nestedToggle = page.locator('[data-reader-heading-toggle][data-reader-heading-level="2"]').first()
 
   await expect(page.locator('h1#first-section a.header-anchor')).toHaveAttribute('href', '#first-section')
   await expect(page.getByRole('button', { name: '折叠「First section」章节' })).toBeVisible()
+  await expect(nestedToggle).toHaveAttribute('aria-label', '折叠「Nested topic」章节')
   await expect(firstToggle).toHaveAttribute('aria-expanded', 'true')
+
+  await nestedToggle.click()
+
+  await expect(nestedToggle).toHaveAttribute('aria-expanded', 'false')
+  await expect(page.getByText('Nested body.')).not.toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Second section' })).toBeVisible()
+
+  await nestedToggle.click()
+  await expect(page.getByText('Nested body.')).toBeVisible()
 
   await firstToggle.click()
 
@@ -662,6 +673,8 @@ test('separates heading, body link, permalink, and collapse control styles', asy
   const h2Anchor = page.locator('h2#nested-topic > a.header-anchor')
   const bodyLink = page.locator('.reader-surface__content p a[href="https://example.com/resource"]')
   const firstToggle = page.locator('[data-reader-heading-toggle]').first()
+  const h2Toggle = page.getByRole('button', { name: '折叠「Nested topic」章节' })
+  const h3Toggle = page.getByRole('button', { name: '折叠「Small detail」章节' })
 
   for (const heading of [h1, h2, h3]) {
     await expect.poll(() => heading.evaluate(element => getComputedStyle(element).textDecorationLine)).toBe('none')
@@ -688,12 +701,16 @@ test('separates heading, body link, permalink, and collapse control styles', asy
   await expect.poll(() => h2Anchor.evaluate(element => getComputedStyle(element).outlineStyle)).not.toBe('none')
 
   await expect(firstToggle).toHaveAttribute('aria-expanded', 'true')
+  await expect(h2Toggle).toHaveAttribute('data-reader-heading-level', '2')
+  await expect(h3Toggle).toHaveAttribute('data-reader-heading-level', '3')
   await expect.poll(() => firstToggle.evaluate(element => element.tagName)).toBe('BUTTON')
   await expect.poll(() => firstToggle.evaluate(element => getComputedStyle(element).textDecorationLine)).toBe('none')
   await expect.poll(() => firstToggle.evaluate(element => element.getBoundingClientRect().width)).toBeGreaterThanOrEqual(44)
   await expect.poll(() => firstToggle.evaluate(element => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44)
   await firstToggle.focus()
   await expect.poll(() => firstToggle.evaluate(element => getComputedStyle(element).outlineStyle)).not.toBe('none')
+  await expect.poll(() => h2Toggle.evaluate(element => element.getBoundingClientRect().width)).toBeGreaterThanOrEqual(44)
+  await expect.poll(() => h3Toggle.evaluate(element => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44)
 
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await expect.poll(() => firstToggle.evaluate(element => getComputedStyle(element).transitionDuration)).toBe('0s')
@@ -836,6 +853,44 @@ test('navigates from the outline and expands a collapsed parent section first', 
     await expect(page.getByTestId('reader-outline-panel')).not.toBeVisible()
     await expect(page.getByTestId('reader-outline-button')).toBeVisible()
   }
+})
+
+test('navigates from the outline and expands nested collapsed sections', async ({ page }) => {
+  await page.goto('/')
+
+  await pasteText(page, [
+    '# First section',
+    '',
+    'First body.',
+    '',
+    '## Nested topic',
+    '',
+    'Nested body.',
+    '',
+    '### Small detail',
+    '',
+    'Detail body.',
+    '',
+    '# Second section',
+    '',
+    'Second body.',
+  ].join('\n'))
+
+  const nestedToggle = page.locator('[data-reader-heading-toggle][data-reader-heading-level="2"]').first()
+  await nestedToggle.click()
+  await expect(nestedToggle).toHaveAttribute('aria-expanded', 'false')
+  await expect(page.getByRole('heading', { name: 'Small detail' })).not.toBeVisible()
+
+  if (!isWideViewport(page)) {
+    await page.getByTestId('reader-outline-button').click()
+    await expect(page.getByTestId('reader-outline-panel')).toBeVisible()
+  }
+
+  await page.getByTestId('reader-outline').getByRole('link', { name: 'Small detail' }).click()
+
+  await expect(nestedToggle).toHaveAttribute('aria-expanded', 'true')
+  await expect(page).toHaveURL(/#small-detail$/)
+  await expect(page.getByRole('heading', { name: 'Small detail' })).toBeFocused()
 })
 
 test('activates the final outline item near the page bottom', async ({ page }) => {

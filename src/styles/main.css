@@ -92,16 +92,16 @@ a:focus-visible {
   letter-spacing: -0.01em;
 }
 
-.reader-surface__content > .reader-heading-row {
+.reader-surface__content .reader-heading-row {
   position: relative;
   margin: 2.1em 0 0.65em;
 }
 
-.reader-surface__content > .reader-heading-row:first-child {
+.reader-surface__content .reader-heading-row:first-child {
   margin-top: 0;
 }
 
-.reader-surface__content > .reader-heading-row > h1 {
+.reader-surface__content .reader-heading-row > :is(h1, h2, h3) {
   margin: 0;
 }
 
@@ -148,6 +148,16 @@ a:focus-visible {
   fill: currentColor;
   transform-origin: 50% 50%;
   transition: transform 160ms ease;
+}
+
+.reader-heading-toggle[data-reader-heading-level="2"] .reader-heading-toggle__icon {
+  inline-size: max(12px, calc(var(--reading-scale-h2) * 0.36));
+  block-size: max(12px, calc(var(--reading-scale-h2) * 0.36));
+}
+
+.reader-heading-toggle[data-reader-heading-level="3"] .reader-heading-toggle__icon {
+  inline-size: max(11px, calc(var(--reading-scale-h3) * 0.42));
+  block-size: max(11px, calc(var(--reading-scale-h3) * 0.42));
 }
 
 .reader-heading-toggle[aria-expanded="false"] .reader-heading-toggle__icon {
@@ -428,7 +438,7 @@ a:focus-visible {
     transform: translate(-46%, -50%);
   }
 
-  .reader-surface__content > .reader-heading-row > h1 {
+  .reader-surface__content .reader-heading-row > :is(h1, h2, h3) {
     padding-inline-start: 1.35rem;
   }
 }
@@ -511,12 +521,12 @@ a:focus-visible {
     --reader-heading-gutter: 0 !important;
   }
 
-  .reader-surface__content > .reader-heading-row {
+  .reader-surface__content .reader-heading-row {
     break-after: avoid-page;
     page-break-after: avoid;
   }
 
-  .reader-surface__content > .reader-heading-row > h1 {
+  .reader-surface__content .reader-heading-row > :is(h1, h2, h3) {
     padding-inline-start: 0 !important;
   }
 
