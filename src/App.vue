@@ -734,7 +734,7 @@ function readerSourceFromLibrarySource(source: LibrarySource): ReaderDocument['s
 
 function labelForEntry(entry: LibraryEntry): string {
   if (entry.source.kind === 'url') {
-    return entry.source.inputUrl
+    return entry.title
   }
 
   if (entry.source.kind === 'file') {

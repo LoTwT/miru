@@ -114,7 +114,7 @@ export function createLibraryStore(options: LibraryStoreOptions = {}) {
 
     const id = createId()
     const timestamp = now()
-    const title = normalizeTitle(input.title ?? deriveMarkdownTitle(input.markdown, input.label))
+    const title = normalizeTitle(input.title ?? deriveMarkdownTitle(input.markdown, input.label, input.source))
     const entry: LibraryEntry = {
       id,
       type: 'markdown',
@@ -366,7 +366,11 @@ function compareDateDesc(left: string, right: string): number {
   return right.localeCompare(left)
 }
 
-function deriveMarkdownTitle(markdown: string, label?: string): string {
+function deriveMarkdownTitle(markdown: string, label?: string, source?: AddMarkdownDocumentInput['source']): string {
+  if (source?.kind === 'url') {
+    return deriveUrlMarkdownTitle(markdown, source)
+  }
+
   const heading = markdown.match(/^#\s+(.+)$/m)?.[1]
   if (heading?.trim()) {
     return heading.trim()
@@ -378,6 +382,64 @@ function deriveMarkdownTitle(markdown: string, label?: string): string {
 
   const firstLine = markdown.split(/\r?\n/).find(line => line.trim())
   return firstLine?.trim() ?? '无标题文档'
+}
+
+function deriveUrlMarkdownTitle(markdown: string, source: Extract<AddMarkdownDocumentInput['source'], { kind: 'url' }>): string {
+  return getFrontmatterTitle(markdown)
+    ?? getFirstMarkdownH1(markdown)
+    ?? getHtmlTitle(markdown)
+    ?? getUrlBasenameTitle(source.inputUrl)
+    ?? getUrlBasenameTitle(source.requestUrl)
+    ?? source.domain
+}
+
+function getFrontmatterTitle(markdown: string): string | null {
+  const frontmatter = markdown.match(/^---\s*\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/)
+  const title = frontmatter?.[1]?.match(/^title:\s*(.+?)\s*$/m)?.[1]
+  return title ? normalizeExtractedTitle(title) : null
+}
+
+function getFirstMarkdownH1(markdown: string): string | null {
+  const heading = markdown.match(/^#\s+(.+)$/m)?.[1]
+  return heading ? normalizeExtractedTitle(heading) : null
+}
+
+function getHtmlTitle(markdown: string): string | null {
+  const title = markdown.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]
+  return title ? normalizeExtractedTitle(title) : null
+}
+
+function getUrlBasenameTitle(url: string): string | null {
+  try {
+    const parsed = new URL(url)
+    const basename = parsed.pathname.split('/').filter(Boolean).at(-1)
+    if (!basename) {
+      return parsed.hostname || null
+    }
+
+    return stripFileExtension(decodeUrlSegment(basename)) ?? parsed.hostname
+  }
+  catch {
+    return null
+  }
+}
+
+function normalizeExtractedTitle(value: string): string | null {
+  const normalized = value
+    .trim()
+    .replace(/^["']|["']$/g, '')
+    .trim()
+
+  return normalized || null
+}
+
+function decodeUrlSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment)
+  }
+  catch {
+    return segment
+  }
 }
 
 function normalizeTitle(title: string): string {

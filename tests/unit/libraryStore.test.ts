@@ -77,6 +77,39 @@ describe('local library store', () => {
     })
   })
 
+  it('derives URL-imported Markdown titles without exposing full URLs as display titles', async () => {
+    const store = createTestStore()
+
+    const titledEntry = await store.addMarkdownDocument({
+      markdown: '---\ntitle: "Quiet URL Note"\n---\n\n# Ignored H1\n\nRead slowly.',
+      source: {
+        kind: 'url',
+        inputUrl: 'https://example.com/docs/ignored.md',
+        requestUrl: 'https://example.com/docs/ignored.md',
+        domain: 'example.com',
+      },
+      label: 'https://example.com/docs/ignored.md',
+    })
+
+    const fallbackEntry = await store.addMarkdownDocument({
+      markdown: 'No heading here.\n\nJust text.',
+      source: {
+        kind: 'url',
+        inputUrl: 'https://example.com/guides/getting-started.markdown',
+        requestUrl: 'https://example.com/guides/getting-started.markdown',
+        domain: 'example.com',
+      },
+      label: 'https://example.com/guides/getting-started.markdown',
+    })
+
+    expect(titledEntry.title).toBe('Quiet URL Note')
+    expect(titledEntry.source).toMatchObject({
+      kind: 'url',
+      inputUrl: 'https://example.com/docs/ignored.md',
+    })
+    expect(fallbackEntry.title).toBe('getting-started')
+  })
+
   it('stores PDF entries as blobs without hydrating blobs into the bookshelf list', async () => {
     const store = createTestStore()
     const blob = createPdfBlob()
