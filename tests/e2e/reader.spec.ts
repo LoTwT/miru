@@ -1056,8 +1056,20 @@ test('customizes reading settings, persists them, and resets to defaults', async
 
   await settingsButton.click()
   await expect(page.getByTestId('reading-settings-panel')).toBeVisible()
+  await expect(page.getByTestId('reading-settings-main-panel')).toBeVisible()
+  await expect(page.getByRole('heading', { name: '文字' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '版面' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '主题' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '预设' })).toBeVisible()
+
+  await page.getByRole('button', { name: /管理预设/ }).click()
+  await expect(page.getByTestId('reading-settings-presets-panel')).toBeVisible()
+  await expect(page.getByRole('heading', { name: '管理预设' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '返回阅读设置' })).toBeFocused()
+  await page.getByRole('button', { name: '返回阅读设置' }).click()
+  await expect(page.getByTestId('reading-settings-main-panel')).toBeVisible()
+
   const fontSizeSlider = page.getByRole('slider', { name: '字号' })
-  await expect(fontSizeSlider).toBeFocused()
   await expect(fontSizeSlider).toHaveAttribute('aria-valuetext', '字号 18px')
 
   await fontSizeSlider.press('ArrowRight')
@@ -1212,7 +1224,7 @@ test('reading settings use a bottom sheet on narrow screens', async ({ page }) =
   const box = await panel.boundingBox()
   expect(box?.width).toBeGreaterThan(360)
   expect(box?.y).toBeGreaterThan(250)
-  await expect(page.getByRole('slider', { name: '字号' })).toBeFocused()
+  await expect(page.getByRole('radio', { name: '正文字体 衬线' })).toBeFocused()
 
   await page.keyboard.press('Escape')
   await expect(panel).not.toBeVisible()
