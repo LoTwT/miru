@@ -7,7 +7,9 @@ export type ReadingLineHeightId = '1.5' | '1.7' | '1.9'
 export type ReadingLetterSpacingId = 'tight' | 'standard' | 'loose'
 export type ReadingParagraphGapId = 'compact' | 'standard' | 'loose'
 export type ReadingPageMarginId = 'compact' | 'standard' | 'spacious'
-export type ReadingFontFamilyId = 'serif' | 'system-serif' | 'system-sans' | 'mono'
+export type ReadingBuiltInFontFamilyId = 'serif' | 'system-serif' | 'system-sans' | 'mono'
+export type ReadingLocalFontFamilyId = `local:${string}`
+export type ReadingFontFamilyId = ReadingBuiltInFontFamilyId | ReadingLocalFontFamilyId
 export type ReadingThemeChoice = 'system' | 'light' | 'dark' | 'sepia' | 'custom'
 export type PresetReadingThemeChoice = Exclude<ReadingThemeChoice, 'system' | 'custom'>
 export type ReadingContrastId = 'soft' | 'standard' | 'strong'
@@ -43,6 +45,7 @@ export const serifFontStack = '"Newsreader", Georgia, "Songti SC", "Noto Serif C
 export const systemSerifFontStack = 'Georgia, "Songti SC", "Noto Serif CJK SC", serif'
 export const systemSansFontStack = '-apple-system, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif'
 export const monoFontStack = '"Space Mono", ui-monospace, SFMono-Regular, Menlo, "PingFang SC", "Noto Sans CJK SC", monospace'
+export const localFontFamilyPrefix = 'local:'
 
 export const readingFontSizeOptions = [
   { id: '15', label: '15', ariaLabel: '字号 15px', tokenValue: '15px' },
@@ -90,7 +93,7 @@ export const readingFontFamilyOptions = [
   { id: 'system-serif', label: '系统衬线', ariaLabel: '正文字体 系统衬线', tokenValue: systemSerifFontStack },
   { id: 'system-sans', label: '系统无衬线', ariaLabel: '正文字体 系统无衬线', tokenValue: systemSansFontStack },
   { id: 'mono', label: 'Space Mono', ariaLabel: '正文字体 Space Mono', tokenValue: monoFontStack },
-] as const satisfies readonly ReadingSettingOption<ReadingFontFamilyId>[]
+] as const satisfies readonly ReadingSettingOption<ReadingBuiltInFontFamilyId>[]
 
 export const readingThemeOptions = [
   { id: 'system', label: '跟随系统', ariaLabel: '主题 跟随系统' },
@@ -293,6 +296,30 @@ export function normalizeHexColor(value: string | undefined): string | undefined
   }
 
   return undefined
+}
+
+export function createLocalFontFamilyId(id: string): ReadingLocalFontFamilyId {
+  return `${localFontFamilyPrefix}${id}`
+}
+
+export function isReadingFontFamilyId(value: unknown): value is ReadingFontFamilyId {
+  return isBuiltInReadingFontFamilyId(value) || isLocalFontFamilyId(value)
+}
+
+export function isBuiltInReadingFontFamilyId(value: unknown): value is ReadingBuiltInFontFamilyId {
+  return typeof value === 'string' && readingFontFamilyOptions.some(option => option.id === value)
+}
+
+export function isLocalFontFamilyId(value: unknown): value is ReadingLocalFontFamilyId {
+  return typeof value === 'string' && value.startsWith(localFontFamilyPrefix) && value.length > localFontFamilyPrefix.length
+}
+
+export function localFontIdFromFamilyId(value: ReadingLocalFontFamilyId): string {
+  return value.slice(localFontFamilyPrefix.length)
+}
+
+export function buildUploadedFontStack(fontFaceFamily: string): string {
+  return `"${fontFaceFamily.replace(/"/g, '\\"')}", ${serifFontStack}`
 }
 
 export function contrastRatio(colorA: string, colorB: string): number {

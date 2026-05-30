@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import path from 'node:path'
 
 const fetchedMarkdown = '# Remote doc\n\nLoaded from URL.'
 
@@ -1147,6 +1148,84 @@ test('customizes reading settings, persists them, and resets to defaults', async
     readingBg: '#fbf8f1',
     appBg: 'rgb(251, 248, 241)',
   })
+  expect(await page.evaluate(() => localStorage.getItem('miru:reading-settings:v1'))).toBeNull()
+})
+
+test('uploads, persists, and safely deletes local reading fonts without third-party requests', async ({ page }) => {
+  const requestHosts = new Set<string>()
+  page.on('request', (request) => {
+    requestHosts.add(new URL(request.url()).host)
+  })
+
+  await page.goto('/')
+  await page.getByTestId('reading-settings-button').click()
+
+  const uploadedFontName = 'space-mono-latin-400-normal'
+  const fontPath = path.join(process.cwd(), 'node_modules/@ayingott/theme/src/fonts/space-mono-latin-400-normal.woff2')
+  await page.getByTestId('local-font-file-input').setInputFiles(fontPath)
+
+  const uploadedFontRadio = page.getByRole('radio', { name: `正文字体 ${uploadedFontName}` })
+  await expect(uploadedFontRadio).toBeVisible()
+  await expect(uploadedFontRadio).toHaveAttribute('aria-checked', 'true')
+  await expect(page.getByText(`已添加字体「${uploadedFontName}」。`)).toBeVisible()
+  await expect.poll(() => readInlineReadingTokens(page)).toMatchObject({
+    fontBody: expect.stringContaining('MiruLocalFont'),
+  })
+
+  const fontStack = (await readInlineReadingTokens(page)).fontBody
+  expect(fontStack).toContain('"Songti SC"')
+  expect(fontStack).toContain('"Noto Serif CJK SC"')
+
+  const persistedSettings = await page.evaluate(() => JSON.parse(localStorage.getItem('miru:reading-settings:v1') ?? '{}'))
+  expect(persistedSettings.fontFamily).toMatch(/^local:font-/)
+  expect(persistedSettings.tokenOverrides['--reading-font-body']).toContain('MiruLocalFont')
+
+  await page.getByRole('button', { name: /管理预设/ }).click()
+  await page.getByLabel('存为预设').fill('Uploaded face')
+  await page.getByRole('button', { name: '保存' }).click()
+  const persistedPresets = await page.evaluate(() => JSON.parse(localStorage.getItem('miru:reading-presets:v1') ?? '{}'))
+  expect(persistedPresets.presets[0].settings.fontFamily).toBe(persistedSettings.fontFamily)
+
+  await page.reload()
+  await page.getByTestId('reading-settings-button').click()
+  await expect(page.getByRole('radio', { name: `正文字体 ${uploadedFontName}` })).toHaveAttribute('aria-checked', 'true')
+  await page.getByRole('button', { name: /管理我的字体/ }).click()
+  await expect(page.getByTestId('reading-settings-fonts-panel')).toBeVisible()
+
+  const uploadedFontRow = page.locator('.reading-settings__saved-preset').filter({ hasText: uploadedFontName })
+  await uploadedFontRow.getByRole('button', { name: '删除' }).click()
+  await expect(uploadedFontRow).toHaveAttribute('data-pending-delete', 'true')
+  await uploadedFontRow.getByRole('button', { name: '确认删除' }).click()
+  await expect(uploadedFontRow).toHaveCount(0)
+  await page.getByRole('button', { name: '返回阅读设置' }).click()
+
+  await expect(page.getByRole('radio', { name: '正文字体 Newsreader' })).toHaveAttribute('aria-checked', 'true')
+  await expect.poll(() => readInlineReadingTokens(page)).toMatchObject({
+    fontBody: '',
+  })
+
+  await page.getByRole('button', { name: /管理预设/ }).click()
+  await page.locator('.reading-settings__saved-preset').filter({ hasText: 'Uploaded face' }).getByRole('button', { name: '应用' }).click()
+  await expect.poll(() => readInlineReadingTokens(page)).toMatchObject({
+    fontBody: '',
+  })
+
+  const devServerHost = new URL(page.url()).host
+  expect([...requestHosts].every(host => host === devServerHost)).toBe(true)
+})
+
+test('rejects malformed local font uploads without changing the current font', async ({ page }) => {
+  await page.goto('/')
+  await page.getByTestId('reading-settings-button').click()
+
+  await page.getByTestId('local-font-file-input').setInputFiles({
+    name: 'broken.woff2',
+    mimeType: 'font/woff2',
+    buffer: Buffer.from('not a valid font'),
+  })
+
+  await expect(page.getByText('字体无法解析,请换一个字体文件。')).toBeVisible()
+  await expect(page.getByRole('radio', { name: '正文字体 Newsreader' })).toHaveAttribute('aria-checked', 'true')
   expect(await page.evaluate(() => localStorage.getItem('miru:reading-settings:v1'))).toBeNull()
 })
 

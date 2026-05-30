@@ -10,6 +10,7 @@ export interface PersistedReadingSettings {
   version: 1
   presetId?: string
   tokenOverrides?: Record<ReadingTokenName, string>
+  fontFamily?: string
   fontBody?: string
   customTheme?: {
     bg: string
@@ -116,6 +117,7 @@ export function readPersistedReadingSettings(storage: Storage = localStorage): P
       version: 1,
       presetId: parsed.presetId,
       tokenOverrides: sanitizeTokenOverrides(parsed.tokenOverrides),
+      fontFamily: typeof parsed.fontFamily === 'string' ? parsed.fontFamily : undefined,
       fontBody: typeof parsed.fontBody === 'string' ? parsed.fontBody : undefined,
       customTheme: sanitizeCustomTheme(parsed.customTheme),
       remoteImageMode: isRemoteImageMode(parsed.remoteImageMode) ? parsed.remoteImageMode : undefined,

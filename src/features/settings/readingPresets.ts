@@ -1,7 +1,7 @@
 import {
   defaultReadingSettings,
+  isReadingFontFamilyId,
   readingContrastOptions,
-  readingFontFamilyOptions,
   readingFontSizeOptions,
   readingLetterSpacingOptions,
   readingLineHeightOptions,
@@ -172,7 +172,7 @@ function sanitizeSnapshot(value: unknown): ReadingPresetSnapshot | null {
     letterSpacing: matchOption(readingLetterSpacingOptions, snapshot.letterSpacing) ?? defaultReadingSettings.letterSpacing,
     paragraphGap: matchOption(readingParagraphGapOptions, snapshot.paragraphGap) ?? defaultReadingSettings.paragraphGap,
     pageMargin: matchOption(readingPageMarginOptions, snapshot.pageMargin) ?? defaultReadingSettings.pageMargin,
-    fontFamily: matchOption(readingFontFamilyOptions, snapshot.fontFamily) ?? defaultReadingSettings.fontFamily,
+    fontFamily: isReadingFontFamilyId(snapshot.fontFamily) ? snapshot.fontFamily : defaultReadingSettings.fontFamily,
     theme: isReadingThemeChoice(snapshot.theme) ? snapshot.theme : defaultReadingSettings.theme,
     contrast: matchOption(readingContrastOptions, snapshot.contrast) ?? defaultReadingSettings.contrast,
     outlinePosition: matchOption(readingOutlinePositionOptions, snapshot.outlinePosition) ?? defaultReadingSettings.outlinePosition,
