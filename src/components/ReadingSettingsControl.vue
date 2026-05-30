@@ -1194,6 +1194,7 @@ function syncOutlineViewport(): void {
 .reading-settings__panel {
   max-block-size: min(82vh, 44rem);
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 0.8rem;
   border: 1px solid var(--reading-rule);
   border-radius: 18px;

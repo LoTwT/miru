@@ -120,14 +120,14 @@ a:focus-visible {
   background: transparent;
   color: var(--reading-fg-muted);
   cursor: pointer;
-  opacity: 0.3;
+  opacity: 0.45;
   transform: translateY(-50%);
   transition: opacity 160ms ease, background-color 160ms ease, color 160ms ease;
 }
 
 @media (hover: hover) and (pointer: fine) {
   .reader-heading-toggle {
-    opacity: 0.15;
+    opacity: 0.3;
   }
 }
 
