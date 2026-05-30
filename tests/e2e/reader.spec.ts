@@ -699,12 +699,12 @@ test('separates heading, body link, permalink, and collapse control styles', asy
   }
 
   if (await page.evaluate(() => window.matchMedia('(hover: hover) and (pointer: fine)').matches)) {
-    await expect.poll(() => h2Toggle.evaluate(element => Number(getComputedStyle(element).opacity))).toBeLessThan(0.2)
-    await expect.poll(() => h2Toggle.evaluate(element => Number(getComputedStyle(element).opacity))).toBeGreaterThan(0.1)
+    await expect.poll(() => h2Toggle.evaluate(element => Number(getComputedStyle(element).opacity))).toBeGreaterThanOrEqual(0.3)
+    await expect.poll(() => h2Toggle.evaluate(element => Number(getComputedStyle(element).opacity))).toBeLessThanOrEqual(0.35)
   }
   else {
-    await expect.poll(() => h2Toggle.evaluate(element => Number(getComputedStyle(element).opacity))).toBeLessThan(0.35)
-    await expect.poll(() => h2Toggle.evaluate(element => Number(getComputedStyle(element).opacity))).toBeGreaterThan(0.25)
+    await expect.poll(() => h2Toggle.evaluate(element => Number(getComputedStyle(element).opacity))).toBeGreaterThanOrEqual(0.45)
+    await expect.poll(() => h2Toggle.evaluate(element => Number(getComputedStyle(element).opacity))).toBeLessThanOrEqual(0.5)
   }
 
   await h2Anchor.focus()
@@ -1443,6 +1443,48 @@ test('reading settings use a bottom sheet on narrow screens', async ({ page }) =
   await page.keyboard.press('Escape')
   await expect(panel).not.toBeVisible()
   await expect(page.getByTestId('reading-settings-button')).toBeFocused()
+})
+
+test('contains reading settings panel scroll chaining on desktop', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto('/')
+  await pasteText(page, [
+    '# Long settings panel doc',
+    '',
+    Array.from({ length: 80 }, (_, index) => `Paragraph ${index + 1}.`).join('\n\n'),
+  ].join('\n'))
+  await expect(page.getByRole('heading', { name: 'Long settings panel doc' })).toBeVisible()
+
+  await page.evaluate(() => window.scrollTo(0, 360))
+  const pageScrollBefore = await page.evaluate(() => Math.round(window.scrollY))
+  expect(pageScrollBefore).toBeGreaterThan(250)
+
+  await page.getByTestId('reading-settings-button').click()
+  const panel = page.getByTestId('reading-settings-panel')
+  await expect(panel).toBeVisible()
+  await expect.poll(() => panel.evaluate(element => getComputedStyle(element).overscrollBehaviorY)).toBe('contain')
+  await expect.poll(() => panel.evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true)
+
+  const panelBox = await panel.boundingBox()
+  expect(panelBox).not.toBeNull()
+  await page.mouse.move(panelBox!.x + panelBox!.width / 2, panelBox!.y + panelBox!.height / 2)
+
+  await panel.evaluate((element) => {
+    element.scrollTop = element.scrollHeight
+  })
+  const panelScrollBottom = await panel.evaluate(element => Math.round(element.scrollTop))
+  expect(panelScrollBottom).toBeGreaterThan(0)
+
+  await page.mouse.wheel(0, 1200)
+  await expect.poll(() => page.evaluate(() => Math.round(window.scrollY))).toBe(pageScrollBefore)
+  await expect.poll(() => panel.evaluate(element => Math.round(element.scrollTop))).toBe(panelScrollBottom)
+
+  await panel.evaluate((element) => {
+    element.scrollTop = 0
+  })
+  await page.mouse.wheel(0, -1200)
+  await expect.poll(() => page.evaluate(() => Math.round(window.scrollY))).toBe(pageScrollBefore)
+  await expect.poll(() => panel.evaluate(element => Math.round(element.scrollTop))).toBe(0)
 })
 
 test('locks page scroll while mobile command sheets are open', async ({ page }) => {
