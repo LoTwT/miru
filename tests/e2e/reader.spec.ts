@@ -33,11 +33,13 @@ test('renders the reader footer with privacy copy and safe links', async ({ page
 
   const footer = page.getByTestId('reader-footer')
   await footer.scrollIntoViewIfNeeded()
-  await expect(footer).toContainText('安静地读 Markdown · 文档留在本机 · 隐私是默认')
-  await expect(footer.getByRole('link', { name: '源码 · GitHub' })).toHaveAttribute('rel', 'noreferrer')
+  await expect(footer).toContainText('miru')
+  await expect(footer).toContainText('文档留在本机，隐私默认')
+  await expect(footer).toContainText('© 2026')
+  await expect(footer.getByRole('link', { name: 'GitHub' })).toHaveAttribute('rel', 'noreferrer')
   await expect(footer.getByRole('link', { name: 'CommonMark' })).toHaveAttribute('rel', 'noreferrer')
   await expect.poll(() =>
-    footer.getByRole('link', { name: '源码 · GitHub' }).evaluate((link) => link.getBoundingClientRect().height),
+    footer.getByRole('link', { name: 'GitHub' }).evaluate((link) => link.getBoundingClientRect().height),
   ).toBeGreaterThanOrEqual(44)
 })
 
@@ -301,7 +303,7 @@ test('prints a clean full document without app chrome', async ({ page }) => {
   await expect(page.getByTestId('reader-outline')).not.toBeVisible()
   await expect(page.locator('.app-shell__header')).not.toBeVisible()
   await expect(page.locator('.reader-footer__links')).not.toBeVisible()
-  await expect(page.getByText('安静地读 Markdown · 文档留在本机 · 隐私是默认')).toBeVisible()
+  await expect(page.getByText('文档留在本机，隐私默认')).toBeVisible()
 
   await expect.poll(() =>
     page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--reading-bg').trim()),

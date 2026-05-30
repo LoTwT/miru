@@ -601,7 +601,10 @@ a:focus-visible {
     color: var(--reading-fg-muted) !important;
   }
 
-  .reader-footer__mark {
-    color: var(--reading-fg) !important;
+  .reader-footer__links,
+  .reader-footer__link-separator,
+  .reader-footer__copyright,
+  .reader-footer__copyright-separator {
+    display: none !important;
   }
 }
