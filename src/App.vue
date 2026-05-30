@@ -96,6 +96,8 @@ const shouldUseDarkCommandScrim = computed(() =>
 )
 const shouldAnimateCommandScrim = computed(() => !isReducedMotion.value)
 const readingPresetList = computed(() => readingSettings.presets.value)
+const readingLocalFontList = computed(() => readingSettings.localFonts.value)
+const readingLocalFontMessage = computed(() => readingSettings.localFontMessage.value)
 const activeReadingPresetName = computed(() => readingSettings.activePresetName.value)
 const activeDocumentTitle = computed(() => {
   if (appMode.value === 'library') {
@@ -134,7 +136,7 @@ watch([hasReaderOutline, isNarrowOutlineViewport], () => {
 
 onMounted(async () => {
   await loadDefaultReadingFonts()
-  readingSettings.applyCurrent()
+  await readingSettings.initializeLocalFonts()
   await refreshLibraryEntries()
   outlineViewportMediaQuery = window.matchMedia('(max-width: 1099px)')
   syncOutlineViewport()
@@ -929,6 +931,8 @@ function focusLibraryView(): void {
         :is-open="isSettingsSurfaceOpen"
         :settings="readingSettings.state"
         :presets="readingPresetList"
+        :local-fonts="readingLocalFontList"
+        :local-font-message="readingLocalFontMessage"
         :active-preset-name="activeReadingPresetName"
         :is-default="readingSettings.isDefault.value"
         :show-outline-position-control="outlineItems.length > 0"
@@ -946,6 +950,9 @@ function focusLibraryView(): void {
         @apply-preset="readingSettings.applyPreset"
         @rename-preset="readingSettings.renamePreset"
         @delete-preset="readingSettings.deletePreset"
+        @upload-local-font="readingSettings.uploadLocalFont"
+        @rename-local-font="readingSettings.renameLocalFont"
+        @delete-local-font="readingSettings.deleteLocalFont"
         @update-contrast="readingSettings.updateContrast"
         @update-outline-position="readingSettings.updateOutlinePosition"
         @reset="readingSettings.reset"

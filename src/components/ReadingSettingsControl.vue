@@ -31,12 +31,15 @@ import type {
   ReadingThemeChoice,
 } from '@/features/settings/readingSettingsOptions'
 import type { ReadingPreset } from '@/features/settings/readingPresets'
-import type { ReadingCustomizationState } from '@/features/settings/useReadingSettings'
+import type { LocalFontOption } from '@/features/settings/localFonts'
+import type { ReadingCustomizationState, ReadingSettingsMessage } from '@/features/settings/useReadingSettings'
 
 const props = defineProps<{
   activePresetName: string
   isDefault: boolean
   isOpen: boolean
+  localFontMessage: Readonly<ReadingSettingsMessage> | null
+  localFonts: readonly LocalFontOption[]
   presets: readonly ReadingPreset[]
   settings: Readonly<ReadingCustomizationState>
   showOutlinePositionControl: boolean
@@ -57,6 +60,9 @@ const emit = defineEmits<{
   applyPreset: [id: string]
   renamePreset: [id: string, name: string]
   deletePreset: [id: string]
+  uploadLocalFont: [file: File]
+  renameLocalFont: [id: string, name: string]
+  deleteLocalFont: [id: string]
   updateContrast: [value: ReadingContrastId]
   updateOutlinePosition: [value: ReadingOutlinePositionId]
   reset: []
@@ -64,16 +70,24 @@ const emit = defineEmits<{
 }>()
 
 const isDesktopOutlineViewport = shallowRef(false)
-const activePanel = shallowRef<'main' | 'custom-theme' | 'presets'>('main')
+const activePanel = shallowRef<'main' | 'custom-theme' | 'presets' | 'fonts'>('main')
 const presetNameInput = shallowRef('')
 const renamingPresetId = shallowRef<string | null>(null)
 const renamePresetInput = shallowRef('')
 const pendingDeletePresetId = shallowRef<string | null>(null)
+const renamingLocalFontId = shallowRef<string | null>(null)
+const renameLocalFontInput = shallowRef('')
+const pendingDeleteLocalFontId = shallowRef<string | null>(null)
 const rootRef = useTemplateRef<HTMLElement>('root')
+const localFontInputRef = useTemplateRef<HTMLInputElement>('localFontInput')
 const showOutlinePositionControl = computed(() => props.showOutlinePositionControl && isDesktopOutlineViewport.value)
 const settingsPanelTitle = computed(() => {
   if (activePanel.value === 'custom-theme') {
     return '自定义主题'
+  }
+
+  if (activePanel.value === 'fonts') {
+    return '管理我的字体'
   }
 
   return activePanel.value === 'main' ? '阅读设置' : '管理预设'
@@ -83,16 +97,35 @@ const settingsPanelCaption = computed(() => {
     return '背景 / 正文 / 强调'
   }
 
+  if (activePanel.value === 'fonts') {
+    return '字体文件只保存在本机'
+  }
+
   return activePanel.value === 'main' ? '即时预览当前正文' : '外观快照'
 })
 const currentPresetName = computed(() => props.activePresetName)
+const fontFamilyOptions = computed(() => [
+  ...readingFontFamilyOptions,
+  ...props.localFonts.map(font => ({
+    id: font.familyId,
+    label: font.name,
+    ariaLabel: `正文字体 ${font.name}`,
+    tokenValue: font.fontStack,
+  })),
+])
 const normalizedPresetNameInput = computed(() => normalizePresetNameInput(presetNameInput.value))
 const normalizedRenamePresetInput = computed(() => normalizePresetNameInput(renamePresetInput.value))
+const normalizedRenameLocalFontInput = computed(() => normalizePresetNameInput(renameLocalFontInput.value))
 const canSavePreset = computed(() => Boolean(normalizedPresetNameInput.value) && !hasPresetName(normalizedPresetNameInput.value))
 const canRenamePreset = computed(() =>
   Boolean(normalizedRenamePresetInput.value)
   && Boolean(renamingPresetId.value)
   && !hasPresetName(normalizedRenamePresetInput.value, renamingPresetId.value ?? undefined),
+)
+const canRenameLocalFont = computed(() =>
+  Boolean(normalizedRenameLocalFontInput.value)
+  && Boolean(renamingLocalFontId.value)
+  && !hasLocalFontName(normalizedRenameLocalFontInput.value, renamingLocalFontId.value ?? undefined),
 )
 const customThemeChecks = computed(() => getCustomThemeChecks(props.settings.customTheme))
 const isCustomThemeReadable = computed(() => hasReadableCustomTheme(props.settings.customTheme))
@@ -151,12 +184,15 @@ function openPanel(panel: typeof activePanel.value): void {
 
 function returnToMainPanel(): void {
   activePanel.value = 'main'
+  pendingDeleteLocalFontId.value = null
+  cancelRenameLocalFont()
   focusFirstPanelItem()
 }
 
 function applyDefaultPreset(): void {
   emit('reset')
   pendingDeletePresetId.value = null
+  pendingDeleteLocalFontId.value = null
   returnToMainPanel()
 }
 
@@ -207,9 +243,55 @@ function requestDeletePreset(id: string): void {
   cancelRenamePreset()
 }
 
+function openLocalFontPicker(): void {
+  localFontInputRef.value?.click()
+}
+
+function onLocalFontFileChange(event: Event): void {
+  const input = event.currentTarget as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+
+  if (file) {
+    emit('uploadLocalFont', file)
+  }
+}
+
+function startRenameLocalFont(font: LocalFontOption): void {
+  renamingLocalFontId.value = font.id
+  renameLocalFontInput.value = font.name
+  pendingDeleteLocalFontId.value = null
+}
+
+function cancelRenameLocalFont(): void {
+  renamingLocalFontId.value = null
+  renameLocalFontInput.value = ''
+}
+
+function confirmRenameLocalFont(): void {
+  if (!renamingLocalFontId.value || !canRenameLocalFont.value) {
+    return
+  }
+
+  emit('renameLocalFont', renamingLocalFontId.value, normalizedRenameLocalFontInput.value)
+  cancelRenameLocalFont()
+}
+
+function requestDeleteLocalFont(id: string): void {
+  if (pendingDeleteLocalFontId.value === id) {
+    emit('deleteLocalFont', id)
+    pendingDeleteLocalFontId.value = null
+    cancelRenameLocalFont()
+    return
+  }
+
+  pendingDeleteLocalFontId.value = id
+  cancelRenameLocalFont()
+}
+
 function describePreset(preset: ReadingPreset): string {
   const themeLabel = readingThemeOptions.find(option => option.id === preset.settings.theme)?.label ?? '主题'
-  const fontLabel = readingFontFamilyOptions.find(option => option.id === preset.settings.fontFamily)?.label ?? '字体'
+  const fontLabel = fontFamilyOptions.value.find(option => option.id === preset.settings.fontFamily)?.label ?? '默认字体'
   const fontSize = readingFontSizeOptions.find(option => option.id === preset.settings.fontSize)?.tokenValue ?? '18px'
 
   return `${fontLabel} · ${fontSize} · ${themeLabel}`
@@ -218,6 +300,11 @@ function describePreset(preset: ReadingPreset): string {
 function hasPresetName(name: string, ignoredPresetId?: string): boolean {
   const normalizedName = normalizePresetNameInput(name).toLowerCase()
   return props.presets.some(preset => preset.id !== ignoredPresetId && preset.name.toLowerCase() === normalizedName)
+}
+
+function hasLocalFontName(name: string, ignoredFontId?: string): boolean {
+  const normalizedName = normalizePresetNameInput(name).toLowerCase()
+  return props.localFonts.some(font => font.id !== ignoredFontId && font.name.toLowerCase() === normalizedName)
 }
 
 function normalizePresetNameInput(name: string): string {
@@ -310,7 +397,9 @@ watch(() => props.isOpen, async (value) => {
   if (!value) {
     activePanel.value = 'main'
     pendingDeletePresetId.value = null
+    pendingDeleteLocalFontId.value = null
     cancelRenamePreset()
+    cancelRenameLocalFont()
     return
   }
 
@@ -402,10 +491,10 @@ function syncOutlineViewport(): void {
               class="reading-settings__segments reading-settings__segments--font-family"
               role="radiogroup"
               aria-label="正文字体"
-              @keydown="onRadioKeydown($event, readingFontFamilyOptions, props.settings.fontFamily, selectFontFamily)"
+              @keydown="onRadioKeydown($event, fontFamilyOptions, props.settings.fontFamily, selectFontFamily)"
             >
               <button
-                v-for="option in readingFontFamilyOptions"
+                v-for="option in fontFamilyOptions"
                 :key="option.id"
                 class="reading-settings__segment"
                 type="button"
@@ -420,6 +509,49 @@ function syncOutlineViewport(): void {
                 {{ option.label }}
               </button>
             </div>
+            <div class="reading-settings__font-actions">
+              <input
+                ref="localFontInput"
+                class="reading-settings__file-input"
+                type="file"
+                accept=".woff2,.ttf,.otf,font/woff2,font/ttf,font/otf,application/font-woff2,application/vnd.ms-opentype,application/x-font-opentype,application/x-font-ttf,application/x-font-otf"
+                data-testid="local-font-file-input"
+                @change="onLocalFontFileChange"
+              >
+              <button
+                class="reading-settings__drilldown reading-settings__drilldown--inline"
+                type="button"
+                data-settings-item
+                @click="openLocalFontPicker"
+              >
+                <span>
+                  <strong>＋ 上传字体</strong>
+                  <span>.woff2 / .ttf / .otf · 本地保存</span>
+                </span>
+                <span aria-hidden="true">↥</span>
+              </button>
+              <button
+                v-if="props.localFonts.length > 0"
+                class="reading-settings__drilldown reading-settings__drilldown--inline"
+                type="button"
+                data-settings-item
+                aria-controls="reading-settings-fonts-panel"
+                @click="openPanel('fonts')"
+              >
+                <span>
+                  <strong>管理我的字体</strong>
+                  <span>{{ props.localFonts.length }} 个本地字体</span>
+                </span>
+                <span aria-hidden="true">→</span>
+              </button>
+            </div>
+            <p
+              v-if="props.localFontMessage"
+              class="reading-settings__subpanel-note reading-settings__font-message"
+              :data-kind="props.localFontMessage.kind"
+            >
+              {{ props.localFontMessage.text }}
+            </p>
           </fieldset>
 
           <fieldset class="reading-settings__field">
@@ -798,6 +930,95 @@ function syncOutlineViewport(): void {
       </div>
 
       <div
+        v-else-if="activePanel === 'fonts'"
+        id="reading-settings-fonts-panel"
+        class="reading-settings__content"
+        data-testid="reading-settings-fonts-panel"
+      >
+        <section class="reading-settings__group reading-settings__group--subpanel" aria-labelledby="reading-settings-fonts-title">
+          <h3 id="reading-settings-fonts-title" class="reading-settings__group-title">
+            我的字体
+          </h3>
+          <div v-if="props.localFonts.length > 0" class="reading-settings__saved-presets">
+            <article
+              v-for="font in props.localFonts"
+              :key="font.id"
+              class="reading-settings__saved-preset"
+              :data-pending-delete="pendingDeleteLocalFontId === font.id"
+            >
+              <div v-if="renamingLocalFontId === font.id" class="reading-settings__preset-rename">
+                <input
+                  v-model="renameLocalFontInput"
+                  class="reading-settings__preset-input"
+                  type="text"
+                  maxlength="32"
+                  :aria-label="`重命名字体 ${font.name}`"
+                  data-settings-item
+                  @keydown.enter.prevent="confirmRenameLocalFont"
+                  @keydown.escape.prevent="cancelRenameLocalFont"
+                >
+                <button
+                  class="reading-settings__preset-action"
+                  type="button"
+                  :disabled="!canRenameLocalFont"
+                  data-settings-item
+                  @click="confirmRenameLocalFont"
+                >
+                  保存
+                </button>
+                <button
+                  class="reading-settings__preset-action reading-settings__preset-action--muted"
+                  type="button"
+                  data-settings-item
+                  @click="cancelRenameLocalFont"
+                >
+                  取消
+                </button>
+              </div>
+              <template v-else>
+                <div class="reading-settings__saved-preset-summary">
+                  <strong :style="{ fontFamily: font.fontStack }">{{ font.name }}</strong>
+                  <span>{{ font.fileName }} · {{ Math.ceil(font.byteSize / 1024) }}KB</span>
+                </div>
+                <div class="reading-settings__saved-preset-actions">
+                  <button
+                    class="reading-settings__preset-action"
+                    type="button"
+                    data-settings-item
+                    @click="selectFontFamily(font.familyId)"
+                  >
+                    应用
+                  </button>
+                  <button
+                    class="reading-settings__preset-action reading-settings__preset-action--muted"
+                    type="button"
+                    data-settings-item
+                    @click="startRenameLocalFont(font)"
+                  >
+                    重命名
+                  </button>
+                  <button
+                    class="reading-settings__preset-action reading-settings__preset-action--danger"
+                    type="button"
+                    data-settings-item
+                    @click="requestDeleteLocalFont(font.id)"
+                  >
+                    {{ pendingDeleteLocalFontId === font.id ? '确认删除' : '删除' }}
+                  </button>
+                </div>
+              </template>
+            </article>
+          </div>
+          <p v-else class="reading-settings__subpanel-note">
+            还没有上传的字体。
+          </p>
+          <p class="reading-settings__subpanel-note">
+            上传字体只保存在本机;中文等缺失字形会回退系统字体。
+          </p>
+        </section>
+      </div>
+
+      <div
         v-else-if="activePanel === 'presets'"
         id="reading-settings-presets-panel"
         class="reading-settings__content"
@@ -1068,6 +1289,16 @@ function syncOutlineViewport(): void {
   margin-block-start: 0.75rem;
 }
 
+.reading-settings__file-input {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
 .reading-settings__legend {
   margin-block-end: 0.35rem;
   color: var(--reading-fg-muted);
@@ -1184,6 +1415,21 @@ function syncOutlineViewport(): void {
 
 .reading-settings__segments--font-family {
   --segment-count: 2;
+}
+
+.reading-settings__font-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
+  margin-block-start: 0.5rem;
+}
+
+.reading-settings__font-actions .reading-settings__drilldown {
+  min-inline-size: 0;
+}
+
+.reading-settings__drilldown--inline {
+  gap: 0.55rem;
 }
 
 .reading-settings__segments--outline-position {
@@ -1353,6 +1599,20 @@ function syncOutlineViewport(): void {
   margin: 0.65rem 0 0;
 }
 
+.reading-settings__font-message[data-kind="info"] {
+  color: var(--reading-fg-muted);
+}
+
+.reading-settings__font-message[data-kind="warning"] {
+  color: var(--reading-accent);
+  font-weight: 700;
+}
+
+.reading-settings__font-message[data-kind="error"] {
+  color: var(--reading-accent);
+  font-weight: 800;
+}
+
 .reading-settings__status--warning {
   color: var(--reading-accent) !important;
   font-weight: 700;
@@ -1518,6 +1778,10 @@ function syncOutlineViewport(): void {
     inset-block-end: calc(-1 * max(1rem, calc(env(safe-area-inset-bottom) + 1rem)));
     margin: 1rem -1rem calc(-1 * max(1rem, calc(env(safe-area-inset-bottom) + 1rem)));
     padding: 0.75rem 1rem max(1rem, calc(env(safe-area-inset-bottom) + 1rem));
+  }
+
+  .reading-settings__font-actions {
+    grid-template-columns: 1fr;
   }
 }
 
