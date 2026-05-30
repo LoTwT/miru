@@ -236,14 +236,13 @@ function isPageScrollLocked(): boolean {
     <!-- v-html is restricted to TrustedHtml returned by the markdown sanitizer pipeline. -->
     <div ref="content" class="reader-surface__content" v-html="props.html.value" />
     <footer class="reader-footer" data-testid="reader-footer">
-      <div>
-        <p class="reader-footer__mark" aria-label="miru">
-          miru.
-        </p>
-        <p class="reader-footer__line">
-          安静地读 Markdown · 文档留在本机 · 隐私是默认
-        </p>
-      </div>
+      <p class="reader-footer__site">
+        <span class="reader-footer__brand">miru</span>
+        <span class="reader-footer__separator" aria-hidden="true">·</span>
+        <span class="reader-footer__privacy">文档留在本机，隐私默认</span>
+        <span class="reader-footer__separator" aria-hidden="true">·</span>
+        <span class="reader-footer__copyright">© 2026</span>
+      </p>
       <nav class="reader-footer__links" aria-label="miru 相关链接">
         <a
           class="reader-footer__link"
@@ -251,17 +250,35 @@ function isPageScrollLocked(): boolean {
           target="_blank"
           rel="noreferrer"
         >
-          源码 · GitHub<span aria-hidden="true">↗</span>
+          <svg
+            class="reader-footer__github-icon"
+            aria-hidden="true"
+            focusable="false"
+            viewBox="0 0 24 24"
+          >
+            <path
+              fill="currentColor"
+              d="M12 2C6.48 2 2 6.59 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.09.68-.22.68-.49 0-.24-.01-.88-.01-1.73-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.5-1.11-1.5-.91-.64.07-.63.07-.63 1 .07 1.53 1.06 1.53 1.06.9 1.57 2.35 1.12 2.92.86.09-.67.35-1.12.63-1.38-2.22-.26-4.55-1.14-4.55-5.06 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.28 2.75 1.05A9.28 9.28 0 0 1 12 6.99c.85 0 1.7.12 2.5.34 1.9-1.33 2.74-1.05 2.74-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.93-2.34 4.79-4.57 5.05.36.32.68.95.68 1.91 0 1.38-.01 2.49-.01 2.83 0 .27.18.59.69.49A10.2 10.2 0 0 0 22 12.25C22 6.59 17.52 2 12 2Z"
+            />
+          </svg>GitHub
         </a>
+        <span class="reader-footer__separator" aria-hidden="true">·</span>
         <a
           class="reader-footer__link"
           href="https://commonmark.org/"
           target="_blank"
           rel="noreferrer"
         >
-          CommonMark<span aria-hidden="true">↗</span>
+          CommonMark<svg
+            class="reader-footer__external-icon"
+            aria-hidden="true"
+            focusable="false"
+            viewBox="0 0 16 16"
+          >
+            <path d="M5 11 11 5" />
+            <path d="M6 5h5v5" />
+          </svg>
         </a>
-        <span class="reader-footer__copyright">© 2026</span>
       </nav>
     </footer>
   </article>
@@ -291,56 +308,61 @@ function isPageScrollLocked(): boolean {
 
 .reader-footer {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   justify-content: space-between;
-  gap: clamp(1.5rem, 6vw, 4rem);
+  gap: 0.35rem 1.6rem;
   margin-block-start: clamp(4rem, 11vw, 7rem);
-  padding-block: 1.4rem clamp(2.5rem, 7vw, 4.8rem);
-  border-block-start: 1px solid color-mix(in srgb, var(--reading-fg-muted) 30%, transparent);
-  color: var(--reading-fg-muted);
-  font-family: system-ui, sans-serif;
-  font-size: 0.86rem;
-}
-
-.reader-footer__mark {
-  margin: 0;
-  color: var(--reading-fg);
-  font-family: var(--reading-font-body);
-  font-size: 1.18rem;
-  line-height: 1;
-}
-
-.reader-footer__line {
-  margin: 0.7rem 0 0;
-  max-inline-size: 28rem;
-}
-
-.reader-footer__links {
-  display: grid;
-  gap: 0.15rem;
-  justify-items: end;
-  margin: 0;
+  padding-block: 1.05rem clamp(2.5rem, 7vw, 4.8rem);
+  border-block-start: 1px solid color-mix(in srgb, var(--reading-fg-muted) 24%, transparent);
+  color: color-mix(in srgb, var(--reading-fg-muted) 86%, transparent);
   font-family: var(--reading-font-mono);
-  font-size: 0.72rem;
+  font-size: 0.73rem;
   letter-spacing: 0.02em;
-  line-height: 1.5;
-  text-align: end;
+  line-height: 1.6;
+}
+
+.reader-footer__site,
+.reader-footer__links {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.15rem 0.58rem;
+  margin: 0;
+}
+
+.reader-footer__brand {
+  color: var(--reading-fg);
 }
 
 .reader-footer__link {
   display: inline-flex;
   align-items: center;
+  gap: 0.28rem;
   min-block-size: 44px;
   padding: 0;
   border: 0;
   background: transparent;
-  color: var(--reading-fg-muted);
+  color: inherit;
   font: inherit;
   text-decoration: none;
   cursor: pointer;
 }
 
-.reader-footer__link span {
-  margin-inline-start: 0.25rem;
+.reader-footer__github-icon {
+  inline-size: 0.86rem;
+  block-size: 0.86rem;
+  flex: none;
+}
+
+.reader-footer__external-icon {
+  inline-size: 0.74rem;
+  block-size: 0.74rem;
+  flex: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.6;
 }
 
 .reader-footer__link:hover,
@@ -354,18 +376,17 @@ function isPageScrollLocked(): boolean {
 }
 
 .reader-footer__copyright {
-  color: color-mix(in srgb, var(--reading-fg-muted) 76%, transparent);
+  color: color-mix(in srgb, var(--reading-fg-muted) 72%, transparent);
+}
+
+.reader-footer__separator {
+  color: color-mix(in srgb, var(--reading-fg-muted) 42%, transparent);
 }
 
 @media (max-width: 700px) {
   .reader-footer {
-    flex-direction: column;
-    gap: 1.1rem;
-  }
-
-  .reader-footer__links {
-    justify-items: start;
-    text-align: start;
+    align-items: flex-start;
+    justify-content: flex-start;
   }
 }
 </style>
