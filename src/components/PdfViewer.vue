@@ -2,9 +2,19 @@
 import { computed, nextTick, onMounted, onUnmounted, shallowRef, useTemplateRef, watch } from 'vue'
 
 import type { LibraryEntry, PdfReadingPosition } from '@/features/library/types'
-import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask } from 'pdfjs-dist'
+import type { PDFDocumentLoadingTask, PDFDocumentProxy, PDFPageProxy, RenderTask } from 'pdfjs-dist'
 
 type PdfScaleMode = PdfReadingPosition['scaleMode']
+type PdfViewMode = PdfReadingPosition['viewMode']
+type PdfRenderState = 'idle' | 'rendering' | 'ready' | 'error'
+
+interface PdfPageSlot {
+  pageNumber: number
+  width: number
+  height: number
+  renderState: PdfRenderState
+  errorMessage: string
+}
 
 const props = defineProps<{
   blob: Blob
@@ -26,18 +36,30 @@ const pageStageRef = useTemplateRef<HTMLElement>('pageStage')
 const canvasRef = useTemplateRef<HTMLCanvasElement>('canvas')
 const pageNumber = shallowRef(Math.max(1, props.position?.pageNumber ?? 1))
 const totalPages = shallowRef(0)
+const viewMode = shallowRef<PdfViewMode>(props.position?.viewMode ?? 'paged')
 const scaleMode = shallowRef<PdfScaleMode>(props.position?.scaleMode ?? 'fit-width')
 const customScale = shallowRef(props.position?.scale ?? 1)
 const renderedScale = shallowRef(1)
 const loadState = shallowRef<'loading' | 'ready' | 'error'>('loading')
 const renderState = shallowRef<'idle' | 'rendering' | 'error'>('idle')
 const errorMessage = shallowRef('')
+const pageSlots = shallowRef<PdfPageSlot[]>([])
+const bufferedScrollPages = shallowRef<Set<number>>(new Set())
+const scrollModeStatus = shallowRef<'idle' | 'measuring' | 'error'>('idle')
 
 let loadingTask: PDFDocumentLoadingTask | null = null
 let pdfDocument: PDFDocumentProxy | null = null
 let renderTask: RenderTask | null = null
 let resizeObserver: ResizeObserver | null = null
+let scrollPageObserver: IntersectionObserver | null = null
 let renderSequence = 0
+let scrollMeasureSequence = 0
+let scrollPositionSyncTimer: ReturnType<typeof window.setTimeout> | undefined
+const scrollPageElements = new Map<number, HTMLElement>()
+const scrollCanvasElements = new Map<number, HTMLCanvasElement>()
+const scrollRenderTasks = new Map<number, RenderTask>()
+const scrollRenderSequences = new Map<number, number>()
+const intersectingScrollPages = new Set<number>()
 
 const isReady = computed(() => loadState.value === 'ready' && totalPages.value > 0)
 const canGoToPreviousPage = computed(() => isReady.value && pageNumber.value > 1)
@@ -83,7 +105,7 @@ async function loadPdfDocument(): Promise<void> {
     pageNumber.value = clampPageNumber(pageNumber.value)
     loadState.value = 'ready'
     await nextTick()
-    await renderCurrentPage()
+    await renderActiveView({ anchorPage: pageNumber.value })
     emitPosition()
   }
   catch (reason) {
@@ -108,6 +130,7 @@ async function loadPdfJs() {
 
 async function cleanupPdfDocument(): Promise<void> {
   await cancelRenderTask()
+  await cancelScrollRenderTasks()
 
   if (loadingTask) {
     await loadingTask.destroy()
@@ -118,6 +141,14 @@ async function cleanupPdfDocument(): Promise<void> {
     await pdfDocument.destroy()
     pdfDocument = null
   }
+
+  pageSlots.value = []
+  bufferedScrollPages.value = new Set()
+  scrollPageObserver?.disconnect()
+  scrollPageObserver = null
+  intersectingScrollPages.clear()
+  scrollPageElements.clear()
+  scrollCanvasElements.clear()
 }
 
 async function cancelRenderTask(): Promise<void> {
@@ -135,6 +166,25 @@ async function cancelRenderTask(): Promise<void> {
   catch {
     // pdf.js rejects canceled render tasks; cancellation is expected when paging/zooming quickly.
   }
+}
+
+async function cancelScrollRenderTasks(): Promise<void> {
+  const tasks = [...scrollRenderTasks.values()]
+  scrollRenderTasks.clear()
+  scrollRenderSequences.clear()
+
+  for (const task of tasks) {
+    task.cancel()
+  }
+
+  await Promise.all(tasks.map(async (task) => {
+    try {
+      await task.promise
+    }
+    catch {
+      // pdf.js rejects canceled render tasks; scroll virtualization cancels expectedly.
+    }
+  }))
 }
 
 async function renderCurrentPage(): Promise<void> {
@@ -198,7 +248,7 @@ async function renderCurrentPage(): Promise<void> {
   }
 }
 
-function calculateScale(page: Awaited<ReturnType<PDFDocumentProxy['getPage']>>): number {
+function calculateScale(page: PDFPageProxy): number {
   const baseViewport = page.getViewport({ scale: 1 })
   const stage = pageStageRef.value
   const stageRect = stage?.getBoundingClientRect()
@@ -236,17 +286,28 @@ function zoomBy(delta: number): void {
 }
 
 function goToPreviousPage(): void {
-  pageNumber.value = clampPageNumber(pageNumber.value - 1)
+  goToPage(clampPageNumber(pageNumber.value - 1))
 }
 
 function goToNextPage(): void {
-  pageNumber.value = clampPageNumber(pageNumber.value + 1)
+  goToPage(clampPageNumber(pageNumber.value + 1))
+}
+
+function goToPage(nextPageNumber: number, behavior: ScrollBehavior = getPreferredScrollBehavior()): void {
+  const nextPage = clampPageNumber(nextPageNumber)
+
+  if (viewMode.value === 'scroll') {
+    scrollToPage(nextPage, behavior)
+    return
+  }
+
+  pageNumber.value = nextPage
 }
 
 function setPageFromInput(event: Event): void {
   const input = event.target as HTMLInputElement
   const value = Number.parseInt(input.value, 10)
-  pageNumber.value = clampPageNumber(Number.isFinite(value) ? value : pageNumber.value)
+  goToPage(Number.isFinite(value) ? value : pageNumber.value)
   input.value = String(pageNumber.value)
 }
 
@@ -271,6 +332,18 @@ function retry(): void {
   void loadPdfDocument()
 }
 
+function setViewMode(nextMode: PdfViewMode): void {
+  if (viewMode.value === nextMode) {
+    return
+  }
+
+  viewMode.value = nextMode
+  void nextTick(async () => {
+    await renderActiveView({ anchorPage: pageNumber.value })
+    emitPosition()
+  })
+}
+
 function emitPosition(): void {
   if (!isReady.value) {
     return
@@ -280,9 +353,362 @@ function emitPosition(): void {
     documentId: props.entry.id,
     type: 'pdf',
     pageNumber: pageNumber.value,
+    viewMode: viewMode.value,
     scaleMode: scaleMode.value,
     scale: scaleMode.value === 'custom' ? customScale.value : null,
   })
+}
+
+async function renderActiveView(options: { anchorPage: number }): Promise<void> {
+  if (viewMode.value === 'scroll') {
+    await cancelRenderTask()
+    await prepareScrollMode(options.anchorPage)
+    return
+  }
+
+  await cancelScrollRenderTasks()
+  bufferedScrollPages.value = new Set()
+  await renderCurrentPage()
+}
+
+async function prepareScrollMode(anchorPage: number): Promise<void> {
+  const pdf = pdfDocument
+
+  if (!pdf || loadState.value !== 'ready') {
+    return
+  }
+
+  const sequence = ++scrollMeasureSequence
+  scrollModeStatus.value = 'measuring'
+  await cancelScrollRenderTasks()
+
+  try {
+    const firstPage = await pdf.getPage(1)
+    if (sequence !== scrollMeasureSequence) {
+      return
+    }
+
+    const scale = calculateScale(firstPage)
+    renderedScale.value = scale
+    const slots: PdfPageSlot[] = []
+
+    for (let pageIndex = 1; pageIndex <= pdf.numPages; pageIndex += 1) {
+      const page = pageIndex === 1 ? firstPage : await pdf.getPage(pageIndex)
+      if (sequence !== scrollMeasureSequence) {
+        return
+      }
+
+      const viewport = page.getViewport({ scale })
+      slots.push({
+        pageNumber: pageIndex,
+        width: Math.round(viewport.width),
+        height: Math.round(viewport.height),
+        renderState: 'idle',
+        errorMessage: '',
+      })
+    }
+
+    if (sequence !== scrollMeasureSequence) {
+      return
+    }
+
+    pageSlots.value = slots
+    scrollModeStatus.value = 'idle'
+    pageNumber.value = clampPageNumber(anchorPage)
+
+    await nextTick()
+    setupScrollPageObserver()
+    scrollToPage(pageNumber.value, 'auto')
+    updateBufferedScrollPages()
+  }
+  catch (reason) {
+    if (isPdfCancellation(reason)) {
+      return
+    }
+
+    scrollModeStatus.value = 'error'
+    errorMessage.value = '连续滚动模式暂时无法准备页面。可以切回翻页模式或重新打开 PDF。'
+  }
+}
+
+function setScrollPageElement(page: number, element: unknown): void {
+  const previousElement = scrollPageElements.get(page)
+  if (previousElement && previousElement !== element) {
+    scrollPageObserver?.unobserve(previousElement)
+  }
+
+  if (element instanceof HTMLElement) {
+    scrollPageElements.set(page, element)
+    element.dataset.pageNumber = String(page)
+    scrollPageObserver?.observe(element)
+    return
+  }
+
+  intersectingScrollPages.delete(page)
+  scrollPageElements.delete(page)
+}
+
+function setScrollCanvasElement(page: number, element: unknown): void {
+  if (element instanceof HTMLCanvasElement) {
+    scrollCanvasElements.set(page, element)
+    void nextTick(() => renderScrollPage(page))
+    return
+  }
+
+  scrollCanvasElements.delete(page)
+  updatePageSlot(page, { renderState: 'idle' })
+}
+
+function shouldRenderScrollPage(page: number): boolean {
+  return bufferedScrollPages.value.has(page)
+}
+
+function handleStageScroll(): void {
+  if (viewMode.value !== 'scroll') {
+    return
+  }
+
+  updateBufferedScrollPages()
+
+  window.clearTimeout(scrollPositionSyncTimer)
+  scrollPositionSyncTimer = window.setTimeout(() => {
+    const dominantPage = getDominantVisiblePage()
+    if (dominantPage) {
+      pageNumber.value = dominantPage
+      emitPosition()
+    }
+  }, 100)
+}
+
+function setupScrollPageObserver(): void {
+  const stage = pageStageRef.value
+  if (!stage) {
+    return
+  }
+
+  scrollPageObserver?.disconnect()
+  intersectingScrollPages.clear()
+  scrollPageObserver = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      const page = Number((entry.target as HTMLElement).dataset.pageNumber)
+      if (!Number.isFinite(page)) {
+        continue
+      }
+
+      if (entry.isIntersecting) {
+        intersectingScrollPages.add(page)
+      }
+      else {
+        intersectingScrollPages.delete(page)
+      }
+    }
+
+    updateBufferedScrollPages()
+  }, { root: stage, threshold: 0 })
+
+  for (const element of scrollPageElements.values()) {
+    scrollPageObserver.observe(element)
+  }
+}
+
+function updateBufferedScrollPages(): void {
+  if (viewMode.value !== 'scroll' || pageSlots.value.length === 0) {
+    return
+  }
+
+  const visiblePages = getVisibleScrollPages()
+  const dominantPage = getDominantVisiblePage()
+  const observerPages = [...intersectingScrollPages].sort((left, right) => left - right)
+  const anchorPages = observerPages.length > 0
+    ? observerPages
+    : visiblePages.length > 0 ? visiblePages : [dominantPage ?? pageNumber.value]
+  const nextPages = new Set<number>()
+
+  for (const page of anchorPages) {
+    const center = clampPageNumber(page)
+    for (let offset = -2; offset <= 2; offset += 1) {
+      nextPages.add(clampPageNumber(center + offset))
+    }
+  }
+
+  for (const page of [...bufferedScrollPages.value]) {
+    if (!nextPages.has(page)) {
+      void cancelScrollRenderTask(page)
+      updatePageSlot(page, { renderState: 'idle' })
+    }
+  }
+
+  bufferedScrollPages.value = nextPages
+
+  void nextTick(() => {
+    for (const page of nextPages) {
+      void renderScrollPage(page)
+    }
+  })
+}
+
+function getVisibleScrollPages(): number[] {
+  const stage = pageStageRef.value
+  if (!stage) {
+    return []
+  }
+
+  const stageRect = stage.getBoundingClientRect()
+  const pages: number[] = []
+
+  for (const [page, element] of scrollPageElements) {
+    const rect = element.getBoundingClientRect()
+    const overlap = Math.min(rect.bottom, stageRect.bottom) - Math.max(rect.top, stageRect.top)
+    if (overlap > 0) {
+      pages.push(page)
+    }
+  }
+
+  return pages.sort((left, right) => left - right)
+}
+
+function getDominantVisiblePage(): number | null {
+  const stage = pageStageRef.value
+  if (!stage) {
+    return null
+  }
+
+  const stageRect = stage.getBoundingClientRect()
+  let bestPage: number | null = null
+  let bestVisibleArea = -1
+
+  for (const [page, element] of scrollPageElements) {
+    const rect = element.getBoundingClientRect()
+    const visibleBlock = Math.min(rect.bottom, stageRect.bottom) - Math.max(rect.top, stageRect.top)
+    if (visibleBlock <= 0) {
+      continue
+    }
+
+    const visibleArea = visibleBlock * Math.max(1, Math.min(rect.width, stageRect.width))
+    if (visibleArea > bestVisibleArea) {
+      bestVisibleArea = visibleArea
+      bestPage = page
+    }
+  }
+
+  return bestPage
+}
+
+async function renderScrollPage(page: number): Promise<void> {
+  const pdf = pdfDocument
+  const canvas = scrollCanvasElements.get(page)
+
+  if (!pdf || !canvas || loadState.value !== 'ready' || viewMode.value !== 'scroll') {
+    return
+  }
+
+  const slot = pageSlots.value.find(item => item.pageNumber === page)
+  if (!slot || slot.renderState === 'ready' || slot.renderState === 'rendering') {
+    return
+  }
+
+  const sequence = (scrollRenderSequences.get(page) ?? 0) + 1
+  scrollRenderSequences.set(page, sequence)
+  updatePageSlot(page, { renderState: 'rendering', errorMessage: '' })
+  await cancelScrollRenderTask(page)
+
+  try {
+    const pdfPage = await pdf.getPage(page)
+    if (scrollRenderSequences.get(page) !== sequence || !bufferedScrollPages.value.has(page)) {
+      return
+    }
+
+    const viewport = pdfPage.getViewport({ scale: renderedScale.value })
+    const ratio = window.devicePixelRatio || 1
+    const context = canvas.getContext('2d')
+
+    if (!context) {
+      throw new Error('Canvas context is not available')
+    }
+
+    canvas.width = Math.floor(viewport.width * ratio)
+    canvas.height = Math.floor(viewport.height * ratio)
+    canvas.style.inlineSize = `${viewport.width}px`
+    canvas.style.blockSize = `${viewport.height}px`
+
+    const task = pdfPage.render({
+      canvas,
+      canvasContext: context,
+      viewport,
+      transform: ratio === 1 ? undefined : [ratio, 0, 0, ratio, 0, 0],
+    })
+    scrollRenderTasks.set(page, task)
+
+    await task.promise
+
+    if (scrollRenderSequences.get(page) === sequence) {
+      updatePageSlot(page, { renderState: 'ready' })
+    }
+  }
+  catch (reason) {
+    if (isPdfCancellation(reason)) {
+      return
+    }
+
+    updatePageSlot(page, {
+      renderState: 'error',
+      errorMessage: '这一页暂时无法显示。',
+    })
+  }
+  finally {
+    if (scrollRenderSequences.get(page) === sequence) {
+      scrollRenderTasks.delete(page)
+    }
+  }
+}
+
+async function cancelScrollRenderTask(page: number): Promise<void> {
+  const task = scrollRenderTasks.get(page)
+  if (!task) {
+    return
+  }
+
+  scrollRenderTasks.delete(page)
+  task.cancel()
+
+  try {
+    await task.promise
+  }
+  catch {
+    // pdf.js rejects canceled render tasks; cancellation is expected when pages leave the buffer.
+  }
+
+  updatePageSlot(page, { renderState: 'idle' })
+}
+
+function updatePageSlot(page: number, patch: Partial<Omit<PdfPageSlot, 'pageNumber'>>): void {
+  pageSlots.value = pageSlots.value.map(slot =>
+    slot.pageNumber === page ? { ...slot, ...patch } : slot,
+  )
+}
+
+function scrollToPage(page: number, behavior: ScrollBehavior = getPreferredScrollBehavior()): void {
+  const nextPage = clampPageNumber(page)
+  pageNumber.value = nextPage
+
+  void nextTick(() => {
+    const stage = pageStageRef.value
+    const element = scrollPageElements.get(nextPage)
+    if (!stage || !element) {
+      return
+    }
+
+    const stageRect = stage.getBoundingClientRect()
+    const elementRect = element.getBoundingClientRect()
+    const nextTop = stage.scrollTop + elementRect.top - stageRect.top
+    stage.scrollTo({ top: Math.max(0, nextTop), behavior })
+    updateBufferedScrollPages()
+    emitPosition()
+  })
+}
+
+function getPreferredScrollBehavior(): ScrollBehavior {
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
 }
 
 function clampPageNumber(value: number): number {
@@ -314,25 +740,40 @@ function isTextInputTarget(target: EventTarget | null): boolean {
 
 watch(() => props.blob, () => {
   pageNumber.value = Math.max(1, props.position?.pageNumber ?? 1)
+  viewMode.value = props.position?.viewMode ?? 'paged'
   scaleMode.value = props.position?.scaleMode ?? 'fit-width'
   customScale.value = props.position?.scale ?? 1
   void loadPdfDocument()
 })
 
-watch([pageNumber, scaleMode, customScale], () => {
+watch(pageNumber, () => {
   if (!isReady.value) {
     return
   }
 
-  void renderCurrentPage()
+  if (viewMode.value === 'paged') {
+    void renderCurrentPage()
+  }
+
+  emitPosition()
+})
+
+watch([scaleMode, customScale], () => {
+  if (!isReady.value) {
+    return
+  }
+
+  void renderActiveView({ anchorPage: pageNumber.value })
   emitPosition()
 })
 
 onMounted(() => {
   resizeObserver = new ResizeObserver(() => {
-    if (scaleMode.value !== 'custom') {
-      void renderCurrentPage()
+    if (scaleMode.value === 'custom') {
+      return
     }
+
+    void renderActiveView({ anchorPage: pageNumber.value })
   })
 
   if (pageStageRef.value) {
@@ -343,6 +784,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  window.clearTimeout(scrollPositionSyncTimer)
   resizeObserver?.disconnect()
   void cleanupPdfDocument()
 })
@@ -395,6 +837,25 @@ onUnmounted(() => {
         </button>
       </div>
 
+      <div class="pdf-viewer__control-group" aria-label="查看模式">
+        <button
+          type="button"
+          :aria-pressed="viewMode === 'paged'"
+          :disabled="!isReady"
+          @click="setViewMode('paged')"
+        >
+          翻页
+        </button>
+        <button
+          type="button"
+          :aria-pressed="viewMode === 'scroll'"
+          :disabled="!isReady"
+          @click="setViewMode('scroll')"
+        >
+          滚动
+        </button>
+      </div>
+
       <div class="pdf-viewer__control-group" aria-label="缩放">
         <button type="button" :disabled="!isReady" aria-label="缩小" @click="zoomBy(-zoomStep)">
           −
@@ -442,7 +903,12 @@ onUnmounted(() => {
         <span aria-hidden="true">‹</span>
       </button>
 
-      <div ref="pageStage" class="pdf-viewer__stage" data-testid="pdf-viewer-stage">
+      <div
+        ref="pageStage"
+        class="pdf-viewer__stage"
+        data-testid="pdf-viewer-stage"
+        @scroll="handleStageScroll"
+      >
         <div v-if="loadState === 'loading'" class="pdf-viewer__state" role="status">
           正在打开 PDF…
         </div>
@@ -454,7 +920,7 @@ onUnmounted(() => {
           </button>
         </div>
 
-        <div v-else class="pdf-viewer__page-shell">
+        <div v-else-if="viewMode === 'paged'" class="pdf-viewer__page-shell" data-testid="pdf-viewer-paged-page">
           <canvas
             ref="canvas"
             class="pdf-viewer__canvas"
@@ -467,6 +933,42 @@ onUnmounted(() => {
           <p v-else-if="renderState === 'error'" class="pdf-viewer__render-status pdf-viewer__render-status--error" role="alert">
             {{ errorMessage }}
           </p>
+        </div>
+
+        <div v-else class="pdf-viewer__scroll-stack" data-testid="pdf-viewer-scroll-stack">
+          <div v-if="scrollModeStatus === 'measuring'" class="pdf-viewer__state" role="status">
+            正在准备连续滚动…
+          </div>
+          <div v-else-if="scrollModeStatus === 'error'" class="pdf-viewer__state pdf-viewer__state--error" role="alert">
+            {{ errorMessage }}
+          </div>
+          <template v-else>
+            <article
+              v-for="slot in pageSlots"
+              :key="slot.pageNumber"
+              :ref="element => setScrollPageElement(slot.pageNumber, element)"
+              class="pdf-viewer__scroll-page-slot"
+              :style="{ inlineSize: `${slot.width}px`, blockSize: `${slot.height}px` }"
+              :aria-label="`PDF 第 ${slot.pageNumber} 页, 共 ${totalPages} 页`"
+              :data-page-number="slot.pageNumber"
+              data-testid="pdf-viewer-scroll-page"
+            >
+              <canvas
+                v-if="shouldRenderScrollPage(slot.pageNumber)"
+                :ref="element => setScrollCanvasElement(slot.pageNumber, element)"
+                class="pdf-viewer__canvas pdf-viewer__canvas--scroll"
+                :aria-label="`PDF 第 ${slot.pageNumber} 页, 共 ${totalPages} 页`"
+                data-testid="pdf-viewer-scroll-canvas"
+              />
+              <div v-else class="pdf-viewer__scroll-placeholder" aria-hidden="true" />
+              <p v-if="slot.renderState === 'rendering'" class="pdf-viewer__render-status" role="status">
+                正在渲染第 {{ slot.pageNumber }} 页…
+              </p>
+              <p v-else-if="slot.renderState === 'error'" class="pdf-viewer__render-status pdf-viewer__render-status--error" role="alert">
+                {{ slot.errorMessage }}
+              </p>
+            </article>
+          </template>
         </div>
       </div>
 
@@ -699,12 +1201,47 @@ onUnmounted(() => {
   min-inline-size: max-content;
 }
 
+.pdf-viewer__scroll-stack {
+  display: grid;
+  gap: 1.1rem;
+  justify-items: center;
+  min-inline-size: max-content;
+}
+
+.pdf-viewer__scroll-page-slot {
+  position: relative;
+  display: grid;
+  place-items: center;
+  max-inline-size: none;
+  border-radius: 2px;
+  background: #fff;
+  box-shadow: 0 18px 44px rgb(0 0 0 / 18%);
+}
+
+.pdf-viewer__scroll-placeholder {
+  inline-size: 100%;
+  block-size: 100%;
+  border-radius: inherit;
+  background:
+    linear-gradient(
+      90deg,
+      rgb(255 255 255 / 0%),
+      rgb(255 255 255 / 54%),
+      rgb(255 255 255 / 0%)
+    ),
+    #fff;
+}
+
 .pdf-viewer__canvas {
   display: block;
   max-inline-size: none;
   border-radius: 2px;
   background: #fff;
   box-shadow: 0 18px 44px rgb(0 0 0 / 18%);
+}
+
+.pdf-viewer__canvas--scroll {
+  box-shadow: none;
 }
 
 .pdf-viewer__state {

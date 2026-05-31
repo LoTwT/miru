@@ -261,6 +261,73 @@ test('adds a local PDF and reopens it through the view-only PDF viewer', async (
   await expect(page.locator('.reader-surface')).toHaveCount(0)
 })
 
+test('supports continuous scroll mode for local PDFs with bounded rendered pages', async ({ page }) => {
+  await page.goto('/')
+
+  await openFileThroughFloatingMenu(page, {
+    name: 'Long Paper.pdf',
+    mimeType: 'application/pdf',
+    buffer: createSimplePdfBuffer(Array.from({ length: 8 }, (_, index) => `Long Paper page ${index + 1}`)),
+  })
+
+  await expect(page.getByTestId('pdf-viewer')).toBeVisible()
+  await expect(page.getByText('1 / 8')).toBeVisible()
+
+  await page.getByRole('button', { name: '滚动' }).click()
+  await expect(page.getByRole('button', { name: '滚动' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByTestId('pdf-viewer-scroll-stack')).toBeVisible()
+  await expect(page.getByTestId('pdf-viewer-scroll-page')).toHaveCount(8)
+  await expect.poll(() => page.getByTestId('pdf-viewer-scroll-canvas').count()).toBeGreaterThan(0)
+  await expect.poll(() => page.getByTestId('pdf-viewer-scroll-canvas').count()).toBeLessThan(8)
+
+  const stage = page.getByTestId('pdf-viewer-stage')
+  await page.getByLabel('跳转页码').fill('6')
+  await page.keyboard.press('Enter')
+  await expect(page.getByText('6 / 8')).toBeVisible()
+  await expect.poll(() => stage.evaluate(element => element.scrollTop)).toBeGreaterThan(0)
+  await expect.poll(() => page.getByTestId('pdf-viewer-scroll-canvas').count()).toBeLessThan(8)
+
+  await stage.evaluate(element => element.scrollTo({ top: 0, behavior: 'auto' }))
+  await expect(page.getByText('1 / 8')).toBeVisible()
+  const firstCanvasSizeAfterReturn = await page
+    .getByTestId('pdf-viewer-scroll-page')
+    .first()
+    .locator('canvas')
+    .evaluate(canvas => ({
+      blockSize: (canvas as HTMLCanvasElement).style.blockSize,
+      height: (canvas as HTMLCanvasElement).height,
+      inlineSize: (canvas as HTMLCanvasElement).style.inlineSize,
+      width: (canvas as HTMLCanvasElement).width,
+    }))
+  expect(firstCanvasSizeAfterReturn.width).toBeGreaterThan(300)
+  expect(firstCanvasSizeAfterReturn.height).toBeGreaterThan(300)
+  expect(firstCanvasSizeAfterReturn.inlineSize).not.toBe('')
+  expect(firstCanvasSizeAfterReturn.blockSize).not.toBe('')
+
+  let expectedPage = '6 / 8'
+  await page.getByLabel('跳转页码').fill('6')
+  await page.keyboard.press('Enter')
+  await expect(page.getByText('6 / 8')).toBeVisible()
+  if (isWideViewport(page)) {
+    await page.getByTestId('pdf-viewer-side-next').click()
+    expectedPage = '7 / 8'
+    await expect(page.getByText(expectedPage)).toBeVisible()
+  }
+
+  await page.getByRole('button', { name: '← 文库' }).click()
+  const entry = page.getByTestId('library-entry').filter({ hasText: 'Long Paper' })
+  await openBookshelfEntry(entry, 'Long Paper')
+
+  await expect(page.getByTestId('pdf-viewer-scroll-stack')).toBeVisible()
+  await expect(page.getByRole('button', { name: '滚动' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByText(expectedPage)).toBeVisible()
+
+  await page.getByRole('button', { name: '翻页' }).click()
+  await expect(page.getByTestId('pdf-viewer-canvas')).toBeVisible()
+  await expect(page.getByRole('button', { name: '翻页' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.getByText(expectedPage)).toBeVisible()
+})
+
 test('shows a recoverable error for malformed local PDFs', async ({ page }) => {
   await page.goto('/')
 

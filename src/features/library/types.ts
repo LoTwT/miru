@@ -59,6 +59,7 @@ export interface PdfReadingPosition {
   documentId: string
   type: 'pdf'
   pageNumber: number
+  viewMode: 'paged' | 'scroll'
   scaleMode: 'fit-width' | 'fit-page' | 'custom'
   scale: number | null
   updatedAt: string

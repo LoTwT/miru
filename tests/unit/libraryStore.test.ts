@@ -170,6 +170,7 @@ describe('local library store', () => {
       documentId: pdf.id,
       type: 'pdf',
       pageNumber: 7,
+      viewMode: 'scroll',
       scaleMode: 'custom',
       scale: 1.25,
     })
@@ -182,6 +183,7 @@ describe('local library store', () => {
     expect((await store.openPdfDocument(pdf.id))?.position).toMatchObject({
       type: 'pdf',
       pageNumber: 7,
+      viewMode: 'scroll',
       scaleMode: 'custom',
       scale: 1.25,
     })
@@ -230,6 +232,7 @@ describe('local library store', () => {
       documentId: pdf.id,
       type: 'pdf',
       pageNumber: 2,
+      viewMode: 'paged',
       scaleMode: 'fit-width',
       scale: null,
     })
