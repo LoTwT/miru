@@ -75,6 +75,32 @@ test('shows the back-to-top button only for long scrolled reader content', async
   await expect(page.getByTestId('back-to-top')).toHaveCount(0)
 })
 
+test('updates the quiet reading progress line for long markdown documents', async ({ page }) => {
+  await page.goto('/')
+
+  await pasteText(page, [
+    '# Progress doc',
+    '',
+    ...Array.from({ length: 8 }, (_, index) => [
+      `## Section ${index + 1}`,
+      '',
+      Array.from({ length: 10 }, (_, paragraphIndex) => `Paragraph ${index + 1}.${paragraphIndex + 1} keeps the reader moving quietly.`).join('\n\n'),
+    ].join('\n')),
+  ].join('\n\n'))
+  await expect(page.getByRole('heading', { name: 'Progress doc' })).toBeVisible()
+  await expect(page.getByTestId('reading-progress-line')).toBeVisible()
+  await expect.poll(() => readReadingProgressPercent(page)).toBeLessThan(10)
+
+  await page.evaluate(() => {
+    window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'auto' })
+  })
+  await expect.poll(() => readReadingProgressPercent(page)).toBeGreaterThan(80)
+
+  if (isWideViewport(page)) {
+    await expect(page.getByTestId('reader-outline')).toContainText('阅读进度')
+  }
+})
+
 test('adds pasted markdown to the local library and reopens it from the bookshelf', async ({ page }) => {
   await page.goto('/')
 
@@ -189,6 +215,8 @@ test('adds a local PDF and reopens it through the view-only PDF viewer', async (
   await expect(page.getByText('PDF 保持原样显示, 不做文字提取或上传。')).toBeVisible()
   await expect(page.getByTestId('pdf-viewer-canvas')).toBeVisible()
   await expect(page.getByText('1 / 2')).toBeVisible()
+  const initialProgress = await readReadingProgressPercent(page)
+  expect(initialProgress).toBeGreaterThanOrEqual(45)
   if (isWideViewport(page)) {
     await expect(page.getByTestId('pdf-viewer-side-prev')).toBeDisabled()
     await expect(page.getByTestId('pdf-viewer-side-next')).toBeEnabled()
@@ -224,6 +252,7 @@ test('adds a local PDF and reopens it through the view-only PDF viewer', async (
     await page.locator('.pdf-viewer__toolbar button[aria-label="下一页"]').click()
   }
   await expect(page.getByText('2 / 2')).toBeVisible()
+  await expect.poll(() => readReadingProgressPercent(page)).toBeGreaterThan(initialProgress)
   await page.getByLabel('跳转页码').focus()
   await page.keyboard.press('ArrowLeft')
   await expect(page.getByText('2 / 2')).toBeVisible()
@@ -1942,6 +1971,12 @@ async function pasteText(page: import('@playwright/test').Page, text: string) {
     event.clipboardData?.setData('text/plain', value)
     document.querySelector('main')?.dispatchEvent(event)
   }, text)
+}
+
+async function readReadingProgressPercent(page: import('@playwright/test').Page): Promise<number> {
+  return page.getByTestId('reading-progress-fill').evaluate((element) => {
+    return Number.parseFloat((element as HTMLElement).style.inlineSize || '0')
+  })
 }
 
 async function openFileThroughFloatingMenu(

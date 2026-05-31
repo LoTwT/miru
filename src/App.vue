@@ -43,6 +43,8 @@ const liveStatus = shallowRef('')
 const outlineItems = shallowRef<ReaderOutlineItem[]>([])
 const activeOutlineId = shallowRef('')
 const isNarrowOutlineViewport = shallowRef(false)
+const markdownProgress = shallowRef(0)
+const pdfProgress = shallowRef(0)
 const topBarRef = useTemplateRef<HTMLElement>('topBar')
 const commandSurfaceRef = useTemplateRef<HTMLElement>('commandSurface')
 const actionsButtonRef = useTemplateRef<HTMLButtonElement>('actionsButton')
@@ -66,6 +68,7 @@ let pageScrollLock: {
 let outlineViewportMediaQuery: MediaQueryList | undefined
 let systemDarkThemeMediaQuery: MediaQueryList | undefined
 let reducedMotionMediaQuery: MediaQueryList | undefined
+let progressSyncFrame: number | undefined
 
 const { error, isFetchingUrl, loadFromClipboard, loadFromFile, loadFromText, loadFromUrl } = useDocumentInput({
   onDocument(document) {
@@ -110,6 +113,20 @@ const activeDocumentTitle = computed(() => {
 
   return documentState.label === 'miru sample' ? '示例文档' : documentState.label
 })
+const readingProgress = computed(() => {
+  if (appMode.value === 'pdf') {
+    return pdfProgress.value
+  }
+
+  if (appMode.value === 'reader') {
+    return markdownProgress.value
+  }
+
+  return 0
+})
+const shouldShowReadingProgress = computed(() => appMode.value === 'reader' || appMode.value === 'pdf')
+const readingProgressStyle = computed(() => `${Number((readingProgress.value * 100).toFixed(1))}%`)
+const readingProgressLabel = computed(() => `阅读进度 ${Math.round(readingProgress.value * 100)}%`)
 
 watch(status, (value) => {
   if (value) {
@@ -148,15 +165,21 @@ onMounted(async () => {
   syncReducedMotion()
   reducedMotionMediaQuery.addEventListener('change', syncReducedMotion)
   window.addEventListener('scroll', onWindowScroll, { passive: true })
+  window.addEventListener('resize', onWindowResize, { passive: true })
   document.addEventListener('pointerdown', onDocumentPointerDown)
+  queueMarkdownProgressUpdate()
 })
 
 onUnmounted(() => {
   window.clearTimeout(positionSaveTimer)
+  if (progressSyncFrame !== undefined) {
+    window.cancelAnimationFrame(progressSyncFrame)
+  }
   outlineViewportMediaQuery?.removeEventListener('change', syncOutlineViewport)
   systemDarkThemeMediaQuery?.removeEventListener('change', syncSystemDarkTheme)
   reducedMotionMediaQuery?.removeEventListener('change', syncReducedMotion)
   window.removeEventListener('scroll', onWindowScroll)
+  window.removeEventListener('resize', onWindowResize)
   document.removeEventListener('pointerdown', onDocumentPointerDown)
   setPageScrollLocked(false)
   void libraryStore.close()
@@ -589,6 +612,10 @@ async function savePdfReadingPosition(position: Omit<PdfReadingPosition, 'update
   }
 }
 
+function updatePdfProgress(progress: number): void {
+  pdfProgress.value = clampProgress(progress)
+}
+
 async function refreshLibraryEntries(): Promise<void> {
   libraryEntries.value = await libraryStore.listEntries(librarySortMode.value)
 }
@@ -662,6 +689,10 @@ async function onDrop(event: DragEvent): Promise<void> {
 let positionSaveTimer: ReturnType<typeof setTimeout> | undefined
 
 function onWindowScroll(): void {
+  if (appMode.value === 'reader') {
+    updateMarkdownProgress()
+  }
+
   if (appMode.value !== 'reader' || !activeLibraryEntryId.value || pageScrollLock) {
     return
   }
@@ -670,6 +701,48 @@ function onWindowScroll(): void {
   positionSaveTimer = window.setTimeout(() => {
     void saveActiveReadingPosition()
   }, 450)
+}
+
+function onWindowResize(): void {
+  queueMarkdownProgressUpdate()
+}
+
+function queueMarkdownProgressUpdate(): void {
+  if (progressSyncFrame !== undefined) {
+    window.cancelAnimationFrame(progressSyncFrame)
+  }
+
+  progressSyncFrame = window.requestAnimationFrame(() => {
+    progressSyncFrame = undefined
+    updateMarkdownProgress()
+  })
+}
+
+function updateMarkdownProgress(): void {
+  if (appMode.value !== 'reader') {
+    return
+  }
+
+  markdownProgress.value = getWindowScrollProgress()
+}
+
+function getWindowScrollProgress(): number {
+  const scrollElement = document.scrollingElement ?? document.documentElement
+  const maxScrollY = scrollElement.scrollHeight - window.innerHeight
+
+  if (maxScrollY <= 1) {
+    return 1
+  }
+
+  return clampProgress(getCurrentScrollY() / maxScrollY)
+}
+
+function clampProgress(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0
+  }
+
+  return Math.min(1, Math.max(0, value))
 }
 
 async function saveActiveReadingPosition(options: { scrollY?: number } = {}): Promise<void> {
@@ -705,11 +778,26 @@ function restorePendingPositionIfReady(): void {
         top: Math.max(0, position.scrollY),
         behavior: 'auto',
       })
+      updateMarkdownProgress()
     })
   })
 }
 
-watch(() => rendered.isRendering.value, restorePendingPositionIfReady)
+watch(() => rendered.isRendering.value, (value) => {
+  restorePendingPositionIfReady()
+
+  if (!value) {
+    queueMarkdownProgressUpdate()
+  }
+})
+
+watch(appMode, () => {
+  if (appMode.value !== 'pdf') {
+    pdfProgress.value = 0
+  }
+
+  queueMarkdownProgressUpdate()
+})
 
 function createFallbackLibrarySource(document: ReaderDocument): LibrarySource {
   if (document.source === 'file') {
@@ -776,6 +864,20 @@ function focusLibraryView(): void {
     @dragleave="onDragLeave"
     @drop="onDrop"
   >
+    <div
+      v-if="shouldShowReadingProgress"
+      class="app-shell__reading-progress"
+      aria-hidden="true"
+      data-testid="reading-progress-line"
+    >
+      <span
+        class="app-shell__reading-progress-fill"
+        :class="{ 'app-shell__reading-progress-fill--motionless': isReducedMotion }"
+        data-testid="reading-progress-fill"
+        :style="{ inlineSize: readingProgressStyle }"
+      />
+    </div>
+
     <header ref="topBar" class="app-shell__header" data-testid="app-top-bar">
       <div class="app-shell__mark">
         <span>miru</span>
@@ -864,6 +966,7 @@ function focusLibraryView(): void {
       :position="activePdfDocument.position"
       @back="showLibrary"
       @position-change="savePdfReadingPosition"
+      @progress-change="updatePdfProgress"
     />
 
     <template v-else>
@@ -883,6 +986,7 @@ function focusLibraryView(): void {
         :active-id="activeOutlineId"
         :is-open="false"
         :position="readingSettings.state.outlinePosition"
+        :progress-label="readingProgressLabel"
         @navigate="navigateToOutlineItem"
       />
 
@@ -966,6 +1070,7 @@ function focusLibraryView(): void {
         :active-id="activeOutlineId"
         :is-open="isOutlineSurfaceOpen"
         :position="readingSettings.state.outlinePosition"
+        :progress-label="readingProgressLabel"
         @navigate="navigateToOutlineItem"
         @close="closeOutlineSurface"
       />
@@ -984,6 +1089,27 @@ function focusLibraryView(): void {
 .app-shell--dragging {
   outline: 2px dashed var(--reading-accent);
   outline-offset: -1rem;
+}
+
+.app-shell__reading-progress {
+  position: fixed;
+  inset-block-start: 0;
+  inset-inline: 0;
+  z-index: 80;
+  block-size: 2px;
+  pointer-events: none;
+}
+
+.app-shell__reading-progress-fill {
+  display: block;
+  block-size: 100%;
+  background: var(--reading-accent);
+  opacity: 0.82;
+  transition: inline-size 120ms ease-out;
+}
+
+.app-shell__reading-progress-fill--motionless {
+  transition: none;
 }
 
 .app-shell__header {
