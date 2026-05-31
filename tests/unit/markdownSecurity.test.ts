@@ -95,4 +95,13 @@ describe('markdown renderer security baseline', () => {
     expect(inputs[1].checked).toBe(false)
     expect(inputs[1].disabled).toBe(true)
   })
+
+  it('highlights supported fenced code blocks after lazy-loading the language grammar', async () => {
+    const html = await renderMarkdown('```ts\nconst answer: number = 42\n```')
+
+    expect(html.value).toContain('class="shiki')
+    expect(html.value).toContain('const')
+    expect(html.value).toContain('github-light')
+    expect(html.value).toContain('--shiki-dark')
+  })
 })

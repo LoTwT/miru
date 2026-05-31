@@ -2,14 +2,6 @@ import MarkdownIt from 'markdown-it'
 import anchor from 'markdown-it-anchor'
 import taskLists from 'markdown-it-task-lists'
 import { createJavaScriptRegexEngine } from 'shiki/engine/javascript'
-import bash from 'shiki/langs/bash.mjs'
-import css from 'shiki/langs/css.mjs'
-import html from 'shiki/langs/html.mjs'
-import javascript from 'shiki/langs/javascript.mjs'
-import json from 'shiki/langs/json.mjs'
-import markdownLang from 'shiki/langs/markdown.mjs'
-import typescript from 'shiki/langs/typescript.mjs'
-import vue from 'shiki/langs/vue.mjs'
 import { createHighlighterCore } from 'shiki/core'
 import githubDark from 'shiki/themes/github-dark.mjs'
 import githubLight from 'shiki/themes/github-light.mjs'
@@ -17,6 +9,7 @@ import githubLight from 'shiki/themes/github-light.mjs'
 import { toTrustedHtml } from '@/lib/security/sanitize'
 import { isRemoteImageUrl, isSafeImageUrl, isSafeLinkUrl } from '@/lib/security/urlPolicy'
 import type { RemoteImageMode, TrustedHtml } from '@/types/reader'
+import type { LanguageRegistration } from 'shiki/core'
 import type Token from 'markdown-it/lib/token.mjs'
 
 interface RenderMarkdownOptions {
@@ -27,10 +20,25 @@ interface RenderMarkdownOptions {
 const highlighterPromise = createHighlighterCore({
   engine: createJavaScriptRegexEngine(),
   themes: [githubLight, githubDark],
-  langs: [bash, css, html, javascript, json, markdownLang, typescript, vue],
+  langs: [],
 })
 
-const supportedLanguages = new Set(['bash', 'css', 'html', 'javascript', 'json', 'markdown', 'typescript', 'vue'])
+const languageLoaders = {
+  bash: () => import('shiki/langs/bash.mjs'),
+  css: () => import('shiki/langs/css.mjs'),
+  html: () => import('shiki/langs/html.mjs'),
+  javascript: () => import('shiki/langs/javascript.mjs'),
+  json: () => import('shiki/langs/json.mjs'),
+  markdown: () => import('shiki/langs/markdown.mjs'),
+  typescript: () => import('shiki/langs/typescript.mjs'),
+  vue: () => import('shiki/langs/vue.mjs'),
+} as const
+
+type SupportedLanguage = keyof typeof languageLoaders
+type Highlighter = Awaited<typeof highlighterPromise>
+
+const supportedLanguages = new Set<SupportedLanguage>(Object.keys(languageLoaders) as SupportedLanguage[])
+const loadedLanguagePromises = new Map<SupportedLanguage, Promise<void>>()
 
 const md = MarkdownIt({
   html: false,
@@ -110,6 +118,8 @@ export async function renderMarkdown(markdown: string, options: RenderMarkdownOp
     }
 
     const language = normalizeLanguage(token.info)
+    await ensureLanguage(highlighter, language)
+
     const html = highlighter.codeToHtml(token.content, {
       lang: language,
       themes: {
@@ -143,11 +153,37 @@ function normalizeLanguage(info: string): string {
     return 'typescript'
   }
 
-  if (supportedLanguages.has(language)) {
-    return language
+  if (supportedLanguages.has(language as SupportedLanguage)) {
+    return language as SupportedLanguage
   }
 
   return 'text'
+}
+
+async function ensureLanguage(highlighter: Highlighter, language: string): Promise<void> {
+  if (language === 'text') {
+    return
+  }
+
+  const supportedLanguage = language as SupportedLanguage
+  if (!supportedLanguages.has(supportedLanguage) || highlighter.getLoadedLanguages().includes(supportedLanguage)) {
+    return
+  }
+
+  const pending = loadedLanguagePromises.get(supportedLanguage)
+  if (pending) {
+    await pending
+    return
+  }
+
+  const nextPending = loadLanguage(highlighter, supportedLanguage)
+  loadedLanguagePromises.set(supportedLanguage, nextPending)
+  await nextPending
+}
+
+async function loadLanguage(highlighter: Highlighter, language: SupportedLanguage): Promise<void> {
+  const registration = (await languageLoaders[language]()).default as unknown as LanguageRegistration | LanguageRegistration[]
+  await highlighter.loadLanguage(...(Array.isArray(registration) ? registration : [registration]))
 }
 
 function applyRemoteImageMode(tokens: Token[], remoteImageMode: RemoteImageMode): void {
