@@ -2,17 +2,22 @@
 import { nextTick, onMounted, shallowRef, useTemplateRef, watch } from 'vue'
 
 const props = defineProps<{
+  canBookmark: boolean
+  canSearch: boolean
   isFetchingUrl: boolean
   isOpen: boolean
+  searchUnavailableText: string
   status: string
 }>()
 
 const emit = defineEmits<{
   'update:isOpen': [value: boolean]
+  bookmark: []
   paste: []
   openFile: [file: File]
   openLibrary: []
   fetchUrl: [url: string]
+  search: []
   clear: []
   print: []
 }>()
@@ -102,6 +107,24 @@ function requestPaste(): void {
   emit('paste')
 }
 
+function requestSearch(): void {
+  if (!props.canSearch) {
+    return
+  }
+
+  closeMenu()
+  emit('search')
+}
+
+function bookmarkCurrentPosition(): void {
+  if (!props.canBookmark) {
+    return
+  }
+
+  closeMenu()
+  emit('bookmark')
+}
+
 function printDocument(): void {
   closeMenu()
   emit('print')
@@ -148,6 +171,28 @@ onMounted(() => {
         ×
       </button>
     </header>
+
+    <button
+      class="floating-input__item"
+      type="button"
+      :disabled="!props.canSearch"
+      data-menu-item
+      @click="requestSearch"
+    >
+      <span>搜索</span>
+      <small>{{ props.canSearch ? 'Cmd/Ctrl+F' : props.searchUnavailableText }}</small>
+    </button>
+
+    <button
+      class="floating-input__item"
+      type="button"
+      :disabled="!props.canBookmark"
+      data-menu-item
+      @click="bookmarkCurrentPosition"
+    >
+      <span>书签此处</span>
+      <small>{{ props.canBookmark ? '保存当前位置' : '打开文档后可用' }}</small>
+    </button>
 
     <button
       class="floating-input__item"
@@ -324,6 +369,15 @@ onMounted(() => {
 .floating-input__close:hover,
 .floating-input__close:focus-visible {
   border-color: var(--reading-accent);
+}
+
+.floating-input__item:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.floating-input__item:disabled:hover {
+  border-color: var(--reading-rule);
 }
 
 .floating-input__item--danger {
