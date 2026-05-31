@@ -124,9 +124,10 @@ const readingProgress = computed(() => {
 
   return 0
 })
+const readingProgressPercent = computed(() => Math.round(readingProgress.value * 100))
 const shouldShowReadingProgress = computed(() => appMode.value === 'reader' || appMode.value === 'pdf')
+const isReadingSettingsAvailable = computed(() => appMode.value !== 'pdf')
 const readingProgressStyle = computed(() => `${Number((readingProgress.value * 100).toFixed(1))}%`)
-const readingProgressLabel = computed(() => `阅读进度 ${Math.round(readingProgress.value * 100)}%`)
 
 watch(status, (value) => {
   if (value) {
@@ -186,6 +187,7 @@ onUnmounted(() => {
 })
 
 function resetToSample(): void {
+  closeSurface()
   loadFromText(sampleMarkdown, 'sample', 'miru sample')
 }
 
@@ -867,7 +869,11 @@ function focusLibraryView(): void {
     <div
       v-if="shouldShowReadingProgress"
       class="app-shell__reading-progress"
-      aria-hidden="true"
+      aria-label="阅读进度"
+      aria-valuemin="0"
+      aria-valuemax="100"
+      :aria-valuenow="readingProgressPercent"
+      role="progressbar"
       data-testid="reading-progress-line"
     >
       <span
@@ -912,7 +918,7 @@ function focusLibraryView(): void {
           </svg>
         </button>
         <button
-          v-if="appMode === 'reader'"
+          v-if="isReadingSettingsAvailable"
           ref="settingsButton"
           class="app-shell__command-button"
           :class="{ 'app-shell__command-button--active': isSettingsSurfaceOpen }"
@@ -956,6 +962,7 @@ function focusLibraryView(): void {
       @toggle-pin="toggleLibraryPin"
       @delete="deleteLibraryEntry"
       @clear="clearLibrary"
+      @sample="resetToSample"
     />
 
     <PdfViewer
@@ -986,7 +993,6 @@ function focusLibraryView(): void {
         :active-id="activeOutlineId"
         :is-open="false"
         :position="readingSettings.state.outlinePosition"
-        :progress-label="readingProgressLabel"
         @navigate="navigateToOutlineItem"
       />
 
@@ -1031,7 +1037,7 @@ function focusLibraryView(): void {
       />
 
       <ReadingSettingsControl
-        v-else-if="isSettingsSurfaceOpen && appMode === 'reader'"
+        v-else-if="isSettingsSurfaceOpen && isReadingSettingsAvailable"
         :is-open="isSettingsSurfaceOpen"
         :settings="readingSettings.state"
         :presets="readingPresetList"
@@ -1039,7 +1045,7 @@ function focusLibraryView(): void {
         :local-font-message="readingLocalFontMessage"
         :active-preset-name="activeReadingPresetName"
         :is-default="readingSettings.isDefault.value"
-        :show-outline-position-control="outlineItems.length > 0"
+        :show-outline-position-control="appMode === 'reader' && outlineItems.length > 0"
         @update-font-size="readingSettings.updateFontSize"
         @update-measure="readingSettings.updateMeasure"
         @update-line-height="readingSettings.updateLineHeight"
@@ -1070,7 +1076,6 @@ function focusLibraryView(): void {
         :active-id="activeOutlineId"
         :is-open="isOutlineSurfaceOpen"
         :position="readingSettings.state.outlinePosition"
-        :progress-label="readingProgressLabel"
         @navigate="navigateToOutlineItem"
         @close="closeOutlineSurface"
       />
@@ -1120,6 +1125,7 @@ function focusLibraryView(): void {
   align-items: center;
   justify-content: flex-start;
   gap: 0.55rem;
+  min-block-size: 56px;
   max-width: 78rem;
   margin: 0 auto;
   padding: 0.45rem;
@@ -1144,6 +1150,7 @@ function focusLibraryView(): void {
   font-family: var(--reading-font-heading);
   font-size: 1rem;
   font-weight: 650;
+  line-height: 1;
   text-decoration: none;
 }
 
@@ -1156,7 +1163,10 @@ function focusLibraryView(): void {
 }
 
 .app-shell__mark-separator {
+  display: grid;
+  place-items: center;
   margin-inline: 0.45rem;
+  line-height: 1;
 }
 
 .app-shell__document-title {
@@ -1178,7 +1188,9 @@ function focusLibraryView(): void {
   color: var(--reading-fg-muted);
   background: color-mix(in srgb, var(--reading-bg) 92%, var(--reading-fg) 8%);
   font: inherit;
+  line-height: 1;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .app-shell__library-button {

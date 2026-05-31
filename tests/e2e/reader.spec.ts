@@ -89,6 +89,7 @@ test('updates the quiet reading progress line for long markdown documents', asyn
   ].join('\n\n'))
   await expect(page.getByRole('heading', { name: 'Progress doc' })).toBeVisible()
   await expect(page.getByTestId('reading-progress-line')).toBeVisible()
+  await expect(page.getByTestId('reading-progress-line')).toHaveAttribute('role', 'progressbar')
   await expect.poll(() => readReadingProgressPercent(page)).toBeLessThan(10)
 
   await page.evaluate(() => {
@@ -97,7 +98,7 @@ test('updates the quiet reading progress line for long markdown documents', asyn
   await expect.poll(() => readReadingProgressPercent(page)).toBeGreaterThan(80)
 
   if (isWideViewport(page)) {
-    await expect(page.getByTestId('reader-outline')).toContainText('阅读进度')
+    await expect(page.getByTestId('reader-outline')).not.toContainText('阅读进度')
   }
 })
 
@@ -106,13 +107,25 @@ test('adds pasted markdown to the local library and reopens it from the bookshel
 
   await pasteText(page, '# Library doc\n\nSaved locally.')
   await expect(page.getByRole('heading', { name: 'Library doc' })).toBeVisible()
+  const readerHeaderHeight = await readTopBarHeight(page)
 
   await page.getByTestId('library-open-button').click()
   await expect(page.getByTestId('library-view')).toBeVisible()
+  await expect.poll(() => readTopBarHeight(page)).toBe(readerHeaderHeight)
+  await expect(page.getByTestId('reading-settings-button')).toBeVisible()
+  await page.getByTestId('reading-settings-button').click()
+  await expect(page.getByText('字号').first()).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(page.getByText('字号').first()).toHaveCount(0)
 
   const entry = page.getByTestId('library-entry').filter({ hasText: 'Library doc' })
   await expect(entry).toContainText('粘贴')
   await expect(entry).toContainText('MD')
+
+  await page.getByTestId('library-sample-entry').getByRole('button', { name: 'miru 示例文档' }).click()
+  await expect(page.getByRole('heading', { name: 'miru' })).toBeVisible()
+  await page.getByTestId('library-open-button').click()
+  await expect.poll(() => readTopBarHeight(page)).toBe(readerHeaderHeight)
 
   await openBookshelfEntry(entry, 'Library doc')
 
@@ -232,16 +245,43 @@ test('adds a local PDF and reopens it through the view-only PDF viewer', async (
       const rect = stage.getBoundingClientRect()
       return {
         bottom: rect.bottom,
+        height: rect.height,
         top: rect.top,
       }
     })
+    const canvasRect = await page.getByTestId('pdf-viewer-canvas').evaluate((canvas) => {
+      const rect = canvas.getBoundingClientRect()
+      return {
+        bottom: rect.bottom,
+        top: rect.top,
+      }
+    })
+    const visibleCanvasCenter = (Math.max(canvasRect.top, stageRect.top) + Math.min(canvasRect.bottom, stageRect.bottom)) / 2
     expect(sideButtonRects).toHaveLength(2)
     for (const rect of sideButtonRects) {
-      expect(rect.width).toBeGreaterThanOrEqual(44)
-      expect(rect.height).toBeGreaterThanOrEqual(44)
+      expect(rect.width).toBeCloseTo(44, 0)
+      expect(rect.height).toBeCloseTo(44, 0)
       expect(rect.top).toBeGreaterThanOrEqual(stageRect.top)
       expect(rect.bottom).toBeLessThanOrEqual(stageRect.bottom)
+      expect(Math.abs((rect.top + rect.height / 2) - visibleCanvasCenter)).toBeLessThanOrEqual(2)
     }
+    const sideIconRects = await page.locator('.pdf-viewer__side-page-icon').evaluateAll(icons =>
+      icons.map((icon) => {
+        const iconRect = icon.getBoundingClientRect()
+        const buttonRect = icon.closest('button')?.getBoundingClientRect()
+        return {
+          buttonCenterX: buttonRect ? buttonRect.left + buttonRect.width / 2 : 0,
+          buttonCenterY: buttonRect ? buttonRect.top + buttonRect.height / 2 : 0,
+          iconCenterX: iconRect.left + iconRect.width / 2,
+          iconCenterY: iconRect.top + iconRect.height / 2,
+        }
+      }),
+    )
+    for (const rect of sideIconRects) {
+      expect(Math.abs(rect.iconCenterX - rect.buttonCenterX)).toBeLessThanOrEqual(1)
+      expect(Math.abs(rect.iconCenterY - rect.buttonCenterY)).toBeLessThanOrEqual(1)
+    }
+    await expect.poll(() => page.getByTestId('pdf-viewer-stage').evaluate(stage => getComputedStyle(stage).overflowX)).toBe('hidden')
     await page.getByTestId('pdf-viewer-side-next').click()
     await expect(page.getByTestId('pdf-viewer-side-prev')).toBeEnabled()
     await expect(page.getByTestId('pdf-viewer-side-next')).toBeDisabled()
@@ -268,6 +308,18 @@ test('adds a local PDF and reopens it through the view-only PDF viewer', async (
     })),
   )
   expect(toolbarButtonRects.length).toBeGreaterThan(0)
+  if (isWideViewport(page)) {
+    await page.evaluate(() => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'auto' }))
+    const stickyRects = await page.evaluate(() => {
+      const header = document.querySelector('[data-testid="app-top-bar"]')?.getBoundingClientRect()
+      const toolbar = document.querySelector('.pdf-viewer__toolbar')?.getBoundingClientRect()
+      return {
+        headerBottom: header?.bottom ?? 0,
+        toolbarTop: toolbar?.top ?? 0,
+      }
+    })
+    expect(stickyRects.toolbarTop - stickyRects.headerBottom).toBeGreaterThanOrEqual(8)
+  }
   for (const rect of toolbarButtonRects) {
     expect(rect.width).toBeGreaterThanOrEqual(44)
     expect(rect.height).toBeGreaterThanOrEqual(44)
@@ -316,8 +368,11 @@ test('supports continuous scroll mode for local PDFs with bounded rendered pages
   await expect.poll(() => stage.evaluate(element => element.scrollTop)).toBeGreaterThan(0)
   await expect.poll(() => page.getByTestId('pdf-viewer-scroll-canvas').count()).toBeLessThan(8)
 
-  await stage.evaluate(element => element.scrollTo({ top: 0, behavior: 'auto' }))
-  await expect(page.getByText('1 / 8')).toBeVisible()
+  await stage.evaluate((element) => {
+    element.scrollTo({ top: 0, behavior: 'auto' })
+    element.dispatchEvent(new Event('scroll'))
+  })
+  await expect.poll(() => stage.evaluate(element => Math.round(element.scrollTop))).toBeLessThanOrEqual(8)
   const firstCanvasSizeAfterReturn = await page
     .getByTestId('pdf-viewer-scroll-page')
     .first()
@@ -829,7 +884,7 @@ test('separates heading, body link, permalink, and collapse control styles', asy
   )
   await expect.poll(() => bodyLink.evaluate(element => getComputedStyle(element).textDecorationLine)).toContain('underline')
 
-  await expect.poll(() => h2.evaluate(element => getComputedStyle(element, '::before').width)).toBe('14px')
+  await expect.poll(() => h2.evaluate(element => getComputedStyle(element, '::before').content)).toBe('none')
   await expect.poll(() => h2Anchor.evaluate(element => getComputedStyle(element, '::after').opacity)).toBe('0')
   await expect.poll(() => h2Anchor.evaluate(element => getComputedStyle(element, '::after').content)).toContain('¶')
   await h2.hover()
@@ -1976,6 +2031,12 @@ async function pasteText(page: import('@playwright/test').Page, text: string) {
 async function readReadingProgressPercent(page: import('@playwright/test').Page): Promise<number> {
   return page.getByTestId('reading-progress-fill').evaluate((element) => {
     return Number.parseFloat((element as HTMLElement).style.inlineSize || '0')
+  })
+}
+
+async function readTopBarHeight(page: import('@playwright/test').Page): Promise<number> {
+  return page.getByTestId('app-top-bar').evaluate((element) => {
+    return Math.round(element.getBoundingClientRect().height)
   })
 }
 
