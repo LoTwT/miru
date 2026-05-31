@@ -102,6 +102,72 @@ test('updates the quiet reading progress line for long markdown documents', asyn
   }
 })
 
+test('searches markdown content and keeps document bookmarks in the outline surface', async ({ page }) => {
+  await page.goto('/')
+
+  await pasteText(page, [
+    '# Searchable note',
+    '',
+    'Alpha opens the first paragraph.',
+    '',
+    '## Chapter One',
+    '',
+    'Beta keeps this middle paragraph moving.',
+    '',
+    '## Chapter Two',
+    '',
+    'alpha appears again before ALPHA closes the note.',
+    '',
+    '## Chapter Three',
+    '',
+    'Gamma keeps the outline available.',
+  ].join('\n\n'))
+  await expect(page.getByRole('heading', { name: 'Searchable note' })).toBeVisible()
+
+  await page.keyboard.press('Control+F')
+  await expect(page.getByTestId('reader-find-bar')).toBeVisible()
+  await page.getByTestId('reader-find-input').fill('alpha')
+  await expect(page.locator('.reader-search-match')).toHaveCount(3)
+  await expect(page.getByTestId('reader-find-counter')).toContainText('1 / 3')
+
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('reader-find-counter')).toContainText('2 / 3')
+  await page.keyboard.press('Shift+Enter')
+  await expect(page.getByTestId('reader-find-counter')).toContainText('1 / 3')
+
+  await page.getByTestId('reader-find-input').fill('missing')
+  await expect(page.getByTestId('reader-find-counter')).toContainText('无匹配')
+  await expect(page.locator('.reader-search-match')).toHaveCount(0)
+
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('reader-find-bar')).toHaveCount(0)
+
+  if (!isWideViewport(page)) {
+    await page.getByTestId('reader-outline-button').click()
+  }
+  await page.getByRole('button', { name: /添加「Chapter Two/ }).click()
+  await expect(page.getByTestId('reader-outline')).toContainText('书签')
+  await expect(page.getByTestId('reader-outline')).toContainText('Chapter Two')
+
+  await page.getByTestId('floating-affordance-button').click()
+  await page.getByTestId('floating-affordance-menu').getByRole('button', { name: /^书签此处/ }).click()
+  if (!isWideViewport(page)) {
+    await page.getByTestId('reader-outline-button').click()
+  }
+  await expect(page.getByTestId('reader-outline')).toContainText('Searchable note')
+
+  await page.reload()
+  await page.getByTestId('library-open-button').click()
+  await openBookshelfEntry(page.getByTestId('library-entry').filter({ hasText: 'Searchable note' }), 'Searchable note')
+  await expect(page.getByRole('heading', { name: 'Searchable note' })).toBeVisible()
+  if (!isWideViewport(page)) {
+    await page.getByTestId('reader-outline-button').click()
+  }
+  await expect(page.getByRole('button', { name: /移除「Chapter Two/ })).toBeVisible()
+  await page.getByRole('button', { name: /移除「Chapter Two/ }).click()
+  await expect(page.getByRole('button', { name: /添加「Chapter Two/ })).toBeVisible()
+})
+
 test('adds pasted markdown to the local library and reopens it from the bookshelf', async ({ page }) => {
   await page.goto('/')
 
@@ -230,6 +296,15 @@ test('adds a local PDF and reopens it through the view-only PDF viewer', async (
   await expect(page.getByText('1 / 2')).toBeVisible()
   const initialProgress = await readReadingProgressPercent(page)
   expect(initialProgress).toBeGreaterThanOrEqual(45)
+
+  await page.getByTestId('floating-affordance-button').click()
+  await expect(page.getByTestId('floating-affordance-menu').getByRole('button', { name: /搜索 PDF 搜索即将支持/ })).toBeDisabled()
+  await page.getByTestId('floating-affordance-menu').getByRole('button', { name: /^书签此处/ }).click()
+  await expect(page.getByTestId('reader-outline-button')).toBeVisible()
+  await page.getByTestId('reader-outline-button').click()
+  await expect(page.getByRole('button', { name: /第 1 页 PDF 第 1 页/ })).toBeVisible()
+  await page.keyboard.press('Escape')
+
   if (isWideViewport(page)) {
     await expect(page.getByTestId('pdf-viewer-side-prev')).toBeDisabled()
     await expect(page.getByTestId('pdf-viewer-side-next')).toBeEnabled()
@@ -546,6 +621,8 @@ test('exposes document input through the top-bar command surface', async ({ page
 
   await button.click()
   await expect(page.getByTestId('floating-affordance-menu')).toBeVisible()
+  await expect(page.getByRole('button', { name: /搜索/ })).toBeVisible()
+  await expect(page.getByRole('button', { name: /书签此处/ })).toBeVisible()
   await expect(page.getByRole('button', { name: /粘贴/ })).toBeVisible()
   await expect(page.getByRole('button', { name: /打开文件/ })).toBeVisible()
   await expect(page.getByTestId('floating-affordance-menu').getByRole('button', { name: /^文库/ })).toBeVisible()
@@ -553,8 +630,12 @@ test('exposes document input through the top-bar command surface', async ({ page
   await expect(page.getByRole('button', { name: /清空当前.*回到示例文档.*不影响文库/ })).toBeVisible()
   await expect(page.getByRole('button', { name: /打印/ })).toBeVisible()
   await expect(page.locator('input[type="file"]')).not.toHaveAttribute('accept')
-  await expect(page.getByRole('button', { name: /粘贴/ })).toBeFocused()
+  await expect(page.getByRole('button', { name: /搜索/ })).toBeFocused()
 
+  await page.keyboard.press('ArrowDown')
+  await expect(page.getByRole('button', { name: /书签此处/ })).toBeFocused()
+  await page.keyboard.press('ArrowDown')
+  await expect(page.getByRole('button', { name: /粘贴/ })).toBeFocused()
   await page.keyboard.press('ArrowDown')
   await expect(page.getByLabel('URL 导入')).toBeFocused()
 
@@ -570,13 +651,13 @@ test('exposes document input through the top-bar command surface', async ({ page
   await expect(button).toBeFocused()
 
   await button.click()
-  await expect(page.getByRole('button', { name: /粘贴/ })).toBeFocused()
+  await expect(page.getByRole('button', { name: /搜索/ })).toBeFocused()
   await page.mouse.click(200, 120)
   await expect(page.getByTestId('floating-affordance-menu')).not.toBeVisible()
   await expect(button).toBeFocused()
 
   await button.click()
-  await expect(page.getByRole('button', { name: /粘贴/ })).toBeFocused()
+  await expect(page.getByRole('button', { name: /搜索/ })).toBeFocused()
   await page.getByTestId('reading-settings-button').click()
   await expect(page.getByTestId('floating-affordance-menu')).not.toBeVisible()
   await expect(page.getByTestId('reading-settings-panel')).toBeVisible()
@@ -614,7 +695,7 @@ test('collapses the floating menu and focuses the reader after URL fetch success
 
   await button.click()
   await expect(page.getByTestId('floating-affordance-menu')).toBeVisible()
-  await expect(page.getByRole('button', { name: /粘贴/ })).toBeFocused()
+  await expect(page.getByRole('button', { name: /搜索/ })).toBeFocused()
 })
 
 test('uses a clean display title for URL imports without leaking the full URL into the header or library title', async ({ page }) => {
