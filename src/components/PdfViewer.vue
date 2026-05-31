@@ -25,6 +25,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   back: []
   positionChange: [position: Omit<PdfReadingPosition, 'updatedAt'>]
+  progressChange: [progress: number]
 }>()
 
 const minScale = 0.35
@@ -357,6 +358,32 @@ function emitPosition(): void {
     scaleMode: scaleMode.value,
     scale: scaleMode.value === 'custom' ? customScale.value : null,
   })
+  emitProgress()
+}
+
+function emitProgress(): void {
+  if (!isReady.value) {
+    emit('progressChange', 0)
+    return
+  }
+
+  emit('progressChange', calculateProgress())
+}
+
+function calculateProgress(): number {
+  if (totalPages.value <= 0) {
+    return 0
+  }
+
+  if (viewMode.value === 'scroll') {
+    const stage = pageStageRef.value
+    const maxScrollTop = stage ? stage.scrollHeight - stage.clientHeight : 0
+    if (maxScrollTop > 1 && stage) {
+      return clampProgress(stage.scrollTop / maxScrollTop)
+    }
+  }
+
+  return clampProgress(pageNumber.value / totalPages.value)
 }
 
 async function renderActiveView(options: { anchorPage: number }): Promise<void> {
@@ -469,6 +496,7 @@ function handleStageScroll(): void {
   }
 
   updateBufferedScrollPages()
+  emitProgress()
 
   window.clearTimeout(scrollPositionSyncTimer)
   scrollPositionSyncTimer = window.setTimeout(() => {
@@ -718,6 +746,14 @@ function clampPageNumber(value: number): number {
 
 function clampScale(value: number): number {
   return Math.min(maxScale, Math.max(minScale, Number(value.toFixed(2))))
+}
+
+function clampProgress(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0
+  }
+
+  return Math.min(1, Math.max(0, value))
 }
 
 function isPdfCancellation(reason: unknown): boolean {
