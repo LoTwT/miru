@@ -33,6 +33,7 @@ const maxScale = 2.75
 const zoomStep = 0.15
 
 const rootRef = useTemplateRef<HTMLElement>('root')
+const stageFrameRef = useTemplateRef<HTMLElement>('stageFrame')
 const pageStageRef = useTemplateRef<HTMLElement>('pageStage')
 const canvasRef = useTemplateRef<HTMLCanvasElement>('canvas')
 const pageNumber = shallowRef(Math.max(1, props.position?.pageNumber ?? 1))
@@ -47,6 +48,7 @@ const errorMessage = shallowRef('')
 const pageSlots = shallowRef<PdfPageSlot[]>([])
 const bufferedScrollPages = shallowRef<Set<number>>(new Set())
 const scrollModeStatus = shallowRef<'idle' | 'measuring' | 'error'>('idle')
+const sideControlTop = shallowRef('50%')
 
 let loadingTask: PDFDocumentLoadingTask | null = null
 let pdfDocument: PDFDocumentProxy | null = null
@@ -56,6 +58,7 @@ let scrollPageObserver: IntersectionObserver | null = null
 let renderSequence = 0
 let scrollMeasureSequence = 0
 let scrollPositionSyncTimer: ReturnType<typeof window.setTimeout> | undefined
+let sideControlFrame: number | undefined
 const scrollPageElements = new Map<number, HTMLElement>()
 const scrollCanvasElements = new Map<number, HTMLCanvasElement>()
 const scrollRenderTasks = new Map<number, RenderTask>()
@@ -232,6 +235,7 @@ async function renderCurrentPage(): Promise<void> {
 
     if (sequence === renderSequence) {
       renderState.value = 'idle'
+      queueSideControlPositionUpdate()
     }
   }
   catch (reason) {
@@ -447,6 +451,7 @@ async function prepareScrollMode(anchorPage: number): Promise<void> {
     setupScrollPageObserver()
     scrollToPage(pageNumber.value, 'auto')
     updateBufferedScrollPages()
+    queueSideControlPositionUpdate()
   }
   catch (reason) {
     if (isPdfCancellation(reason)) {
@@ -492,11 +497,13 @@ function shouldRenderScrollPage(page: number): boolean {
 
 function handleStageScroll(): void {
   if (viewMode.value !== 'scroll') {
+    queueSideControlPositionUpdate()
     return
   }
 
   updateBufferedScrollPages()
   emitProgress()
+  queueSideControlPositionUpdate()
 
   window.clearTimeout(scrollPositionSyncTimer)
   scrollPositionSyncTimer = window.setTimeout(() => {
@@ -572,7 +579,58 @@ function updateBufferedScrollPages(): void {
     for (const page of nextPages) {
       void renderScrollPage(page)
     }
+    queueSideControlPositionUpdate()
   })
+}
+
+function queueSideControlPositionUpdate(): void {
+  if (sideControlFrame !== undefined) {
+    window.cancelAnimationFrame(sideControlFrame)
+  }
+
+  sideControlFrame = window.requestAnimationFrame(() => {
+    sideControlFrame = undefined
+    updateSideControlPosition()
+  })
+}
+
+function updateSideControlPosition(): void {
+  const frame = stageFrameRef.value
+  const stage = pageStageRef.value
+  if (!frame || !stage) {
+    sideControlTop.value = '50%'
+    return
+  }
+
+  const frameRect = frame.getBoundingClientRect()
+  const stageRect = stage.getBoundingClientRect()
+  const targetRect = getCurrentPageVisualRect()
+  const center = targetRect ? getVisibleRectCenter(targetRect, stageRect) : getRectCenter(stageRect)
+  sideControlTop.value = `${Math.round(center - frameRect.top)}px`
+}
+
+function getCurrentPageVisualRect(): DOMRect | null {
+  if (viewMode.value === 'paged') {
+    return canvasRef.value?.getBoundingClientRect() ?? null
+  }
+
+  const page = getDominantVisiblePage() ?? pageNumber.value
+  return scrollPageElements.get(page)?.getBoundingClientRect() ?? null
+}
+
+function getVisibleRectCenter(targetRect: DOMRect, stageRect: DOMRect): number {
+  const visibleTop = Math.max(targetRect.top, stageRect.top)
+  const visibleBottom = Math.min(targetRect.bottom, stageRect.bottom)
+
+  if (visibleBottom > visibleTop) {
+    return (visibleTop + visibleBottom) / 2
+  }
+
+  return getRectCenter(stageRect)
+}
+
+function getRectCenter(rect: DOMRect): number {
+  return rect.top + rect.height / 2
 }
 
 function getVisibleScrollPages(): number[] {
@@ -731,6 +789,7 @@ function scrollToPage(page: number, behavior: ScrollBehavior = getPreferredScrol
     const nextTop = stage.scrollTop + elementRect.top - stageRect.top
     stage.scrollTo({ top: Math.max(0, nextTop), behavior })
     updateBufferedScrollPages()
+    queueSideControlPositionUpdate()
     emitPosition()
   })
 }
@@ -792,6 +851,7 @@ watch(pageNumber, () => {
   }
 
   emitPosition()
+  queueSideControlPositionUpdate()
 })
 
 watch([scaleMode, customScale], () => {
@@ -801,15 +861,18 @@ watch([scaleMode, customScale], () => {
 
   void renderActiveView({ anchorPage: pageNumber.value })
   emitPosition()
+  queueSideControlPositionUpdate()
 })
 
 onMounted(() => {
   resizeObserver = new ResizeObserver(() => {
     if (scaleMode.value === 'custom') {
+      queueSideControlPositionUpdate()
       return
     }
 
     void renderActiveView({ anchorPage: pageNumber.value })
+    queueSideControlPositionUpdate()
   })
 
   if (pageStageRef.value) {
@@ -820,6 +883,9 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  if (sideControlFrame !== undefined) {
+    window.cancelAnimationFrame(sideControlFrame)
+  }
   window.clearTimeout(scrollPositionSyncTimer)
   resizeObserver?.disconnect()
   void cleanupPdfDocument()
@@ -924,8 +990,10 @@ onUnmounted(() => {
     </p>
 
     <div
+      ref="stageFrame"
       class="pdf-viewer__stage-frame"
       :class="{ 'pdf-viewer__stage-frame--with-side-controls': hasMultiplePages }"
+      :style="{ '--pdf-side-control-top': sideControlTop }"
     >
       <button
         v-if="hasMultiplePages"
@@ -936,12 +1004,15 @@ onUnmounted(() => {
         data-testid="pdf-viewer-side-prev"
         @click="goToPreviousPage"
       >
-        <span aria-hidden="true">‹</span>
+        <svg class="pdf-viewer__side-page-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M15 6 9 12l6 6" />
+        </svg>
       </button>
 
       <div
         ref="pageStage"
         class="pdf-viewer__stage"
+        :class="{ 'pdf-viewer__stage--no-horizontal-scroll': scaleMode !== 'custom' }"
         data-testid="pdf-viewer-stage"
         @scroll="handleStageScroll"
       >
@@ -1017,7 +1088,9 @@ onUnmounted(() => {
         data-testid="pdf-viewer-side-next"
         @click="goToNextPage"
       >
-        <span aria-hidden="true">›</span>
+        <svg class="pdf-viewer__side-page-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="m9 6 6 6-6 6" />
+        </svg>
       </button>
     </div>
   </section>
@@ -1109,7 +1182,7 @@ onUnmounted(() => {
 
 .pdf-viewer__toolbar {
   position: sticky;
-  top: 0.75rem;
+  top: max(5.25rem, calc(env(safe-area-inset-top) + 5.25rem));
   z-index: 10;
   display: flex;
   flex-wrap: wrap;
@@ -1174,18 +1247,24 @@ onUnmounted(() => {
   overflow: auto;
 }
 
+.pdf-viewer__stage--no-horizontal-scroll {
+  overflow-x: hidden;
+}
+
 .pdf-viewer__stage-frame {
   position: relative;
+  --pdf-side-control-top: 50%;
 }
 
 .pdf-viewer__side-page-button {
   position: absolute;
-  inset-block-start: 50%;
+  inset-block-start: var(--pdf-side-control-top);
   z-index: 2;
   display: grid;
   place-items: center;
   inline-size: 44px;
-  min-block-size: 54px;
+  block-size: 44px;
+  padding: 0;
   border: 1px solid color-mix(in srgb, var(--reading-rule) 78%, transparent);
   border-radius: 999px;
   color: var(--reading-fg);
@@ -1199,6 +1278,16 @@ onUnmounted(() => {
   transform: translateY(-50%);
   transition: opacity 160ms ease, border-color 160ms ease, color 160ms ease;
   backdrop-filter: blur(12px);
+}
+
+.pdf-viewer__side-page-icon {
+  inline-size: 1.18rem;
+  block-size: 1.18rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.3;
 }
 
 .pdf-viewer__stage-frame--with-side-controls .pdf-viewer__stage {

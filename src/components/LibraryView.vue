@@ -18,6 +18,7 @@ const emit = defineEmits<{
   togglePin: [entry: LibraryEntry]
   delete: [entry: LibraryEntry]
   clear: []
+  sample: []
 }>()
 
 const pendingDelete = shallowRef<LibraryEntry | null>(null)
@@ -88,6 +89,11 @@ function requestClear(): void {
 function openEntry(entry: LibraryEntry): void {
   closeActionsMenu()
   emit('open', entry)
+}
+
+function openSample(): void {
+  closeActionsMenu()
+  emit('sample')
 }
 
 function toggleActionsMenu(entry: LibraryEntry): void {
@@ -287,9 +293,11 @@ watch(pendingClear, async (value) => {
         </select>
       </label>
 
-      <button class="library-view__primary" type="button" data-testid="library-add-button" @click="emit('add')">
-        ＋ 加入
-      </button>
+      <div class="library-view__toolbar-actions">
+        <button class="library-view__primary" type="button" data-testid="library-add-button" @click="emit('add')">
+          ＋ 加入
+        </button>
+      </div>
     </div>
 
     <p v-if="props.status" class="library-view__status" role="status">
@@ -304,9 +312,43 @@ watch(pendingClear, async (value) => {
       <button class="library-view__primary" type="button" @click="emit('add')">
         加入第一篇
       </button>
+      <button class="library-view__secondary" type="button" @click="emit('sample')">
+        回到示例文档
+      </button>
     </div>
 
     <div v-else class="library-view__sections">
+      <section class="library-view__section" aria-labelledby="library-sample-title">
+        <h2 id="library-sample-title" class="library-view__section-title">示例</h2>
+        <ul class="library-view__list">
+          <li>
+            <article class="library-entry library-entry--sample" data-testid="library-sample-entry">
+              <div class="library-entry__main">
+                <span class="library-entry__type" data-entry-type="sample">示例</span>
+                <div class="library-entry__body">
+                  <h3 class="library-entry__title">
+                    <button class="library-entry__title-button" type="button" @click="openSample">
+                      miru 示例文档
+                    </button>
+                  </h3>
+                  <p class="library-entry__meta">
+                    <span>内置</span>
+                    <span aria-hidden="true">·</span>
+                    <span>随时回到起点</span>
+                  </p>
+                </div>
+              </div>
+
+              <div class="library-entry__actions">
+                <button class="library-entry__open" type="button" @click="openSample">
+                  打开示例
+                </button>
+              </div>
+            </article>
+          </li>
+        </ul>
+      </section>
+
       <section v-if="pinnedEntries.length > 0" class="library-view__section" aria-labelledby="library-pinned-title">
         <h2 id="library-pinned-title" class="library-view__section-title">置顶</h2>
         <ul class="library-view__list">
@@ -611,6 +653,13 @@ watch(pendingClear, async (value) => {
   margin-bottom: 1.1rem;
 }
 
+.library-view__toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: end;
+  gap: 0.55rem;
+}
+
 .library-view__sort-label {
   display: grid;
   gap: 0.35rem;
@@ -634,6 +683,7 @@ watch(pendingClear, async (value) => {
 }
 
 .library-view__primary,
+.library-view__secondary,
 .library-entry__open,
 .library-dialog__button,
 .library-dialog__danger,
@@ -650,6 +700,8 @@ watch(pendingClear, async (value) => {
 
 .library-view__primary:hover,
 .library-view__primary:focus-visible,
+.library-view__secondary:hover,
+.library-view__secondary:focus-visible,
 .library-entry__open:hover,
 .library-entry__open:focus-visible,
 .library-dialog__button:hover,
@@ -658,6 +710,12 @@ watch(pendingClear, async (value) => {
 .library-entry__rename button:focus-visible {
   border-color: var(--reading-accent);
   background: color-mix(in srgb, var(--reading-accent) 14%, transparent);
+}
+
+.library-view__secondary {
+  border-color: color-mix(in srgb, var(--reading-rule) 72%, transparent);
+  color: var(--reading-fg-muted);
+  background: color-mix(in srgb, var(--reading-bg) 94%, var(--reading-fg) 6%);
 }
 
 .library-view__status {
@@ -718,6 +776,10 @@ watch(pendingClear, async (value) => {
   color: var(--reading-accent);
 }
 
+.library-entry--sample .library-entry__title-button {
+  color: var(--reading-fg);
+}
+
 .library-entry__main {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -740,6 +802,11 @@ watch(pendingClear, async (value) => {
 .library-entry__type[data-entry-type="pdf"] {
   color: var(--reading-accent);
   border-color: color-mix(in srgb, var(--reading-accent) 54%, transparent);
+}
+
+.library-entry__type[data-entry-type="sample"] {
+  color: var(--reading-fg-muted);
+  background: color-mix(in srgb, var(--reading-accent) 8%, transparent);
 }
 
 .library-entry__body {

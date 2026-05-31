@@ -12,7 +12,6 @@ const props = defineProps<{
   items: readonly ReaderOutlineItem[]
   mode: ReaderOutlineMode
   position: ReadingOutlinePositionId
-  progressLabel?: string
 }>()
 
 const emit = defineEmits<{
@@ -163,9 +162,6 @@ onUnmounted(() => {
       <p class="reader-outline__label">
         文档大纲
       </p>
-      <p v-if="props.progressLabel" class="reader-outline__progress">
-        {{ props.progressLabel }}
-      </p>
       <ol class="reader-outline__list">
         <li v-for="item in props.items" :key="item.id" class="reader-outline__list-item">
           <a
@@ -200,7 +196,7 @@ onUnmounted(() => {
             文档大纲
           </h2>
           <p class="reader-outline__caption">
-            {{ props.progressLabel ? `${props.progressLabel} · 跳到当前文档的标题` : '跳到当前文档的标题' }}
+            跳到当前文档的标题
           </p>
         </div>
         <button
@@ -297,12 +293,6 @@ onUnmounted(() => {
   margin-block-start: 0.2rem;
   color: var(--reading-fg-muted);
   font-size: 0.82rem;
-}
-
-.reader-outline__progress {
-  margin: 0.3rem 0 0;
-  color: var(--reading-fg-muted);
-  font-size: 0.72rem;
 }
 
 .reader-outline__close {
@@ -439,10 +429,6 @@ onUnmounted(() => {
     color: var(--reading-fg-muted);
     font-size: 0.72rem;
     letter-spacing: 0;
-  }
-
-  .reader-outline__rail .reader-outline__progress {
-    margin: -0.25rem 0 0.45rem 0.9rem;
   }
 
   .reader-outline__panel {
