@@ -40,6 +40,9 @@ let resizeObserver: ResizeObserver | null = null
 let renderSequence = 0
 
 const isReady = computed(() => loadState.value === 'ready' && totalPages.value > 0)
+const canGoToPreviousPage = computed(() => isReady.value && pageNumber.value > 1)
+const canGoToNextPage = computed(() => isReady.value && pageNumber.value < totalPages.value)
+const hasMultiplePages = computed(() => isReady.value && totalPages.value > 1)
 const pageLabel = computed(() => totalPages.value > 0 ? `${pageNumber.value} / ${totalPages.value}` : '— / —')
 const zoomLabel = computed(() => `${Math.round(renderedScale.value * 100)}%`)
 const scaleModeLabel = computed(() => {
@@ -197,9 +200,17 @@ async function renderCurrentPage(): Promise<void> {
 
 function calculateScale(page: Awaited<ReturnType<PDFDocumentProxy['getPage']>>): number {
   const baseViewport = page.getViewport({ scale: 1 })
-  const stageRect = pageStageRef.value?.getBoundingClientRect()
-  const availableWidth = Math.max(280, (stageRect?.width ?? 820) - 32)
-  const availableHeight = Math.max(360, window.innerHeight - 220)
+  const stage = pageStageRef.value
+  const stageRect = stage?.getBoundingClientRect()
+  const stageStyles = stage ? window.getComputedStyle(stage) : null
+  const horizontalPadding = stageStyles
+    ? Number.parseFloat(stageStyles.paddingLeft) + Number.parseFloat(stageStyles.paddingRight)
+    : 32
+  const verticalPadding = stageStyles
+    ? Number.parseFloat(stageStyles.paddingTop) + Number.parseFloat(stageStyles.paddingBottom)
+    : 32
+  const availableWidth = Math.max(280, (stageRect?.width ?? 820) - horizontalPadding)
+  const availableHeight = Math.max(280, (stageRect?.height ?? (window.innerHeight - 220)) - verticalPadding)
 
   if (scaleMode.value === 'fit-page') {
     return clampScale(Math.min(availableWidth / baseViewport.width, availableHeight / baseViewport.height))
@@ -239,6 +250,23 @@ function setPageFromInput(event: Event): void {
   input.value = String(pageNumber.value)
 }
 
+function handlePdfKeydown(event: KeyboardEvent): void {
+  if (isTextInputTarget(event.target)) {
+    return
+  }
+
+  if (event.key === 'ArrowLeft' && canGoToPreviousPage.value) {
+    event.preventDefault()
+    goToPreviousPage()
+    return
+  }
+
+  if (event.key === 'ArrowRight' && canGoToNextPage.value) {
+    event.preventDefault()
+    goToNextPage()
+  }
+}
+
 function retry(): void {
   void loadPdfDocument()
 }
@@ -271,6 +299,17 @@ function isPdfCancellation(reason: unknown): boolean {
     reason.name === 'RenderingCancelledException'
     || reason.name === 'AbortException'
   )
+}
+
+function isTextInputTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false
+  }
+
+  return target instanceof HTMLInputElement
+    || target instanceof HTMLTextAreaElement
+    || target instanceof HTMLSelectElement
+    || target.isContentEditable
 }
 
 watch(() => props.blob, () => {
@@ -316,6 +355,7 @@ onUnmounted(() => {
     aria-labelledby="pdf-viewer-title"
     data-testid="pdf-viewer"
     tabindex="-1"
+    @keydown="handlePdfKeydown"
   >
     <header class="pdf-viewer__header">
       <button class="pdf-viewer__back" type="button" @click="emit('back')">
@@ -334,7 +374,7 @@ onUnmounted(() => {
 
     <div class="pdf-viewer__toolbar" aria-label="PDF 查看工具">
       <div class="pdf-viewer__control-group" aria-label="页码">
-        <button type="button" :disabled="!isReady || pageNumber <= 1" @click="goToPreviousPage">
+        <button type="button" :disabled="!canGoToPreviousPage" aria-label="上一页" @click="goToPreviousPage">
           ◁
         </button>
         <label class="pdf-viewer__page-jump">
@@ -350,7 +390,7 @@ onUnmounted(() => {
           >
         </label>
         <span class="pdf-viewer__page-total" aria-live="polite">{{ pageLabel }}</span>
-        <button type="button" :disabled="!isReady || pageNumber >= totalPages" @click="goToNextPage">
+        <button type="button" :disabled="!canGoToNextPage" aria-label="下一页" @click="goToNextPage">
           ▷
         </button>
       </div>
@@ -386,32 +426,61 @@ onUnmounted(() => {
       PDF 保持原样显示, 不做文字提取或上传。
     </p>
 
-    <div ref="pageStage" class="pdf-viewer__stage" data-testid="pdf-viewer-stage">
-      <div v-if="loadState === 'loading'" class="pdf-viewer__state" role="status">
-        正在打开 PDF…
+    <div
+      class="pdf-viewer__stage-frame"
+      :class="{ 'pdf-viewer__stage-frame--with-side-controls': hasMultiplePages }"
+    >
+      <button
+        v-if="hasMultiplePages"
+        class="pdf-viewer__side-page-button pdf-viewer__side-page-button--previous"
+        type="button"
+        :disabled="!canGoToPreviousPage"
+        aria-label="上一页"
+        data-testid="pdf-viewer-side-prev"
+        @click="goToPreviousPage"
+      >
+        <span aria-hidden="true">‹</span>
+      </button>
+
+      <div ref="pageStage" class="pdf-viewer__stage" data-testid="pdf-viewer-stage">
+        <div v-if="loadState === 'loading'" class="pdf-viewer__state" role="status">
+          正在打开 PDF…
+        </div>
+
+        <div v-else-if="loadState === 'error'" class="pdf-viewer__state pdf-viewer__state--error" role="alert">
+          <p>{{ errorMessage }}</p>
+          <button type="button" @click="retry">
+            再试一次
+          </button>
+        </div>
+
+        <div v-else class="pdf-viewer__page-shell">
+          <canvas
+            ref="canvas"
+            class="pdf-viewer__canvas"
+            :aria-label="`PDF 第 ${pageNumber} 页, 共 ${totalPages} 页`"
+            data-testid="pdf-viewer-canvas"
+          />
+          <p v-if="renderState === 'rendering'" class="pdf-viewer__render-status" role="status">
+            正在渲染第 {{ pageNumber }} 页…
+          </p>
+          <p v-else-if="renderState === 'error'" class="pdf-viewer__render-status pdf-viewer__render-status--error" role="alert">
+            {{ errorMessage }}
+          </p>
+        </div>
       </div>
 
-      <div v-else-if="loadState === 'error'" class="pdf-viewer__state pdf-viewer__state--error" role="alert">
-        <p>{{ errorMessage }}</p>
-        <button type="button" @click="retry">
-          再试一次
-        </button>
-      </div>
-
-      <div v-else class="pdf-viewer__page-shell">
-        <canvas
-          ref="canvas"
-          class="pdf-viewer__canvas"
-          :aria-label="`PDF 第 ${pageNumber} 页, 共 ${totalPages} 页`"
-          data-testid="pdf-viewer-canvas"
-        />
-        <p v-if="renderState === 'rendering'" class="pdf-viewer__render-status" role="status">
-          正在渲染第 {{ pageNumber }} 页…
-        </p>
-        <p v-else-if="renderState === 'error'" class="pdf-viewer__render-status pdf-viewer__render-status--error" role="alert">
-          {{ errorMessage }}
-        </p>
-      </div>
+      <button
+        v-if="hasMultiplePages"
+        class="pdf-viewer__side-page-button pdf-viewer__side-page-button--next"
+        type="button"
+        :disabled="!canGoToNextPage"
+        aria-label="下一页"
+        data-testid="pdf-viewer-side-next"
+        @click="goToNextPage"
+      >
+        <span aria-hidden="true">›</span>
+      </button>
     </div>
   </section>
 </template>
@@ -557,12 +626,70 @@ onUnmounted(() => {
 
 .pdf-viewer__stage {
   display: grid;
-  min-block-size: min(68vh, 52rem);
+  block-size: min(68vh, 52rem);
+  min-block-size: 22rem;
   padding: clamp(0.75rem, 3vw, 1.35rem);
   border: 1px solid color-mix(in srgb, var(--reading-rule) 58%, transparent);
   border-radius: 12px;
   background: color-mix(in srgb, var(--reading-code-bg) 54%, var(--reading-bg));
+  overscroll-behavior: contain;
   overflow: auto;
+}
+
+.pdf-viewer__stage-frame {
+  position: relative;
+}
+
+.pdf-viewer__side-page-button {
+  position: absolute;
+  inset-block-start: 50%;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  inline-size: 44px;
+  min-block-size: 54px;
+  border: 1px solid color-mix(in srgb, var(--reading-rule) 78%, transparent);
+  border-radius: 999px;
+  color: var(--reading-fg);
+  background: color-mix(in srgb, var(--reading-bg) 88%, transparent);
+  box-shadow: 0 14px 32px rgb(0 0 0 / 16%);
+  font: inherit;
+  font-size: 1.75rem;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.58;
+  transform: translateY(-50%);
+  transition: opacity 160ms ease, border-color 160ms ease, color 160ms ease;
+  backdrop-filter: blur(12px);
+}
+
+.pdf-viewer__stage-frame--with-side-controls .pdf-viewer__stage {
+  padding-inline: clamp(3.65rem, 6vw, 4.75rem);
+}
+
+.pdf-viewer__side-page-button--previous {
+  inset-inline-start: clamp(0.45rem, 1.7vw, 0.95rem);
+}
+
+.pdf-viewer__side-page-button--next {
+  inset-inline-end: clamp(0.45rem, 1.7vw, 0.95rem);
+}
+
+.pdf-viewer__side-page-button:hover,
+.pdf-viewer__side-page-button:focus-visible {
+  border-color: var(--reading-accent);
+  color: var(--reading-accent);
+  opacity: 1;
+}
+
+.pdf-viewer__stage-frame:hover .pdf-viewer__side-page-button:not(:disabled),
+.pdf-viewer__stage-frame:focus-within .pdf-viewer__side-page-button:not(:disabled) {
+  opacity: 1;
+}
+
+.pdf-viewer__side-page-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.32;
 }
 
 .pdf-viewer__page-shell {
@@ -623,6 +750,16 @@ onUnmounted(() => {
   border: 0;
 }
 
+@media (max-width: 900px) {
+  .pdf-viewer__stage-frame--with-side-controls .pdf-viewer__stage {
+    padding-inline: clamp(0.75rem, 3vw, 1.35rem);
+  }
+
+  .pdf-viewer__side-page-button {
+    display: none;
+  }
+}
+
 @media (max-width: 700px) {
   .pdf-viewer {
     padding-block-start: 1.5rem;
@@ -653,8 +790,13 @@ onUnmounted(() => {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .pdf-viewer__toolbar {
+  .pdf-viewer__toolbar,
+  .pdf-viewer__side-page-button {
     backdrop-filter: none;
+  }
+
+  .pdf-viewer__side-page-button {
+    transition: none;
   }
 }
 </style>
