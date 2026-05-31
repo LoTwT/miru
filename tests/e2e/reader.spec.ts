@@ -287,7 +287,27 @@ test('supports continuous scroll mode for local PDFs with bounded rendered pages
   await expect.poll(() => stage.evaluate(element => element.scrollTop)).toBeGreaterThan(0)
   await expect.poll(() => page.getByTestId('pdf-viewer-scroll-canvas').count()).toBeLessThan(8)
 
+  await stage.evaluate(element => element.scrollTo({ top: 0, behavior: 'auto' }))
+  await expect(page.getByText('1 / 8')).toBeVisible()
+  const firstCanvasSizeAfterReturn = await page
+    .getByTestId('pdf-viewer-scroll-page')
+    .first()
+    .locator('canvas')
+    .evaluate(canvas => ({
+      blockSize: (canvas as HTMLCanvasElement).style.blockSize,
+      height: (canvas as HTMLCanvasElement).height,
+      inlineSize: (canvas as HTMLCanvasElement).style.inlineSize,
+      width: (canvas as HTMLCanvasElement).width,
+    }))
+  expect(firstCanvasSizeAfterReturn.width).toBeGreaterThan(300)
+  expect(firstCanvasSizeAfterReturn.height).toBeGreaterThan(300)
+  expect(firstCanvasSizeAfterReturn.inlineSize).not.toBe('')
+  expect(firstCanvasSizeAfterReturn.blockSize).not.toBe('')
+
   let expectedPage = '6 / 8'
+  await page.getByLabel('跳转页码').fill('6')
+  await page.keyboard.press('Enter')
+  await expect(page.getByText('6 / 8')).toBeVisible()
   if (isWideViewport(page)) {
     await page.getByTestId('pdf-viewer-side-next').click()
     expectedPage = '7 / 8'

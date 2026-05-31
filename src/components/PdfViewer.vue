@@ -456,6 +456,7 @@ function setScrollCanvasElement(page: number, element: unknown): void {
   }
 
   scrollCanvasElements.delete(page)
+  updatePageSlot(page, { renderState: 'idle' })
 }
 
 function shouldRenderScrollPage(page: number): boolean {
@@ -533,6 +534,7 @@ function updateBufferedScrollPages(): void {
   for (const page of [...bufferedScrollPages.value]) {
     if (!nextPages.has(page)) {
       void cancelScrollRenderTask(page)
+      updatePageSlot(page, { renderState: 'idle' })
     }
   }
 
