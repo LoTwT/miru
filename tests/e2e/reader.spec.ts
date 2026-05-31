@@ -180,7 +180,7 @@ test('adds a local PDF and reopens it through the view-only PDF viewer', async (
   await openFileThroughFloatingMenu(page, {
     name: 'Daily Paper.pdf',
     mimeType: 'application/octet-stream',
-    buffer: createSimplePdfBuffer('Daily Paper'),
+    buffer: createSimplePdfBuffer(['Daily Paper', 'Daily Paper page two']),
   })
 
   await expect(page.getByTestId('pdf-viewer')).toBeVisible()
@@ -188,7 +188,50 @@ test('adds a local PDF and reopens it through the view-only PDF viewer', async (
   await expect(page.getByRole('heading', { name: 'Daily Paper' })).toBeVisible()
   await expect(page.getByText('PDF 保持原样显示, 不做文字提取或上传。')).toBeVisible()
   await expect(page.getByTestId('pdf-viewer-canvas')).toBeVisible()
-  await expect(page.getByText('1 / 1')).toBeVisible()
+  await expect(page.getByText('1 / 2')).toBeVisible()
+  if (isWideViewport(page)) {
+    await expect(page.getByTestId('pdf-viewer-side-prev')).toBeDisabled()
+    await expect(page.getByTestId('pdf-viewer-side-next')).toBeEnabled()
+    const sideButtonRects = await page.locator('.pdf-viewer__side-page-button').evaluateAll(buttons =>
+      buttons.map(button => button.getBoundingClientRect()).map(rect => ({
+        bottom: rect.bottom,
+        height: rect.height,
+        top: rect.top,
+        width: rect.width,
+      })),
+    )
+    const stageRect = await page.getByTestId('pdf-viewer-stage').evaluate((stage) => {
+      const rect = stage.getBoundingClientRect()
+      return {
+        bottom: rect.bottom,
+        top: rect.top,
+      }
+    })
+    expect(sideButtonRects).toHaveLength(2)
+    for (const rect of sideButtonRects) {
+      expect(rect.width).toBeGreaterThanOrEqual(44)
+      expect(rect.height).toBeGreaterThanOrEqual(44)
+      expect(rect.top).toBeGreaterThanOrEqual(stageRect.top)
+      expect(rect.bottom).toBeLessThanOrEqual(stageRect.bottom)
+    }
+    await page.getByTestId('pdf-viewer-side-next').click()
+    await expect(page.getByTestId('pdf-viewer-side-prev')).toBeEnabled()
+    await expect(page.getByTestId('pdf-viewer-side-next')).toBeDisabled()
+  }
+  else {
+    await expect(page.getByTestId('pdf-viewer-side-prev')).toBeHidden()
+    await expect(page.getByTestId('pdf-viewer-side-next')).toBeHidden()
+    await page.locator('.pdf-viewer__toolbar button[aria-label="下一页"]').click()
+  }
+  await expect(page.getByText('2 / 2')).toBeVisible()
+  await page.getByLabel('跳转页码').focus()
+  await page.keyboard.press('ArrowLeft')
+  await expect(page.getByText('2 / 2')).toBeVisible()
+  await page.getByTestId('pdf-viewer').focus()
+  await page.keyboard.press('ArrowLeft')
+  await expect(page.getByText('1 / 2')).toBeVisible()
+  await page.keyboard.press('ArrowRight')
+  await expect(page.getByText('2 / 2')).toBeVisible()
   const toolbarButtonRects = await page.locator('.pdf-viewer__toolbar button').evaluateAll(buttons =>
     buttons.map(button => button.getBoundingClientRect()).map(rect => ({
       height: rect.height,
@@ -214,6 +257,7 @@ test('adds a local PDF and reopens it through the view-only PDF viewer', async (
 
   await expect(page.getByTestId('pdf-viewer')).toBeVisible()
   await expect(page.getByTestId('pdf-viewer')).toBeFocused()
+  await expect(page.getByText('2 / 2')).toBeVisible()
   await expect(page.locator('.reader-surface')).toHaveCount(0)
 })
 
@@ -1844,14 +1888,22 @@ async function openFileThroughFloatingMenu(
   await fileChooser.setFiles(file)
 }
 
-function createSimplePdfBuffer(text: string): Buffer {
-  const stream = `BT /F1 24 Tf 72 720 Td (${escapePdfText(text)}) Tj ET`
+function createSimplePdfBuffer(text: string | string[]): Buffer {
+  const pageTexts = Array.isArray(text) ? text : [text]
+  const pageObjectOffset = 4
+  const contentObjectOffset = pageObjectOffset + pageTexts.length
+  const kids = pageTexts.map((_, index) => `${pageObjectOffset + index} 0 R`).join(' ')
+  const streams = pageTexts.map(value => `BT /F1 24 Tf 72 720 Td (${escapePdfText(value)}) Tj ET`)
   const objects = [
     '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n',
-    '2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n',
-    '3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n',
-    '4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n',
-    `5 0 obj\n<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream\nendobj\n`,
+    `2 0 obj\n<< /Type /Pages /Kids [${kids}] /Count ${pageTexts.length} >>\nendobj\n`,
+    '3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n',
+    ...pageTexts.map((_, index) =>
+      `${pageObjectOffset + index} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentObjectOffset + index} 0 R >>\nendobj\n`,
+    ),
+    ...streams.map((stream, index) =>
+      `${contentObjectOffset + index} 0 obj\n<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream\nendobj\n`,
+    ),
   ]
   let pdf = '%PDF-1.4\n'
   const offsets: number[] = []
