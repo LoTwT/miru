@@ -1385,8 +1385,9 @@ function syncOutlineViewport(): void {
 }
 
 .reading-settings__range:focus-visible {
-  outline: 2px solid var(--reading-accent);
+  outline: 2px solid var(--reading-focus);
   outline-offset: 4px;
+  box-shadow: var(--reading-focus-shadow);
 }
 
 .reading-settings__range-ticks {

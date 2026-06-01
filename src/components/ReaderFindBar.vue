@@ -188,7 +188,8 @@ function onKeydown(event: KeyboardEvent): void {
 .reader-find__input:focus-visible,
 .reader-find__button:focus-visible {
   outline: 2px solid var(--reading-focus);
-  outline-offset: 2px;
+  outline-offset: 3px;
+  box-shadow: var(--reading-focus-shadow);
 }
 
 .reader-find__counter {

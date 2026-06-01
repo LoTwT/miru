@@ -600,6 +600,7 @@ function normalizeText(value: string): string {
 .reader-footer__link:focus-visible {
   outline: 3px solid var(--reading-focus);
   outline-offset: 3px;
+  box-shadow: var(--reading-focus-shadow);
 }
 
 .reader-footer__copyright {

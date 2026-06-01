@@ -506,7 +506,8 @@ onUnmounted(() => {
 .reader-outline__bookmark-jump:focus-visible,
 .reader-outline__bookmark-remove:focus-visible {
   outline: 2px solid var(--reading-focus);
-  outline-offset: 2px;
+  outline-offset: 3px;
+  box-shadow: var(--reading-focus-shadow);
 }
 
 .reader-outline__sheet-list .reader-outline__item {
