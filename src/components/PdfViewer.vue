@@ -7,6 +7,33 @@ import type { PDFDocumentLoadingTask, PDFDocumentProxy, PDFPageProxy, RenderTask
 type PdfScaleMode = PdfReadingPosition['scaleMode']
 type PdfViewMode = PdfReadingPosition['viewMode']
 type PdfRenderState = 'idle' | 'rendering' | 'ready' | 'error'
+type PdfPageViewport = ReturnType<PDFPageProxy['getViewport']>
+type PdfTextContent = Awaited<ReturnType<PDFPageProxy['getTextContent']>>
+type PdfTextLayer = InstanceType<(typeof import('pdfjs-dist'))['TextLayer']>
+
+interface PdfSearchSpan {
+  end: number
+  start: number
+}
+
+interface PdfSearchSpanRange {
+  end: number
+  spanIndex: number
+  start: number
+}
+
+interface PdfSearchPageText {
+  normalizedText: string
+  pageNumber: number
+  spans: PdfSearchSpan[]
+  textContent: PdfTextContent
+}
+
+interface PdfSearchMatch {
+  id: string
+  pageNumber: number
+  spanRanges: PdfSearchSpanRange[]
+}
 
 interface PdfPageSlot {
   pageNumber: number
@@ -20,12 +47,14 @@ const props = defineProps<{
   blob: Blob
   entry: LibraryEntry
   position: PdfReadingPosition | null
+  searchQuery: string
 }>()
 
 const emit = defineEmits<{
   back: []
   positionChange: [position: Omit<PdfReadingPosition, 'updatedAt'>]
   progressChange: [progress: number]
+  searchChange: [state: { activeIndex: number, announcement?: string, resultContext?: string, statusText?: string, total: number }]
 }>()
 
 const minScale = 0.35
@@ -36,6 +65,7 @@ const rootRef = useTemplateRef<HTMLElement>('root')
 const stageFrameRef = useTemplateRef<HTMLElement>('stageFrame')
 const pageStageRef = useTemplateRef<HTMLElement>('pageStage')
 const canvasRef = useTemplateRef<HTMLCanvasElement>('canvas')
+const textLayerRef = useTemplateRef<HTMLDivElement>('textLayer')
 const pageNumber = shallowRef(Math.max(1, props.position?.pageNumber ?? 1))
 const totalPages = shallowRef(0)
 const viewMode = shallowRef<PdfViewMode>(props.position?.viewMode ?? 'paged')
@@ -49,6 +79,9 @@ const pageSlots = shallowRef<PdfPageSlot[]>([])
 const bufferedScrollPages = shallowRef<Set<number>>(new Set())
 const scrollModeStatus = shallowRef<'idle' | 'measuring' | 'error'>('idle')
 const sideControlTop = shallowRef('50%')
+const searchMatches = shallowRef<PdfSearchMatch[]>([])
+const activeSearchIndex = shallowRef(-1)
+const searchStatus = shallowRef<'idle' | 'extracting' | 'no-text'>('idle')
 
 let loadingTask: PDFDocumentLoadingTask | null = null
 let pdfDocument: PDFDocumentProxy | null = null
@@ -61,9 +94,14 @@ let scrollPositionSyncTimer: ReturnType<typeof window.setTimeout> | undefined
 let sideControlFrame: number | undefined
 const scrollPageElements = new Map<number, HTMLElement>()
 const scrollCanvasElements = new Map<number, HTMLCanvasElement>()
+const scrollTextLayerElements = new Map<number, HTMLDivElement>()
 const scrollRenderTasks = new Map<number, RenderTask>()
 const scrollRenderSequences = new Map<number, number>()
 const intersectingScrollPages = new Set<number>()
+const pdfSearchTextCache = new Map<number, Promise<PdfSearchPageText>>()
+const scrollTextLayers = new Map<number, PdfTextLayer>()
+let pagedTextLayer: PdfTextLayer | null = null
+let searchSequence = 0
 
 const isReady = computed(() => loadState.value === 'ready' && totalPages.value > 0)
 const canGoToPreviousPage = computed(() => isReady.value && pageNumber.value > 1)
@@ -87,7 +125,7 @@ function focus(): void {
   rootRef.value?.focus()
 }
 
-defineExpose({ focus, goToPage })
+defineExpose({ clearSearch, focus, goToPage, goToSearchMatch })
 
 async function loadPdfDocument(): Promise<void> {
   loadState.value = 'loading'
@@ -110,6 +148,9 @@ async function loadPdfDocument(): Promise<void> {
     loadState.value = 'ready'
     await nextTick()
     await renderActiveView({ anchorPage: pageNumber.value })
+    if (props.searchQuery.trim()) {
+      await runPdfSearch(props.searchQuery)
+    }
     emitPosition()
   }
   catch (reason) {
@@ -135,6 +176,9 @@ async function loadPdfJs() {
 async function cleanupPdfDocument(): Promise<void> {
   await cancelRenderTask()
   await cancelScrollRenderTasks()
+  clearSearch({ emitState: false })
+  clearTextLayers()
+  pdfSearchTextCache.clear()
 
   if (loadingTask) {
     await loadingTask.destroy()
@@ -153,6 +197,7 @@ async function cleanupPdfDocument(): Promise<void> {
   intersectingScrollPages.clear()
   scrollPageElements.clear()
   scrollCanvasElements.clear()
+  scrollTextLayerElements.clear()
 }
 
 async function cancelRenderTask(): Promise<void> {
@@ -176,6 +221,9 @@ async function cancelScrollRenderTasks(): Promise<void> {
   const tasks = [...scrollRenderTasks.values()]
   scrollRenderTasks.clear()
   scrollRenderSequences.clear()
+  for (const page of [...scrollTextLayers.keys()]) {
+    clearScrollTextLayer(page)
+  }
 
   for (const task of tasks) {
     task.cancel()
@@ -189,6 +237,425 @@ async function cancelScrollRenderTasks(): Promise<void> {
       // pdf.js rejects canceled render tasks; scroll virtualization cancels expectedly.
     }
   }))
+}
+
+function clearTextLayers(): void {
+  clearPagedTextLayer()
+  for (const page of [...scrollTextLayers.keys()]) {
+    clearScrollTextLayer(page)
+  }
+}
+
+function clearPagedTextLayer(): void {
+  pagedTextLayer?.cancel()
+  pagedTextLayer = null
+  clearTextLayerContent(textLayerRef.value)
+}
+
+function clearScrollTextLayer(page: number): void {
+  scrollTextLayers.get(page)?.cancel()
+  scrollTextLayers.delete(page)
+  clearTextLayerContent(scrollTextLayerElements.get(page))
+}
+
+function clearTextLayerContent(container: HTMLDivElement | null | undefined): void {
+  if (!container) {
+    return
+  }
+
+  container.replaceChildren()
+  container.removeAttribute('data-pdf-has-highlight')
+}
+
+function clearSearch(options: { emitState?: boolean } = {}): void {
+  searchMatches.value = []
+  activeSearchIndex.value = -1
+  searchStatus.value = 'idle'
+  clearTextLayers()
+
+  if (options.emitState !== false) {
+    emitSearchState()
+  }
+}
+
+async function runPdfSearch(query = props.searchQuery): Promise<void> {
+  const normalizedQuery = query.trim()
+  const sequence = ++searchSequence
+  searchMatches.value = []
+  activeSearchIndex.value = -1
+
+  if (!normalizedQuery || !pdfDocument || loadState.value !== 'ready') {
+    searchStatus.value = 'idle'
+    clearTextLayers()
+    emitSearchState()
+    return
+  }
+
+  searchStatus.value = 'extracting'
+  emitSearchState()
+
+  const queryLower = normalizedQuery.toLocaleLowerCase()
+  const matches: PdfSearchMatch[] = []
+  let hasSearchableText = false
+
+  for (let page = 1; page <= totalPages.value; page += 1) {
+    const pageText = await getCachedPageText(page)
+    if (sequence !== searchSequence) {
+      return
+    }
+
+    if (pageText.normalizedText.length > 0) {
+      hasSearchableText = true
+    }
+
+    matches.push(...findMatchesOnPage(pageText, queryLower))
+
+    if (page % 4 === 0) {
+      await new Promise<void>(resolve => window.requestAnimationFrame(() => resolve()))
+    }
+  }
+
+  if (sequence !== searchSequence) {
+    return
+  }
+
+  if (!hasSearchableText) {
+    searchStatus.value = 'no-text'
+    searchMatches.value = []
+    activeSearchIndex.value = -1
+    clearTextLayers()
+    emitSearchState()
+    return
+  }
+
+  searchStatus.value = 'idle'
+  searchMatches.value = matches
+  activeSearchIndex.value = matches.length > 0 ? 0 : -1
+
+  if (matches.length > 0) {
+    await revealSearchMatch(matches[0]!, { behavior: 'auto' })
+  }
+  else {
+    clearTextLayers()
+    emitSearchState()
+  }
+}
+
+async function getCachedPageText(pageNumberToRead: number): Promise<PdfSearchPageText> {
+  const cached = pdfSearchTextCache.get(pageNumberToRead)
+  if (cached) {
+    return cached
+  }
+
+  const promise = extractPageText(pageNumberToRead)
+  pdfSearchTextCache.set(pageNumberToRead, promise)
+  return promise
+}
+
+async function extractPageText(pageNumberToRead: number): Promise<PdfSearchPageText> {
+  const pdf = pdfDocument
+  if (!pdf) {
+    throw new Error('PDF document is not ready')
+  }
+
+  const page = await pdf.getPage(pageNumberToRead)
+  const textContent = await page.getTextContent()
+  const spans: PdfSearchSpan[] = []
+  let text = ''
+
+  for (const item of textContent.items) {
+    if (!isTextContentItem(item) || !item.str) {
+      continue
+    }
+
+    if (text.length > 0 && !text.endsWith(' ') && !text.endsWith('\n')) {
+      text += ' '
+    }
+
+    const start = text.length
+    text += item.str
+    const end = text.length
+    spans.push({ end, start })
+
+    if (item.hasEOL) {
+      text += '\n'
+    }
+  }
+
+  return {
+    normalizedText: text.toLocaleLowerCase(),
+    pageNumber: pageNumberToRead,
+    spans,
+    textContent,
+  }
+}
+
+function isTextContentItem(item: PdfTextContent['items'][number]): item is Extract<PdfTextContent['items'][number], { str: string }> {
+  return 'str' in item && typeof item.str === 'string'
+}
+
+function findMatchesOnPage(pageText: PdfSearchPageText, queryLower: string): PdfSearchMatch[] {
+  const matches: PdfSearchMatch[] = []
+  let index = pageText.normalizedText.indexOf(queryLower)
+
+  while (index !== -1) {
+    const end = index + queryLower.length
+    const spanRanges = getSpanRangesForMatch(pageText.spans, index, end)
+    if (spanRanges.length > 0) {
+      matches.push({
+        id: `${pageText.pageNumber}:${index}:${matches.length}`,
+        pageNumber: pageText.pageNumber,
+        spanRanges,
+      })
+    }
+
+    index = pageText.normalizedText.indexOf(queryLower, Math.max(end, index + 1))
+  }
+
+  return matches
+}
+
+function getSpanRangesForMatch(spans: PdfSearchSpan[], start: number, end: number): PdfSearchSpanRange[] {
+  const ranges: PdfSearchSpanRange[] = []
+  spans.forEach((span, index) => {
+    if (span.end > start && span.start < end) {
+      ranges.push({
+        end: Math.min(span.end, end) - span.start,
+        spanIndex: index,
+        start: Math.max(span.start, start) - span.start,
+      })
+    }
+  })
+  return ranges
+}
+
+function goToSearchMatch(delta: number): void {
+  if (searchMatches.value.length === 0) {
+    emitSearchState()
+    return
+  }
+
+  const nextIndex = activeSearchIndex.value < 0
+    ? 0
+    : (activeSearchIndex.value + delta + searchMatches.value.length) % searchMatches.value.length
+
+  activeSearchIndex.value = nextIndex
+  applySearchHighlights()
+  emitSearchState()
+  const match = searchMatches.value[nextIndex]
+  if (match) {
+    void revealSearchMatch(match)
+  }
+}
+
+async function revealSearchMatch(match: PdfSearchMatch, options: { behavior?: ScrollBehavior } = {}): Promise<void> {
+  const behavior = options.behavior ?? getPreferredScrollBehavior()
+  if (viewMode.value === 'scroll') {
+    await revealScrollSearchMatch(match, behavior)
+    return
+  }
+
+  if (pageNumber.value !== match.pageNumber) {
+    pageNumber.value = match.pageNumber
+  }
+
+  await nextTick()
+  await renderCurrentPage()
+  applySearchHighlights()
+  scrollActiveSearchElementIntoView(behavior)
+  emitSearchState()
+}
+
+async function revealScrollSearchMatch(match: PdfSearchMatch, behavior: ScrollBehavior): Promise<void> {
+  pageNumber.value = clampPageNumber(match.pageNumber)
+  ensureScrollPageBuffered(match.pageNumber)
+  await nextTick()
+  await renderScrollPage(match.pageNumber)
+  applySearchHighlights()
+
+  const target = getRenderedSearchMatchElement(match)
+  const stage = pageStageRef.value
+  if (!target || !stage) {
+    scrollToPage(match.pageNumber, behavior)
+    emitSearchState()
+    return
+  }
+
+  const stageRect = stage.getBoundingClientRect()
+  const targetRect = target.getBoundingClientRect()
+  const nextTop = stage.scrollTop + targetRect.top - stageRect.top - (stage.clientHeight * 0.35)
+  stage.scrollTo({ top: Math.max(0, nextTop), behavior })
+  emitPosition()
+  emitSearchState()
+}
+
+function ensureScrollPageBuffered(page: number): void {
+  const nextPages = new Set(bufferedScrollPages.value)
+  const center = clampPageNumber(page)
+  for (let offset = -2; offset <= 2; offset += 1) {
+    nextPages.add(clampPageNumber(center + offset))
+  }
+  bufferedScrollPages.value = nextPages
+}
+
+function scrollActiveSearchElementIntoView(behavior: ScrollBehavior): void {
+  const match = searchMatches.value[activeSearchIndex.value]
+  const target = match ? getRenderedSearchMatchElement(match) : null
+  if (!target) {
+    return
+  }
+
+  target.scrollIntoView({ behavior, block: 'center', inline: 'nearest' })
+}
+
+function applySearchHighlights(): void {
+  if (pagedTextLayer && viewMode.value === 'paged') {
+    applySearchHighlightsToLayer(pageNumber.value, pagedTextLayer)
+  }
+
+  for (const [page, layer] of scrollTextLayers) {
+    applySearchHighlightsToLayer(page, layer)
+  }
+}
+
+function applySearchHighlightsToLayer(page: number, layer: PdfTextLayer): void {
+  const pageMatches = searchMatches.value.filter(match => match.pageNumber === page)
+  const activeMatch = searchMatches.value[activeSearchIndex.value]
+  const container = getTextLayerContainer(layer)
+  if (!container) {
+    return
+  }
+
+  container
+    .querySelectorAll('.pdf-viewer__search-match')
+    .forEach(marker => marker.remove())
+  container.removeAttribute('data-pdf-has-highlight')
+
+  layer.textDivs.forEach((textDiv) => {
+    delete textDiv.dataset.pdfSearchMatch
+  })
+
+  const containerRect = container.getBoundingClientRect()
+  for (const match of pageMatches) {
+    for (const spanRange of match.spanRanges) {
+      const textDiv = layer.textDivs[spanRange.spanIndex]
+      if (!textDiv) {
+        continue
+      }
+
+      textDiv.dataset.pdfSearchMatch = match.id
+      const textNode = textDiv.firstChild
+      if (!(textNode instanceof Text) || spanRange.start >= spanRange.end) {
+        continue
+      }
+
+      const range = document.createRange()
+      range.setStart(textNode, Math.min(spanRange.start, textNode.length))
+      range.setEnd(textNode, Math.min(spanRange.end, textNode.length))
+
+      for (const rect of range.getClientRects()) {
+        if (rect.width <= 0 || rect.height <= 0) {
+          continue
+        }
+
+        const marker = document.createElement('span')
+        marker.className = activeMatch?.id === match.id
+          ? 'pdf-viewer__search-match pdf-viewer__search-match--active'
+          : 'pdf-viewer__search-match'
+        marker.dataset.pdfSearchMatch = match.id
+        marker.style.inlineSize = `${rect.width}px`
+        marker.style.blockSize = `${rect.height}px`
+        marker.style.insetInlineStart = `${rect.left - containerRect.left}px`
+        marker.style.insetBlockStart = `${rect.top - containerRect.top}px`
+        container.append(marker)
+      }
+
+      range.detach()
+    }
+  }
+
+  if (container.querySelector('.pdf-viewer__search-match')) {
+    container.dataset.pdfHasHighlight = 'true'
+  }
+}
+
+function getTextLayerContainer(layer: PdfTextLayer): HTMLDivElement | null {
+  if (viewMode.value === 'paged' && layer === pagedTextLayer) {
+    return textLayerRef.value
+  }
+
+  for (const [page, candidate] of scrollTextLayers) {
+    if (candidate === layer) {
+      return scrollTextLayerElements.get(page) ?? null
+    }
+  }
+
+  return null
+}
+
+function getRenderedSearchMatchElement(match: PdfSearchMatch): HTMLElement | null {
+  const layer = viewMode.value === 'scroll'
+    ? scrollTextLayers.get(match.pageNumber)
+    : pagedTextLayer
+
+  if (!layer) {
+    return null
+  }
+
+  const container = getTextLayerContainer(layer)
+  const activeMarker = container?.querySelector<HTMLElement>(
+    `.pdf-viewer__search-match--active[data-pdf-search-match="${CSS.escape(match.id)}"]`,
+  )
+  if (activeMarker) {
+    return activeMarker
+  }
+
+  for (const spanRange of match.spanRanges) {
+    const textDiv = layer.textDivs[spanRange.spanIndex]
+    if (textDiv) {
+      return textDiv
+    }
+  }
+
+  return null
+}
+
+function emitSearchState(): void {
+  const query = props.searchQuery.trim()
+  if (!query) {
+    emit('searchChange', { activeIndex: -1, total: 0 })
+    return
+  }
+
+  if (searchStatus.value === 'extracting') {
+    emit('searchChange', {
+      activeIndex: -1,
+      announcement: '正在读取 PDF 文本…',
+      statusText: '正在读取…',
+      total: 0,
+    })
+    return
+  }
+
+  if (searchStatus.value === 'no-text') {
+    emit('searchChange', {
+      activeIndex: -1,
+      announcement: '此 PDF 没有可搜索的文本, 可能是扫描件。',
+      statusText: '无可搜索文本',
+      total: 0,
+    })
+    return
+  }
+
+  const activeMatch = searchMatches.value[activeSearchIndex.value]
+  emit('searchChange', {
+    activeIndex: activeSearchIndex.value,
+    announcement: activeMatch
+      ? `第 ${activeSearchIndex.value + 1} 个, 共 ${searchMatches.value.length} 个, 第 ${activeMatch.pageNumber} 页`
+      : undefined,
+    resultContext: activeMatch ? `第 ${activeMatch.pageNumber} 页` : undefined,
+    total: searchMatches.value.length,
+  })
 }
 
 async function renderCurrentPage(): Promise<void> {
@@ -234,6 +701,12 @@ async function renderCurrentPage(): Promise<void> {
     await renderTask.promise
 
     if (sequence === renderSequence) {
+      if (props.searchQuery.trim()) {
+        await renderPagedTextLayer(viewport, sequence)
+      }
+      else {
+        clearPagedTextLayer()
+      }
       renderState.value = 'idle'
       queueSideControlPositionUpdate()
     }
@@ -251,6 +724,79 @@ async function renderCurrentPage(): Promise<void> {
       renderTask = null
     }
   }
+}
+
+async function renderPagedTextLayer(viewport: PdfPageViewport, sequence: number): Promise<void> {
+  const container = textLayerRef.value
+  if (!container || sequence !== renderSequence) {
+    return
+  }
+
+  clearPagedTextLayer()
+  pagedTextLayer = await renderTextLayer({
+    container,
+    pageNumber: pageNumber.value,
+    viewport,
+  })
+
+  if (sequence !== renderSequence) {
+    clearPagedTextLayer()
+    return
+  }
+
+  applySearchHighlightsToLayer(pageNumber.value, pagedTextLayer)
+}
+
+async function renderScrollTextLayer(pageNumberToRender: number, viewport: PdfPageViewport): Promise<void> {
+  const container = scrollTextLayerElements.get(pageNumberToRender)
+  if (!container || !bufferedScrollPages.value.has(pageNumberToRender)) {
+    return
+  }
+
+  clearScrollTextLayer(pageNumberToRender)
+  const layer = await renderTextLayer({
+    container,
+    pageNumber: pageNumberToRender,
+    viewport,
+  })
+
+  if (!bufferedScrollPages.value.has(pageNumberToRender)) {
+    clearScrollTextLayer(pageNumberToRender)
+    return
+  }
+
+  scrollTextLayers.set(pageNumberToRender, layer)
+  applySearchHighlightsToLayer(pageNumberToRender, layer)
+}
+
+async function renderTextLayer(options: {
+  container: HTMLDivElement
+  pageNumber: number
+  viewport: PdfPageViewport
+}): Promise<PdfTextLayer> {
+  const pdfjs = await loadPdfJs()
+  const pageText = await getCachedPageText(options.pageNumber)
+  options.container.replaceChildren()
+  options.container.style.inlineSize = `${options.viewport.width}px`
+  options.container.style.blockSize = `${options.viewport.height}px`
+  options.container.style.setProperty('--total-scale-factor', String(options.viewport.scale))
+  options.container.style.setProperty('--scale-factor', String(options.viewport.scale))
+  options.container.style.setProperty('--user-unit', '1')
+  pdfjs.setLayerDimensions(options.container, options.viewport)
+
+  const layer = new pdfjs.TextLayer({
+    container: options.container,
+    textContentSource: pageText.textContent,
+    viewport: options.viewport,
+  })
+  await layer.render()
+
+  layer.textDivs.forEach((textDiv, index) => {
+    textDiv.dataset.pdfTextIndex = String(index)
+    textDiv.setAttribute('aria-hidden', 'true')
+  })
+
+  return layer
 }
 
 function calculateScale(page: PDFPageProxy): number {
@@ -491,6 +1037,21 @@ function setScrollCanvasElement(page: number, element: unknown): void {
   updatePageSlot(page, { renderState: 'idle' })
 }
 
+function setScrollTextLayerElement(page: number, element: unknown): void {
+  if (element instanceof HTMLDivElement) {
+    scrollTextLayerElements.set(page, element)
+    void nextTick(() => {
+      if (props.searchQuery.trim() && shouldRenderScrollPage(page)) {
+        void ensureScrollTextLayer(page)
+      }
+    })
+    return
+  }
+
+  clearScrollTextLayer(page)
+  scrollTextLayerElements.delete(page)
+}
+
 function shouldRenderScrollPage(page: number): boolean {
   return bufferedScrollPages.value.has(page)
 }
@@ -554,9 +1115,8 @@ function updateBufferedScrollPages(): void {
   const visiblePages = getVisibleScrollPages()
   const dominantPage = getDominantVisiblePage()
   const observerPages = [...intersectingScrollPages].sort((left, right) => left - right)
-  const anchorPages = observerPages.length > 0
-    ? observerPages
-    : visiblePages.length > 0 ? visiblePages : [dominantPage ?? pageNumber.value]
+  const measuredPages = [...new Set([...visiblePages, ...observerPages])].sort((left, right) => left - right)
+  const anchorPages = measuredPages.length > 0 ? measuredPages : [dominantPage ?? pageNumber.value]
   const nextPages = new Set<number>()
 
   for (const page of anchorPages) {
@@ -569,6 +1129,7 @@ function updateBufferedScrollPages(): void {
   for (const page of [...bufferedScrollPages.value]) {
     if (!nextPages.has(page)) {
       void cancelScrollRenderTask(page)
+      clearScrollTextLayer(page)
       updatePageSlot(page, { renderState: 'idle' })
     }
   }
@@ -689,7 +1250,14 @@ async function renderScrollPage(page: number): Promise<void> {
   }
 
   const slot = pageSlots.value.find(item => item.pageNumber === page)
-  if (!slot || slot.renderState === 'ready' || slot.renderState === 'rendering') {
+  if (!slot || slot.renderState === 'rendering') {
+    return
+  }
+
+  if (slot.renderState === 'ready') {
+    if (props.searchQuery.trim()) {
+      await ensureScrollTextLayer(page)
+    }
     return
   }
 
@@ -728,6 +1296,12 @@ async function renderScrollPage(page: number): Promise<void> {
     await task.promise
 
     if (scrollRenderSequences.get(page) === sequence) {
+      if (props.searchQuery.trim()) {
+        await renderScrollTextLayer(page, viewport)
+      }
+      else {
+        clearScrollTextLayer(page)
+      }
       updatePageSlot(page, { renderState: 'ready' })
     }
   }
@@ -746,6 +1320,25 @@ async function renderScrollPage(page: number): Promise<void> {
       scrollRenderTasks.delete(page)
     }
   }
+}
+
+async function ensureScrollTextLayer(page: number): Promise<void> {
+  const pdf = pdfDocument
+  const container = scrollTextLayerElements.get(page)
+
+  if (!pdf || !container || !bufferedScrollPages.value.has(page) || viewMode.value !== 'scroll') {
+    return
+  }
+
+  const layer = scrollTextLayers.get(page)
+  if (layer) {
+    applySearchHighlightsToLayer(page, layer)
+    return
+  }
+
+  const pdfPage = await pdf.getPage(page)
+  const viewport = pdfPage.getViewport({ scale: renderedScale.value })
+  await renderScrollTextLayer(page, viewport)
 }
 
 async function cancelScrollRenderTask(page: number): Promise<void> {
@@ -839,6 +1432,10 @@ watch(() => props.blob, () => {
   scaleMode.value = props.position?.scaleMode ?? 'fit-width'
   customScale.value = props.position?.scale ?? 1
   void loadPdfDocument()
+})
+
+watch(() => props.searchQuery, () => {
+  void runPdfSearch(props.searchQuery)
 })
 
 watch(pageNumber, () => {
@@ -986,7 +1583,7 @@ onUnmounted(() => {
     </div>
 
     <p class="pdf-viewer__note">
-      PDF 保持原样显示, 不做文字提取或上传。
+      PDF 保持原样显示; 只有使用搜索时才在浏览器内读取文本层, 不上传。
     </p>
 
     <div
@@ -1034,6 +1631,12 @@ onUnmounted(() => {
             :aria-label="`PDF 第 ${pageNumber} 页, 共 ${totalPages} 页`"
             data-testid="pdf-viewer-canvas"
           />
+          <div
+            ref="textLayer"
+            class="pdf-viewer__text-layer textLayer"
+            aria-hidden="true"
+            data-testid="pdf-viewer-text-layer"
+          />
           <p v-if="renderState === 'rendering'" class="pdf-viewer__render-status" role="status">
             正在渲染第 {{ pageNumber }} 页…
           </p>
@@ -1066,6 +1669,13 @@ onUnmounted(() => {
                 class="pdf-viewer__canvas pdf-viewer__canvas--scroll"
                 :aria-label="`PDF 第 ${slot.pageNumber} 页, 共 ${totalPages} 页`"
                 data-testid="pdf-viewer-scroll-canvas"
+              />
+              <div
+                v-if="shouldRenderScrollPage(slot.pageNumber)"
+                :ref="element => setScrollTextLayerElement(slot.pageNumber, element)"
+                class="pdf-viewer__text-layer textLayer"
+                aria-hidden="true"
+                data-testid="pdf-viewer-scroll-text-layer"
               />
               <div v-else class="pdf-viewer__scroll-placeholder" aria-hidden="true" />
               <p v-if="slot.renderState === 'rendering'" class="pdf-viewer__render-status" role="status">
@@ -1367,6 +1977,56 @@ onUnmounted(() => {
 
 .pdf-viewer__canvas--scroll {
   box-shadow: none;
+}
+
+.pdf-viewer__text-layer {
+  --min-font-size: 1;
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: clip;
+  color-scheme: only light;
+  line-height: 1;
+  text-align: initial;
+  text-size-adjust: none;
+  transform-origin: 0 0;
+  pointer-events: none;
+  forced-color-adjust: none;
+}
+
+.pdf-viewer__text-layer :deep(span),
+.pdf-viewer__text-layer :deep(br) {
+  position: absolute;
+  color: transparent;
+  white-space: pre;
+  transform-origin: 0% 0%;
+}
+
+.pdf-viewer__text-layer :deep(:not(.markedContent)),
+.pdf-viewer__text-layer :deep(.markedContent span:not(.markedContent)) {
+  z-index: 1;
+  font-size: calc(var(--text-scale-factor) * var(--font-height, 1));
+  transform:
+    rotate(var(--rotate, 0deg))
+    scaleX(var(--scale-x, 1))
+    scale(var(--min-font-size-inv));
+}
+
+.pdf-viewer__text-layer :deep(.pdf-viewer__search-match) {
+  position: absolute;
+  display: block;
+  z-index: 2;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--reading-accent) 24%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--reading-accent) 12%, transparent);
+  transform: none;
+}
+
+.pdf-viewer__text-layer :deep(.pdf-viewer__search-match--active) {
+  background: color-mix(in srgb, var(--reading-accent) 46%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--reading-accent) 30%, transparent);
 }
 
 .pdf-viewer__state {

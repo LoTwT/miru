@@ -6,6 +6,8 @@ const props = defineProps<{
   isOpen: boolean
   matchCount: number
   modelValue: string
+  resultContext?: string
+  statusText?: string
 }>()
 
 const emit = defineEmits<{
@@ -30,11 +32,23 @@ const counterLabel = computed(() => {
 })
 
 const statusLabel = computed(() => {
+  if (props.statusText) {
+    return props.statusText
+  }
+
   if (!props.modelValue.trim()) {
     return '输入关键词'
   }
 
-  return props.matchCount === 0 ? '无匹配' : counterLabel.value
+  if (props.matchCount === 0) {
+    return '无匹配'
+  }
+
+  return props.resultContext ? `${counterLabel.value} · ${props.resultContext}` : counterLabel.value
+})
+
+const hasEmptyResultState = computed(() => {
+  return props.modelValue.trim() && (props.matchCount === 0 || Boolean(props.statusText))
 })
 
 watch(() => props.isOpen, async (value) => {
@@ -111,7 +125,7 @@ function onKeydown(event: KeyboardEvent): void {
     >
     <span
       class="reader-find__counter"
-      :class="{ 'reader-find__counter--empty': props.modelValue.trim() && props.matchCount === 0 }"
+      :class="{ 'reader-find__counter--empty': hasEmptyResultState }"
       aria-live="polite"
       data-testid="reader-find-counter"
     >

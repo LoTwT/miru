@@ -60,6 +60,8 @@ const findInput = shallowRef('')
 const findQuery = shallowRef('')
 const findMatchCount = shallowRef(0)
 const activeFindIndex = shallowRef(-1)
+const findResultContext = shallowRef('')
+const findStatusText = shallowRef('')
 const topBarRef = useTemplateRef<HTMLElement>('topBar')
 const commandSurfaceRef = useTemplateRef<HTMLElement>('commandSurface')
 const actionsButtonRef = useTemplateRef<HTMLButtonElement>('actionsButton')
@@ -159,9 +161,9 @@ const readingProgressPercent = computed(() => Math.round(readingProgress.value *
 const shouldShowReadingProgress = computed(() => appMode.value === 'reader' || appMode.value === 'pdf')
 const isReadingSettingsAvailable = computed(() => appMode.value !== 'pdf')
 const readingProgressStyle = computed(() => `${Number((readingProgress.value * 100).toFixed(1))}%`)
-const isSearchAvailable = computed(() => appMode.value === 'reader')
+const isSearchAvailable = computed(() => appMode.value === 'reader' || appMode.value === 'pdf')
 const isBookmarkAvailable = computed(() => appMode.value === 'reader' || appMode.value === 'pdf')
-const searchUnavailableText = computed(() => appMode.value === 'pdf' ? 'PDF 搜索即将支持' : '打开文档后可用')
+const searchUnavailableText = computed(() => '打开文档后可用')
 
 watch(status, (value) => {
   if (value) {
@@ -186,8 +188,8 @@ watch([hasNavigationSurface, isNarrowOutlineViewport], () => {
   }
 })
 
-watch(appMode, (value) => {
-  if (value !== 'reader') {
+watch(appMode, (value, previousValue) => {
+  if (value === 'library' || (previousValue && value !== previousValue)) {
     closeFindBar({ restoreFocus: false })
   }
 })
@@ -333,10 +335,13 @@ function closeFindBar(options: { restoreFocus?: boolean } = {}): void {
   findQuery.value = ''
   findMatchCount.value = 0
   activeFindIndex.value = -1
+  findResultContext.value = ''
+  findStatusText.value = ''
   readerRef.value?.clearSearch()
+  pdfViewerRef.value?.clearSearch()
 
   if (options.restoreFocus !== false) {
-    void nextTick(() => readerRef.value?.focus())
+    void nextTick(() => focusActiveReadingSurface())
   }
 }
 
@@ -349,24 +354,55 @@ function updateFindInput(value: string): void {
 }
 
 function goToNextSearchMatch(): void {
+  if (appMode.value === 'pdf') {
+    pdfViewerRef.value?.goToSearchMatch(1)
+    return
+  }
+
   readerRef.value?.goToSearchMatch(1)
 }
 
 function goToPreviousSearchMatch(): void {
+  if (appMode.value === 'pdf') {
+    pdfViewerRef.value?.goToSearchMatch(-1)
+    return
+  }
+
   readerRef.value?.goToSearchMatch(-1)
 }
 
-function updateSearchState(state: { activeIndex: number, total: number }): void {
+function updateSearchState(state: { activeIndex: number, announcement?: string, resultContext?: string, statusText?: string, total: number }): void {
   activeFindIndex.value = state.activeIndex
   findMatchCount.value = state.total
+  findResultContext.value = state.resultContext ?? ''
+  findStatusText.value = state.statusText ?? ''
 
   if (!findQuery.value.trim()) {
+    return
+  }
+
+  if (state.announcement) {
+    liveStatus.value = state.announcement
+    return
+  }
+
+  if (state.statusText) {
+    liveStatus.value = state.statusText
     return
   }
 
   liveStatus.value = state.total === 0
     ? '无匹配'
     : `第 ${state.activeIndex + 1} 个, 共 ${state.total} 个`
+}
+
+function focusActiveReadingSurface(): void {
+  if (appMode.value === 'pdf') {
+    pdfViewerRef.value?.focus()
+    return
+  }
+
+  readerRef.value?.focus()
 }
 
 function getSurfaceTrigger(surfaceId: CommandSurfaceId | null): HTMLButtonElement | null {
@@ -489,10 +525,6 @@ function onDocumentKeydown(event: KeyboardEvent): void {
     if (isSearchAvailable.value) {
       event.preventDefault()
       openFindBar()
-    }
-    else if (appMode.value === 'pdf') {
-      event.preventDefault()
-      liveStatus.value = 'PDF 搜索即将支持'
     }
     return
   }
@@ -1232,6 +1264,8 @@ function focusLibraryView(): void {
       :model-value="findInput"
       :match-count="findMatchCount"
       :active-index="activeFindIndex"
+      :result-context="findResultContext"
+      :status-text="findStatusText"
       @update:model-value="updateFindInput"
       @next="goToNextSearchMatch"
       @previous="goToPreviousSearchMatch"
@@ -1260,9 +1294,11 @@ function focusLibraryView(): void {
       :entry="activePdfDocument.entry"
       :blob="activePdfDocument.blob"
       :position="activePdfDocument.position"
+      :search-query="findQuery"
       @back="showLibrary"
       @position-change="savePdfReadingPosition"
       @progress-change="updatePdfProgress"
+      @search-change="updateSearchState"
     />
 
     <template v-else>

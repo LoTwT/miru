@@ -112,7 +112,6 @@ function requestSearch(): void {
     return
   }
 
-  closeMenu()
   emit('search')
 }
 
