@@ -10,16 +10,20 @@ const props = defineProps<{
   document: ReaderDocument
   html: TrustedHtml
   isRendering: boolean
+  searchQuery: string
 }>()
 
 const emit = defineEmits<{
   activeHeadingChange: [id: string]
   outlineChange: [items: ReaderOutlineItem[]]
+  searchChange: [state: { activeIndex: number, total: number }]
 }>()
 
 const articleRef = useTemplateRef<HTMLElement>('article')
 const contentRef = useTemplateRef<HTMLElement>('content')
 const outlineItems = shallowRef<ReaderOutlineItem[]>([])
+const searchMatches = shallowRef<HTMLElement[]>([])
+const activeSearchIndex = shallowRef(-1)
 let cleanupCollapsibleHeadings: (() => void) | undefined
 let cleanupOutlineSpy: (() => void) | undefined
 let outlineSyncFrame: number | undefined
@@ -32,17 +36,26 @@ watch(() => props.html.value, () => {
   void enhanceCurrentContent()
 })
 
+watch(() => props.searchQuery, () => {
+  applySearchQuery()
+})
+
 onBeforeUnmount(() => {
+  clearSearchHighlights()
   cleanupCollapsibleHeadings?.()
   cleanupOutlineSpy?.()
 })
 
 defineExpose({
+  clearSearch: () => applySearchQuery(''),
   focus: () => articleRef.value?.focus(),
+  getBookmarkSnippet,
+  goToSearchMatch,
   scrollToHeading,
 })
 
 async function enhanceCurrentContent(): Promise<void> {
+  clearSearchHighlights()
   cleanupCollapsibleHeadings?.()
   cleanupCollapsibleHeadings = undefined
   cleanupOutlineSpy?.()
@@ -56,12 +69,16 @@ async function enhanceCurrentContent(): Promise<void> {
     emit('outlineChange', outlineItems.value)
     cleanupOutlineSpy = setupOutlineSpy(outlineItems.value)
     syncActiveHeading()
+    applySearchQuery()
     return
   }
 
   outlineItems.value = []
+  searchMatches.value = []
+  activeSearchIndex.value = -1
   emit('outlineChange', [])
   emit('activeHeadingChange', '')
+  emitSearchState()
 }
 
 async function scrollToHeading(id: string): Promise<void> {
@@ -89,6 +106,142 @@ async function scrollToHeading(id: string): Promise<void> {
         heading.focus({ preventScroll: true })
       }
     }, 0)
+  })
+}
+
+function goToSearchMatch(delta: number): void {
+  if (searchMatches.value.length === 0) {
+    emitSearchState()
+    return
+  }
+
+  const nextIndex = activeSearchIndex.value < 0
+    ? 0
+    : (activeSearchIndex.value + delta + searchMatches.value.length) % searchMatches.value.length
+
+  setActiveSearchMatch(nextIndex, { shouldScroll: true })
+}
+
+function getBookmarkSnippet(): string {
+  const visibleHeading = getVisibleHeadingText()
+  const visibleText = getVisibleParagraphText()
+  return normalizeText(visibleHeading || visibleText || props.document.label).slice(0, 48) || '当前位置'
+}
+
+function applySearchQuery(query = props.searchQuery): void {
+  clearSearchHighlights()
+
+  const normalizedQuery = query.trim()
+  const content = contentRef.value
+  if (!content || !normalizedQuery) {
+    searchMatches.value = []
+    activeSearchIndex.value = -1
+    emitSearchState()
+    return
+  }
+
+  const matches: HTMLElement[] = []
+  const queryLower = normalizedQuery.toLocaleLowerCase()
+  const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const parent = node.parentElement
+      if (!parent || shouldSkipSearchNode(parent) || !node.nodeValue?.trim()) {
+        return NodeFilter.FILTER_REJECT
+      }
+
+      return node.nodeValue.toLocaleLowerCase().includes(queryLower)
+        ? NodeFilter.FILTER_ACCEPT
+        : NodeFilter.FILTER_REJECT
+    },
+  })
+  const textNodes: Text[] = []
+  let node = walker.nextNode()
+
+  while (node) {
+    textNodes.push(node as Text)
+    node = walker.nextNode()
+  }
+
+  for (const textNode of textNodes) {
+    matches.push(...highlightTextNode(textNode, normalizedQuery, queryLower))
+  }
+
+  searchMatches.value = matches
+  setActiveSearchMatch(matches.length > 0 ? 0 : -1, { shouldScroll: false })
+}
+
+function highlightTextNode(node: Text, query: string, queryLower: string): HTMLElement[] {
+  const text = node.nodeValue ?? ''
+  const textLower = text.toLocaleLowerCase()
+  const fragment = document.createDocumentFragment()
+  const matches: HTMLElement[] = []
+  let cursor = 0
+  let index = textLower.indexOf(queryLower)
+
+  while (index !== -1) {
+    if (index > cursor) {
+      fragment.append(document.createTextNode(text.slice(cursor, index)))
+    }
+
+    const mark = document.createElement('mark')
+    mark.className = 'reader-search-match'
+    mark.dataset.readerSearchMatch = ''
+    mark.textContent = text.slice(index, index + query.length)
+    fragment.append(mark)
+    matches.push(mark)
+
+    cursor = index + query.length
+    index = textLower.indexOf(queryLower, cursor)
+  }
+
+  if (cursor < text.length) {
+    fragment.append(document.createTextNode(text.slice(cursor)))
+  }
+
+  node.replaceWith(fragment)
+  return matches
+}
+
+function clearSearchHighlights(): void {
+  const content = contentRef.value
+  if (!content) {
+    return
+  }
+
+  for (const mark of Array.from(content.querySelectorAll<HTMLElement>('mark[data-reader-search-match]'))) {
+    const parent = mark.parentNode
+    mark.replaceWith(document.createTextNode(mark.textContent ?? ''))
+    parent?.normalize()
+  }
+}
+
+function setActiveSearchMatch(index: number, options: { shouldScroll: boolean }): void {
+  activeSearchIndex.value = index
+
+  searchMatches.value.forEach((match, matchIndex) => {
+    match.classList.toggle('reader-search-match--active', matchIndex === index)
+  })
+
+  if (index >= 0 && options.shouldScroll) {
+    const match = searchMatches.value[index]
+    if (match) {
+      expandCollapsedAncestorSections(match)
+      window.requestAnimationFrame(() => {
+        match.scrollIntoView({
+          block: 'center',
+          behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+        })
+      })
+    }
+  }
+
+  emitSearchState()
+}
+
+function emitSearchState(): void {
+  emit('searchChange', {
+    activeIndex: activeSearchIndex.value,
+    total: searchMatches.value.length,
   })
 }
 
@@ -208,6 +361,25 @@ function expandCollapsedParentSection(heading: HTMLElement): void {
   }
 }
 
+function expandCollapsedAncestorSections(element: HTMLElement): void {
+  let current: HTMLElement | null = element
+
+  while (current.parentElement) {
+    current = current.parentElement
+
+    if (!current.matches('[data-reader-section]') || !current.hidden) {
+      continue
+    }
+
+    const row = current.previousElementSibling
+    const toggle = row?.querySelector<HTMLButtonElement>('[data-reader-heading-toggle]')
+
+    if (toggle?.getAttribute('aria-expanded') === 'false') {
+      toggle.click()
+    }
+  }
+}
+
 function updateHash(id: string): void {
   const nextUrl = new URL(window.location.href)
   nextUrl.hash = id
@@ -220,6 +392,49 @@ function prefersReducedMotion(): boolean {
 
 function isPageScrollLocked(): boolean {
   return document.body.style.position === 'fixed' && document.body.style.top.startsWith('-')
+}
+
+function shouldSkipSearchNode(element: HTMLElement): boolean {
+  return element.closest('button, script, style, svg, mark[data-reader-search-match]') !== null
+}
+
+function getVisibleHeadingText(): string {
+  const headings = Array.from(contentRef.value?.querySelectorAll<HTMLElement>('h1, h2, h3') ?? [])
+    .filter(heading => !heading.closest('[hidden]'))
+
+  if (headings.length === 0) {
+    return ''
+  }
+
+  const threshold = Math.min(window.innerHeight * 0.32, 220)
+  let currentHeading = headings[0]
+
+  for (const heading of headings) {
+    if (heading.getBoundingClientRect().top <= threshold) {
+      currentHeading = heading
+    }
+    else {
+      break
+    }
+  }
+
+  return currentHeading?.textContent ?? ''
+}
+
+function getVisibleParagraphText(): string {
+  const elements = Array.from(contentRef.value?.querySelectorAll<HTMLElement>('p, li, blockquote') ?? [])
+    .filter(element => !element.closest('[hidden]'))
+  const viewportMiddle = window.innerHeight * 0.45
+  const visible = elements.find((element) => {
+    const rect = element.getBoundingClientRect()
+    return rect.bottom > 0 && rect.top < window.innerHeight && rect.top <= viewportMiddle
+  })
+
+  return visible?.textContent ?? ''
+}
+
+function normalizeText(value: string): string {
+  return value.replace(/\s+/g, ' ').trim()
 }
 </script>
 
@@ -304,6 +519,18 @@ function isPageScrollLocked(): boolean {
   font-family: var(--reading-font-body);
   font-size: var(--reading-font-size);
   line-height: var(--reading-line-height);
+}
+
+.reader-surface__content :deep(.reader-search-match) {
+  border-radius: 0.18em;
+  padding: 0 0.08em;
+  background: color-mix(in srgb, var(--reading-accent) 24%, transparent);
+  color: inherit;
+}
+
+.reader-surface__content :deep(.reader-search-match--active) {
+  background: color-mix(in srgb, var(--reading-accent) 42%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--reading-accent) 26%, transparent);
 }
 
 .reader-footer {

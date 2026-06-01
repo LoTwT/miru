@@ -5,6 +5,7 @@ import BackToTop from '@/components/BackToTop.vue'
 import FloatingInputMenu from '@/components/FloatingInputMenu.vue'
 import LibraryView from '@/components/LibraryView.vue'
 import PdfViewer from '@/components/PdfViewer.vue'
+import ReaderFindBar from '@/components/ReaderFindBar.vue'
 import ReaderOutlineNavigation from '@/components/ReaderOutlineNavigation.vue'
 import ReadingSettingsControl from '@/components/ReadingSettingsControl.vue'
 import ReaderSurface from '@/components/ReaderSurface.vue'
@@ -12,6 +13,14 @@ import sampleMarkdown from '@/content/sample.md?raw'
 import { getBareUrlPaste } from '@/features/input/urlInput'
 import { useDocumentInput } from '@/features/input/useDocumentInput'
 import { createLibraryStore, LibraryQuotaExceededError } from '@/features/library/libraryStore'
+import {
+  createReaderBookmark,
+  readPersistedReaderBookmarks,
+  removeBookmarksForDocument,
+  removeLibraryBookmarks,
+  writePersistedReaderBookmarks,
+  type ReaderBookmark,
+} from '@/features/reader/bookmarks'
 import { useRenderedMarkdown } from '@/features/reader/useRenderedMarkdown'
 import { useReadingSettings } from '@/features/settings/useReadingSettings'
 import { loadDefaultReadingFonts } from '@/lib/theme/fonts'
@@ -42,14 +51,21 @@ const openSurfaceId = shallowRef<CommandSurfaceId | null>(null)
 const liveStatus = shallowRef('')
 const outlineItems = shallowRef<ReaderOutlineItem[]>([])
 const activeOutlineId = shallowRef('')
+const readerBookmarks = shallowRef<ReaderBookmark[]>(readPersistedReaderBookmarks())
 const isNarrowOutlineViewport = shallowRef(false)
 const markdownProgress = shallowRef(0)
 const pdfProgress = shallowRef(0)
+const isFindBarOpen = shallowRef(false)
+const findInput = shallowRef('')
+const findQuery = shallowRef('')
+const findMatchCount = shallowRef(0)
+const activeFindIndex = shallowRef(-1)
 const topBarRef = useTemplateRef<HTMLElement>('topBar')
 const commandSurfaceRef = useTemplateRef<HTMLElement>('commandSurface')
 const actionsButtonRef = useTemplateRef<HTMLButtonElement>('actionsButton')
 const outlineButtonRef = useTemplateRef<HTMLButtonElement>('outlineButton')
 const settingsButtonRef = useTemplateRef<HTMLButtonElement>('settingsButton')
+const findBarRef = useTemplateRef<InstanceType<typeof ReaderFindBar>>('findBar')
 const readerRef = useTemplateRef<InstanceType<typeof ReaderSurface>>('reader')
 const pdfViewerRef = useTemplateRef<InstanceType<typeof PdfViewer>>('pdfViewer')
 const persistedSettings = readPersistedReadingSettings()
@@ -69,6 +85,7 @@ let outlineViewportMediaQuery: MediaQueryList | undefined
 let systemDarkThemeMediaQuery: MediaQueryList | undefined
 let reducedMotionMediaQuery: MediaQueryList | undefined
 let progressSyncFrame: number | undefined
+let findDebounceTimer: ReturnType<typeof setTimeout> | undefined
 
 const { error, isFetchingUrl, loadFromClipboard, loadFromFile, loadFromText, loadFromUrl } = useDocumentInput({
   onDocument(document) {
@@ -88,9 +105,23 @@ const status = computed(() => rendered.error.value ?? error.value?.detail ?? inp
 const isActionsSurfaceOpen = computed(() => openSurfaceId.value === 'actions')
 const isOutlineSurfaceOpen = computed(() => openSurfaceId.value === 'outline')
 const isSettingsSurfaceOpen = computed(() => openSurfaceId.value === 'settings')
-const hasReaderOutline = computed(() => appMode.value === 'reader' && outlineItems.value.length > 0)
-const shouldRenderOutlineRail = computed(() => hasReaderOutline.value && !isNarrowOutlineViewport.value)
-const shouldShowOutlineCommand = computed(() => hasReaderOutline.value && isNarrowOutlineViewport.value)
+const activeBookmarkDocumentKey = computed(() => getActiveBookmarkDocumentKey())
+const currentDocumentBookmarks = computed(() =>
+  activeBookmarkDocumentKey.value
+    ? readerBookmarks.value.filter(bookmark => bookmark.documentKey === activeBookmarkDocumentKey.value)
+    : [],
+)
+const bookmarkedHeadingIds = computed(() =>
+  currentDocumentBookmarks.value
+    .filter(bookmark => bookmark.kind === 'markdown-heading' && bookmark.target.headingId)
+    .map(bookmark => bookmark.target.headingId!),
+)
+const hasNavigationSurface = computed(() =>
+  (appMode.value === 'reader' && (outlineItems.value.length > 0 || currentDocumentBookmarks.value.length > 0))
+  || (appMode.value === 'pdf' && currentDocumentBookmarks.value.length > 0),
+)
+const shouldRenderOutlineRail = computed(() => hasNavigationSurface.value && appMode.value === 'reader' && !isNarrowOutlineViewport.value)
+const shouldShowOutlineCommand = computed(() => hasNavigationSurface.value && (appMode.value === 'pdf' || isNarrowOutlineViewport.value))
 const isSystemDarkTheme = shallowRef(false)
 const isReducedMotion = shallowRef(false)
 const shouldUseDarkCommandScrim = computed(() =>
@@ -128,6 +159,9 @@ const readingProgressPercent = computed(() => Math.round(readingProgress.value *
 const shouldShowReadingProgress = computed(() => appMode.value === 'reader' || appMode.value === 'pdf')
 const isReadingSettingsAvailable = computed(() => appMode.value !== 'pdf')
 const readingProgressStyle = computed(() => `${Number((readingProgress.value * 100).toFixed(1))}%`)
+const isSearchAvailable = computed(() => appMode.value === 'reader')
+const isBookmarkAvailable = computed(() => appMode.value === 'reader' || appMode.value === 'pdf')
+const searchUnavailableText = computed(() => appMode.value === 'pdf' ? 'PDF 搜索即将支持' : '打开文档后可用')
 
 watch(status, (value) => {
   if (value) {
@@ -146,9 +180,15 @@ watch(openSurfaceId, (value) => {
   setPageScrollLocked(shouldLockPageForSurface(value))
 })
 
-watch([hasReaderOutline, isNarrowOutlineViewport], () => {
+watch([hasNavigationSurface, isNarrowOutlineViewport], () => {
   if (!shouldShowOutlineCommand.value && openSurfaceId.value === 'outline') {
     closeSurface()
+  }
+})
+
+watch(appMode, (value) => {
+  if (value !== 'reader') {
+    closeFindBar({ restoreFocus: false })
   }
 })
 
@@ -168,6 +208,7 @@ onMounted(async () => {
   window.addEventListener('scroll', onWindowScroll, { passive: true })
   window.addEventListener('resize', onWindowResize, { passive: true })
   document.addEventListener('pointerdown', onDocumentPointerDown)
+  document.addEventListener('keydown', onDocumentKeydown)
   queueMarkdownProgressUpdate()
 })
 
@@ -182,17 +223,21 @@ onUnmounted(() => {
   window.removeEventListener('scroll', onWindowScroll)
   window.removeEventListener('resize', onWindowResize)
   document.removeEventListener('pointerdown', onDocumentPointerDown)
+  document.removeEventListener('keydown', onDocumentKeydown)
+  window.clearTimeout(findDebounceTimer)
   setPageScrollLocked(false)
   void libraryStore.close()
 })
 
 function resetToSample(): void {
   closeSurface()
+  closeFindBar({ restoreFocus: false })
   loadFromText(sampleMarkdown, 'sample', 'miru sample')
 }
 
 async function showLibrary(): Promise<void> {
   closeSurface()
+  closeFindBar({ restoreFocus: false })
   const currentScrollY = getCurrentScrollY()
   window.clearTimeout(positionSaveTimer)
   await saveActiveReadingPosition({ scrollY: currentScrollY })
@@ -268,6 +313,60 @@ function closeSurface(options: { restoreFocus?: boolean, previousSurfaceId?: Com
 
 function closeOutlineSurface(options: { restoreFocus?: boolean } = {}): void {
   closeSurface({ restoreFocus: options.restoreFocus, previousSurfaceId: 'outline' })
+}
+
+function openFindBar(): void {
+  if (!isSearchAvailable.value) {
+    liveStatus.value = searchUnavailableText.value
+    return
+  }
+
+  closeSurface()
+  isFindBarOpen.value = true
+  void nextTick(() => findBarRef.value?.focusInput())
+}
+
+function closeFindBar(options: { restoreFocus?: boolean } = {}): void {
+  window.clearTimeout(findDebounceTimer)
+  isFindBarOpen.value = false
+  findInput.value = ''
+  findQuery.value = ''
+  findMatchCount.value = 0
+  activeFindIndex.value = -1
+  readerRef.value?.clearSearch()
+
+  if (options.restoreFocus !== false) {
+    void nextTick(() => readerRef.value?.focus())
+  }
+}
+
+function updateFindInput(value: string): void {
+  findInput.value = value
+  window.clearTimeout(findDebounceTimer)
+  findDebounceTimer = window.setTimeout(() => {
+    findQuery.value = value
+  }, 140)
+}
+
+function goToNextSearchMatch(): void {
+  readerRef.value?.goToSearchMatch(1)
+}
+
+function goToPreviousSearchMatch(): void {
+  readerRef.value?.goToSearchMatch(-1)
+}
+
+function updateSearchState(state: { activeIndex: number, total: number }): void {
+  activeFindIndex.value = state.activeIndex
+  findMatchCount.value = state.total
+
+  if (!findQuery.value.trim()) {
+    return
+  }
+
+  liveStatus.value = state.total === 0
+    ? '无匹配'
+    : `第 ${state.activeIndex + 1} 个, 共 ${state.total} 个`
 }
 
 function getSurfaceTrigger(surfaceId: CommandSurfaceId | null): HTMLButtonElement | null {
@@ -379,6 +478,43 @@ function onDocumentPointerDown(event: PointerEvent): void {
   closeSurface({ restoreFocus: true })
 }
 
+function onDocumentKeydown(event: KeyboardEvent): void {
+  const key = event.key.toLowerCase()
+
+  if ((event.metaKey || event.ctrlKey) && !event.altKey && key === 'f') {
+    if (isEditableSearchShortcutTarget(event.target)) {
+      return
+    }
+
+    if (isSearchAvailable.value) {
+      event.preventDefault()
+      openFindBar()
+    }
+    else if (appMode.value === 'pdf') {
+      event.preventDefault()
+      liveStatus.value = 'PDF 搜索即将支持'
+    }
+    return
+  }
+
+  if (event.key === 'Escape' && isFindBarOpen.value && !openSurfaceId.value) {
+    event.preventDefault()
+    closeFindBar()
+  }
+}
+
+function isEditableSearchShortcutTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) {
+    return false
+  }
+
+  if (target.closest('[data-testid="reader-find-bar"]')) {
+    return false
+  }
+
+  return target.closest('input, textarea, [contenteditable]:not([contenteditable="false"])') !== null
+}
+
 function onCommandSurfaceKeydown(event: KeyboardEvent): void {
   if (event.key === 'Escape') {
     event.preventDefault()
@@ -427,6 +563,142 @@ function navigateToOutlineItem(id: string): void {
   void readerRef.value?.scrollToHeading(id)
 }
 
+function navigateToBookmark(id: string): void {
+  const bookmark = currentDocumentBookmarks.value.find(item => item.id === id)
+  if (!bookmark) {
+    return
+  }
+
+  if (bookmark.kind === 'pdf-page') {
+    const pageNumber = bookmark.target.pageNumber ?? 1
+    closeOutlineSurface({ restoreFocus: true })
+    pdfViewerRef.value?.goToPage(pageNumber)
+    pdfViewerRef.value?.focus()
+    return
+  }
+
+  closeOutlineSurface({ restoreFocus: true })
+  if (bookmark.kind === 'markdown-heading' && bookmark.target.headingId) {
+    void readerRef.value?.scrollToHeading(bookmark.target.headingId)
+    return
+  }
+
+  window.scrollTo({
+    top: Math.max(0, bookmark.target.scrollY ?? 0),
+    behavior: isReducedMotion.value ? 'auto' : 'smooth',
+  })
+  readerRef.value?.focus()
+}
+
+function toggleHeadingBookmark(item: ReaderOutlineItem): void {
+  const documentKey = activeBookmarkDocumentKey.value
+  if (!documentKey) {
+    return
+  }
+
+  const existing = currentDocumentBookmarks.value.find(bookmark =>
+    bookmark.kind === 'markdown-heading' && bookmark.target.headingId === item.id,
+  )
+  if (existing) {
+    removeBookmark(existing.id)
+    return
+  }
+
+  persistReaderBookmarks([
+    ...readerBookmarks.value,
+    createReaderBookmark({
+      documentKey,
+      documentTitle: activeDocumentTitle.value,
+      kind: 'markdown-heading',
+      label: item.title,
+      target: { headingId: item.id },
+    }),
+  ])
+  liveStatus.value = `已添加「${item.title}」书签`
+}
+
+function bookmarkCurrentPosition(): void {
+  const documentKey = activeBookmarkDocumentKey.value
+  if (!documentKey) {
+    return
+  }
+
+  if (appMode.value === 'pdf' && activePdfDocument.value) {
+    const pageNumber = activePdfDocument.value.position?.pageNumber ?? 1
+    const existing = currentDocumentBookmarks.value.find(bookmark =>
+      bookmark.kind === 'pdf-page' && bookmark.target.pageNumber === pageNumber,
+    )
+
+    if (existing) {
+      removeBookmark(existing.id)
+      return
+    }
+
+    persistReaderBookmarks([
+      ...readerBookmarks.value,
+      createReaderBookmark({
+        documentKey,
+        documentTitle: activeDocumentTitle.value,
+        kind: 'pdf-page',
+        label: `第 ${pageNumber} 页`,
+        target: { pageNumber },
+      }),
+    ])
+    liveStatus.value = `已添加第 ${pageNumber} 页书签`
+    return
+  }
+
+  const label = readerRef.value?.getBookmarkSnippet() ?? '当前位置'
+  persistReaderBookmarks([
+    ...readerBookmarks.value,
+    createReaderBookmark({
+      documentKey,
+      documentTitle: activeDocumentTitle.value,
+      kind: 'markdown-position',
+      label,
+      target: {
+        headingId: activeOutlineId.value || undefined,
+        scrollY: Math.max(0, Math.round(getCurrentScrollY())),
+      },
+    }),
+  ])
+  liveStatus.value = `已添加「${label}」书签`
+}
+
+function removeBookmark(id: string): void {
+  const bookmark = readerBookmarks.value.find(item => item.id === id)
+  persistReaderBookmarks(readerBookmarks.value.filter(item => item.id !== id))
+
+  if (bookmark) {
+    liveStatus.value = `已删除「${bookmark.label}」书签`
+  }
+}
+
+function persistReaderBookmarks(bookmarks: ReaderBookmark[]): void {
+  readerBookmarks.value = bookmarks
+  writePersistedReaderBookmarks(bookmarks)
+}
+
+function getActiveBookmarkDocumentKey(): string | null {
+  if (appMode.value === 'reader') {
+    if (activeLibraryEntryId.value) {
+      return libraryBookmarkKey(activeLibraryEntryId.value)
+    }
+
+    return documentState.source === 'sample' ? 'sample' : null
+  }
+
+  if (appMode.value === 'pdf' && activePdfDocument.value) {
+    return libraryBookmarkKey(activePdfDocument.value.entry.id)
+  }
+
+  return null
+}
+
+function libraryBookmarkKey(id: string): string {
+  return `library:${id}`
+}
+
 function updateOutlineItems(items: ReaderOutlineItem[]): void {
   outlineItems.value = items
 
@@ -442,6 +714,7 @@ function updateActiveOutlineId(id: string): void {
 async function loadIncomingDocument(document: ReaderDocument): Promise<void> {
   libraryStatus.value = ''
   inputMenuStatus.value = ''
+  closeFindBar({ restoreFocus: false })
 
   if (document.source === 'sample') {
     activeLibraryEntryId.value = null
@@ -481,6 +754,7 @@ async function loadIncomingDocument(document: ReaderDocument): Promise<void> {
 async function loadIncomingPdf(file: File): Promise<void> {
   libraryStatus.value = ''
   inputMenuStatus.value = ''
+  closeFindBar({ restoreFocus: false })
 
   try {
     await saveActiveReadingPosition()
@@ -514,6 +788,7 @@ async function loadIncomingPdf(file: File): Promise<void> {
 
 async function openLibraryEntry(entry: LibraryEntry): Promise<void> {
   libraryStatus.value = ''
+  closeFindBar({ restoreFocus: false })
 
   if (entry.type === 'pdf') {
     await saveActiveReadingPosition()
@@ -576,6 +851,7 @@ async function toggleLibraryPin(entry: LibraryEntry): Promise<void> {
 
 async function deleteLibraryEntry(entry: LibraryEntry): Promise<void> {
   await libraryStore.deleteEntry(entry.id)
+  persistReaderBookmarks(removeBookmarksForDocument(readerBookmarks.value, libraryBookmarkKey(entry.id)))
 
   if (activeLibraryEntryId.value === entry.id) {
     activeLibraryEntryId.value = null
@@ -591,6 +867,7 @@ async function deleteLibraryEntry(entry: LibraryEntry): Promise<void> {
 
 async function clearLibrary(): Promise<void> {
   await libraryStore.clearLibrary()
+  persistReaderBookmarks(removeLibraryBookmarks(readerBookmarks.value))
   activeLibraryEntryId.value = null
   activePdfDocument.value = null
   documentState.source = 'sample'
@@ -906,7 +1183,7 @@ function focusLibraryView(): void {
           class="app-shell__command-button app-shell__command-button--outline"
           :class="{ 'app-shell__command-button--active': isOutlineSurfaceOpen }"
           type="button"
-          aria-label="文档大纲"
+          aria-label="文档大纲与书签"
           :aria-expanded="isOutlineSurfaceOpen"
           aria-controls="reader-outline-panel"
           data-testid="reader-outline-button"
@@ -949,6 +1226,18 @@ function focusLibraryView(): void {
       </div>
     </header>
 
+    <ReaderFindBar
+      ref="findBar"
+      :is-open="isFindBarOpen"
+      :model-value="findInput"
+      :match-count="findMatchCount"
+      :active-index="activeFindIndex"
+      @update:model-value="updateFindInput"
+      @next="goToNextSearchMatch"
+      @previous="goToPreviousSearchMatch"
+      @close="closeFindBar"
+    />
+
     <LibraryView
       v-if="appMode === 'library'"
       :entries="libraryEntries"
@@ -982,8 +1271,10 @@ function focusLibraryView(): void {
         :document="documentState"
         :html="rendered.html.value"
         :is-rendering="rendered.isRendering.value"
+        :search-query="findQuery"
         @outline-change="updateOutlineItems"
         @active-heading-change="updateActiveOutlineId"
+        @search-change="updateSearchState"
       />
 
       <ReaderOutlineNavigation
@@ -991,9 +1282,14 @@ function focusLibraryView(): void {
         mode="rail"
         :items="outlineItems"
         :active-id="activeOutlineId"
+        :bookmarked-heading-ids="bookmarkedHeadingIds"
+        :bookmarks="currentDocumentBookmarks"
         :is-open="false"
         :position="readingSettings.state.outlinePosition"
         @navigate="navigateToOutlineItem"
+        @navigate-bookmark="navigateToBookmark"
+        @remove-bookmark="removeBookmark"
+        @toggle-heading-bookmark="toggleHeadingBookmark"
       />
 
       <BackToTop :is-suppressed="openSurfaceId !== null" />
@@ -1026,12 +1322,17 @@ function focusLibraryView(): void {
         v-if="isActionsSurfaceOpen"
         :is-open="isActionsSurfaceOpen"
         :is-fetching-url="isFetchingUrl"
+        :can-bookmark="isBookmarkAvailable"
+        :can-search="isSearchAvailable"
+        :search-unavailable-text="searchUnavailableText"
         :status="status"
         @update:is-open="setActionsSurfaceOpen"
+        @bookmark="bookmarkCurrentPosition"
         @paste="loadFromClipboard"
         @open-file="loadFromFile"
         @open-library="showLibrary"
         @fetch-url="loadFromUrl"
+        @search="openFindBar"
         @clear="resetToSample"
         @print="printDocument"
       />
@@ -1070,13 +1371,18 @@ function focusLibraryView(): void {
       />
 
       <ReaderOutlineNavigation
-        v-else-if="isOutlineSurfaceOpen && appMode === 'reader'"
+        v-else-if="isOutlineSurfaceOpen && hasNavigationSurface"
         mode="sheet"
-        :items="outlineItems"
-        :active-id="activeOutlineId"
+        :items="appMode === 'reader' ? outlineItems : []"
+        :active-id="appMode === 'reader' ? activeOutlineId : ''"
+        :bookmarked-heading-ids="bookmarkedHeadingIds"
+        :bookmarks="currentDocumentBookmarks"
         :is-open="isOutlineSurfaceOpen"
         :position="readingSettings.state.outlinePosition"
         @navigate="navigateToOutlineItem"
+        @navigate-bookmark="navigateToBookmark"
+        @remove-bookmark="removeBookmark"
+        @toggle-heading-bookmark="toggleHeadingBookmark"
         @close="closeOutlineSurface"
       />
     </div>

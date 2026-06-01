@@ -87,7 +87,7 @@ function focus(): void {
   rootRef.value?.focus()
 }
 
-defineExpose({ focus })
+defineExpose({ focus, goToPage })
 
 async function loadPdfDocument(): Promise<void> {
   loadState.value = 'loading'

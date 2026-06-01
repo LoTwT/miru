@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, shallowRef, useTemplateRef, watch } from 'vue'
 
+import type { ReaderBookmark } from '@/features/reader/bookmarks'
 import type { ReaderOutlineItem } from '@/features/reader/outlineNavigation'
 import type { ReadingOutlinePositionId } from '@/features/settings/readingSettingsOptions'
 
@@ -8,6 +9,8 @@ type ReaderOutlineMode = 'rail' | 'sheet'
 
 const props = defineProps<{
   activeId: string
+  bookmarkedHeadingIds: readonly string[]
+  bookmarks: readonly ReaderBookmark[]
   isOpen: boolean
   items: readonly ReaderOutlineItem[]
   mode: ReaderOutlineMode
@@ -16,7 +19,10 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   close: [options?: { restoreFocus?: boolean }]
+  navigateBookmark: [id: string]
   navigate: [id: string]
+  removeBookmark: [id: string]
+  toggleHeadingBookmark: [item: ReaderOutlineItem]
 }>()
 
 const isHovering = shallowRef(false)
@@ -31,6 +37,8 @@ let recedeTimer: ReturnType<typeof setTimeout> | undefined
 let mediaQuery: MediaQueryList | undefined
 
 const hasOutline = computed(() => props.items.length > 0)
+const hasBookmarks = computed(() => props.bookmarks.length > 0)
+const hasNavigation = computed(() => hasOutline.value || hasBookmarks.value)
 
 function focusFirstOutlineItem(): void {
   window.setTimeout(() => {
@@ -44,6 +52,23 @@ function focusFirstOutlineItem(): void {
 function navigateTo(id: string): void {
   emit('close')
   emit('navigate', id)
+}
+
+function navigateToBookmark(id: string): void {
+  emit('close')
+  emit('navigateBookmark', id)
+}
+
+function isHeadingBookmarked(id: string): boolean {
+  return props.bookmarkedHeadingIds.includes(id)
+}
+
+function bookmarkMeta(bookmark: ReaderBookmark): string {
+  if (bookmark.kind === 'pdf-page' && bookmark.target.pageNumber) {
+    return `PDF 第 ${bookmark.target.pageNumber} 页`
+  }
+
+  return bookmark.kind === 'markdown-heading' ? '标题' : '位置'
 }
 
 function onFocusIn(): void {
@@ -101,7 +126,7 @@ function outlineItemClass(item: ReaderOutlineItem) {
   ]
 }
 
-watch(hasOutline, (value) => {
+watch(hasNavigation, (value) => {
   if (!value) {
     emit('close')
   }
@@ -139,7 +164,7 @@ onUnmounted(() => {
 
 <template>
   <nav
-    v-if="hasOutline && (props.mode === 'rail' || props.isOpen)"
+    v-if="hasNavigation && (props.mode === 'rail' || props.isOpen)"
     ref="root"
     class="reader-outline"
     :class="{
@@ -162,20 +187,50 @@ onUnmounted(() => {
       <p class="reader-outline__label">
         文档大纲
       </p>
-      <ol class="reader-outline__list">
+      <ol v-if="hasOutline" class="reader-outline__list">
         <li v-for="item in props.items" :key="item.id" class="reader-outline__list-item">
-          <a
-            :class="outlineItemClass(item)"
-            :href="`#${item.id}`"
-            :aria-current="props.activeId === item.id ? 'location' : undefined"
-            data-outline-item
-            @click.prevent="navigateTo(item.id)"
-          >
-            <span class="reader-outline__tick" aria-hidden="true" />
-            <span class="reader-outline__text">{{ item.title }}</span>
-          </a>
+          <div class="reader-outline__item-row">
+            <a
+              :class="outlineItemClass(item)"
+              :href="`#${item.id}`"
+              :aria-current="props.activeId === item.id ? 'location' : undefined"
+              data-outline-item
+              @click.prevent="navigateTo(item.id)"
+            >
+              <span class="reader-outline__tick" aria-hidden="true" />
+              <span class="reader-outline__text">{{ item.title }}</span>
+            </a>
+            <button
+              class="reader-outline__bookmark-toggle"
+              :class="{ 'reader-outline__bookmark-toggle--active': isHeadingBookmarked(item.id) }"
+              type="button"
+              :aria-label="`${isHeadingBookmarked(item.id) ? '移除' : '添加'}「${item.title}」书签`"
+              @click="emit('toggleHeadingBookmark', item)"
+            />
+          </div>
         </li>
       </ol>
+      <section v-if="hasBookmarks" class="reader-outline__bookmarks" aria-label="书签">
+        <p class="reader-outline__label reader-outline__label--bookmarks">
+          书签
+        </p>
+        <ul class="reader-outline__bookmark-list">
+          <li v-for="bookmark in props.bookmarks" :key="bookmark.id" class="reader-outline__bookmark-row">
+            <button class="reader-outline__bookmark-jump" type="button" @click="navigateToBookmark(bookmark.id)">
+              <span>{{ bookmark.label }}</span>
+              <small>{{ bookmarkMeta(bookmark) }}</small>
+            </button>
+            <button
+              class="reader-outline__bookmark-remove"
+              type="button"
+              :aria-label="`删除「${bookmark.label}」书签`"
+              @click="emit('removeBookmark', bookmark.id)"
+            >
+              ×
+            </button>
+          </li>
+        </ul>
+      </section>
     </div>
 
     <div
@@ -209,20 +264,51 @@ onUnmounted(() => {
         </button>
       </header>
 
-      <ol class="reader-outline__sheet-list">
+      <ol v-if="hasOutline" class="reader-outline__sheet-list">
         <li v-for="item in props.items" :key="item.id" class="reader-outline__list-item">
-          <a
-            :class="outlineItemClass(item)"
-            :href="`#${item.id}`"
-            :aria-current="props.activeId === item.id ? 'location' : undefined"
-            data-outline-item
-            @click.prevent="navigateTo(item.id)"
-          >
-            <span class="reader-outline__tick" aria-hidden="true" />
-            <span class="reader-outline__text">{{ item.title }}</span>
-          </a>
+          <div class="reader-outline__item-row">
+            <a
+              :class="outlineItemClass(item)"
+              :href="`#${item.id}`"
+              :aria-current="props.activeId === item.id ? 'location' : undefined"
+              data-outline-item
+              @click.prevent="navigateTo(item.id)"
+            >
+              <span class="reader-outline__tick" aria-hidden="true" />
+              <span class="reader-outline__text">{{ item.title }}</span>
+            </a>
+            <button
+              class="reader-outline__bookmark-toggle"
+              :class="{ 'reader-outline__bookmark-toggle--active': isHeadingBookmarked(item.id) }"
+              type="button"
+              :aria-label="`${isHeadingBookmarked(item.id) ? '移除' : '添加'}「${item.title}」书签`"
+              @click="emit('toggleHeadingBookmark', item)"
+            />
+          </div>
         </li>
       </ol>
+
+      <section v-if="hasBookmarks" class="reader-outline__bookmarks reader-outline__bookmarks--sheet" aria-label="书签">
+        <p class="reader-outline__label reader-outline__label--bookmarks">
+          书签
+        </p>
+        <ul class="reader-outline__bookmark-list">
+          <li v-for="bookmark in props.bookmarks" :key="bookmark.id" class="reader-outline__bookmark-row">
+            <button class="reader-outline__bookmark-jump" type="button" @click="navigateToBookmark(bookmark.id)">
+              <span>{{ bookmark.label }}</span>
+              <small>{{ bookmarkMeta(bookmark) }}</small>
+            </button>
+            <button
+              class="reader-outline__bookmark-remove"
+              type="button"
+              :aria-label="`删除「${bookmark.label}」书签`"
+              @click="emit('removeBookmark', bookmark.id)"
+            >
+              ×
+            </button>
+          </li>
+        </ul>
+      </section>
     </div>
   </nav>
 </template>
@@ -315,8 +401,22 @@ onUnmounted(() => {
   list-style: none;
 }
 
+.reader-outline__label {
+  margin: 0 0 0.45rem;
+  color: var(--reading-fg-muted);
+  font-size: 0.72rem;
+  letter-spacing: 0;
+}
+
 .reader-outline__list-item + .reader-outline__list-item {
   margin-block-start: 0.16rem;
+}
+
+.reader-outline__item-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 32px;
+  gap: 0.25rem;
+  align-items: center;
 }
 
 .reader-outline__item {
@@ -330,6 +430,32 @@ onUnmounted(() => {
   font-size: 0.82rem;
   line-height: 1.25;
   text-decoration: none;
+}
+
+.reader-outline__bookmark-toggle {
+  display: grid;
+  place-items: center;
+  inline-size: 32px;
+  block-size: 32px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.reader-outline__bookmark-toggle::before {
+  content: "";
+  inline-size: 0.48rem;
+  block-size: 0.48rem;
+  border: 1px solid color-mix(in srgb, var(--reading-fg-muted) 72%, transparent);
+  border-radius: 999px;
+  background: transparent;
+}
+
+.reader-outline__bookmark-toggle--active::before {
+  border-color: var(--reading-accent);
+  background: var(--reading-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--reading-accent) 14%, transparent);
 }
 
 .reader-outline__item--h2 {
@@ -366,8 +492,21 @@ onUnmounted(() => {
 .reader-outline__item:hover,
 .reader-outline__item:focus-visible,
 .reader-outline__close:hover,
-.reader-outline__close:focus-visible {
+.reader-outline__close:focus-visible,
+.reader-outline__bookmark-toggle:hover,
+.reader-outline__bookmark-toggle:focus-visible,
+.reader-outline__bookmark-jump:hover,
+.reader-outline__bookmark-jump:focus-visible,
+.reader-outline__bookmark-remove:hover,
+.reader-outline__bookmark-remove:focus-visible {
   color: var(--reading-fg);
+}
+
+.reader-outline__bookmark-toggle:focus-visible,
+.reader-outline__bookmark-jump:focus-visible,
+.reader-outline__bookmark-remove:focus-visible {
+  outline: 2px solid var(--reading-focus);
+  outline-offset: 2px;
 }
 
 .reader-outline__sheet-list .reader-outline__item {
@@ -381,6 +520,76 @@ onUnmounted(() => {
 
 .reader-outline__sheet-list .reader-outline__item--h3 {
   --outline-indent: 1.55rem;
+}
+
+.reader-outline__bookmarks {
+  margin-block-start: 0.85rem;
+  padding-block-start: 0.75rem;
+  border-block-start: 1px solid color-mix(in srgb, var(--reading-rule) 72%, transparent);
+}
+
+.reader-outline__label--bookmarks {
+  margin-block-end: 0.35rem;
+}
+
+.reader-outline__bookmark-list {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.reader-outline__bookmark-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 32px;
+  gap: 0.2rem;
+  align-items: center;
+}
+
+.reader-outline__bookmark-row + .reader-outline__bookmark-row {
+  margin-block-start: 0.2rem;
+}
+
+.reader-outline__bookmark-jump,
+.reader-outline__bookmark-remove {
+  border: 0;
+  background: transparent;
+  color: var(--reading-fg-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.reader-outline__bookmark-jump {
+  display: grid;
+  gap: 0.12rem;
+  min-block-size: 40px;
+  min-inline-size: 0;
+  padding: 0.35rem 0.45rem;
+  border-radius: 10px;
+  text-align: left;
+}
+
+.reader-outline__bookmark-jump span,
+.reader-outline__bookmark-jump small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reader-outline__bookmark-jump span {
+  color: var(--reading-fg);
+  font-size: 0.8rem;
+}
+
+.reader-outline__bookmark-jump small {
+  font-size: 0.72rem;
+}
+
+.reader-outline__bookmark-remove {
+  display: grid;
+  place-items: center;
+  inline-size: 32px;
+  block-size: 32px;
+  border-radius: 999px;
 }
 
 @media (max-width: 1099px) {
@@ -431,7 +640,7 @@ onUnmounted(() => {
     letter-spacing: 0;
   }
 
-  .reader-outline__panel {
+  .reader-outline--rail .reader-outline__panel {
     display: none;
   }
 }
