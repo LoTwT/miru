@@ -13,6 +13,8 @@
   --reading-rule: #ded3c4;
   --reading-code-fg: #24211d;
   --reading-code-bg: #f0eadf;
+  --reading-focus: color-mix(in srgb, var(--reading-accent) 82%, var(--reading-fg));
+  --reading-focus-shadow: 0 0 0 4px color-mix(in srgb, var(--reading-accent) 22%, transparent);
   --reading-anchor-offset: 5.5rem;
   --reading-measure: 65ch;
   --reading-font-size: 18px;
@@ -58,9 +60,12 @@ input {
 
 button:focus-visible,
 input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
 a:focus-visible {
-  outline: 2px solid var(--reading-accent);
-  outline-offset: 2px;
+  outline: 2px solid var(--reading-focus);
+  outline-offset: 3px;
+  box-shadow: var(--reading-focus-shadow);
 }
 
 .reader-surface__content > :first-child {
@@ -145,8 +150,9 @@ a:focus-visible {
 }
 
 .reader-heading-toggle:focus-visible {
-  outline: 2px solid var(--reading-accent);
-  outline-offset: 2px;
+  outline: 2px solid var(--reading-focus);
+  outline-offset: 3px;
+  box-shadow: var(--reading-focus-shadow);
 }
 
 .reader-heading-toggle__icon {
@@ -219,8 +225,9 @@ a:focus-visible {
 }
 
 .reader-surface__content :is(h1, h2, h3) > a.header-anchor:focus-visible {
-  outline: 2px solid var(--reading-accent);
+  outline: 2px solid var(--reading-focus);
   outline-offset: 0.18em;
+  box-shadow: var(--reading-focus-shadow);
 }
 
 .reader-surface__content :is(h2, h3) > a.header-anchor::after {

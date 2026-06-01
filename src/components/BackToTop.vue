@@ -94,6 +94,7 @@ function scrollToTop(): void {
 .back-to-top:focus-visible {
   outline: 3px solid var(--reading-focus);
   outline-offset: 3px;
+  box-shadow: var(--reading-focus-shadow);
 }
 
 .back-to-top span {

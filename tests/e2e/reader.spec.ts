@@ -102,6 +102,31 @@ test('updates the quiet reading progress line for long markdown documents', asyn
   }
 })
 
+test('shows a consistent focus ring across reader chrome controls', async ({ page }) => {
+  await page.goto('/')
+
+  const focusTokens = await page.evaluate(() => {
+    const styles = getComputedStyle(document.documentElement)
+    return {
+      color: styles.getPropertyValue('--reading-focus').trim(),
+      shadow: styles.getPropertyValue('--reading-focus-shadow').trim(),
+    }
+  })
+  expect(focusTokens.color).not.toBe('')
+  expect(focusTokens.shadow).not.toBe('')
+
+  await expectVisibleFocusRing(page.getByTestId('library-open-button'))
+  await expectVisibleFocusRing(page.getByTestId('reading-settings-button'))
+  await expectVisibleFocusRing(page.getByTestId('floating-affordance-button'))
+
+  await page.getByTestId('reading-settings-button').click()
+  await expectVisibleFocusRing(page.getByRole('button', { name: '关闭', exact: true }))
+  await page.keyboard.press('Escape')
+
+  await page.getByTestId('floating-affordance-button').click()
+  await expectVisibleFocusRing(page.getByTestId('floating-affordance-menu').getByRole('button', { name: /^搜索/ }))
+})
+
 test('searches markdown content and keeps document bookmarks in the outline surface', async ({ page }) => {
   await page.goto('/')
 
@@ -2113,6 +2138,26 @@ async function readReadingProgressPercent(page: import('@playwright/test').Page)
   return page.getByTestId('reading-progress-fill').evaluate((element) => {
     return Number.parseFloat((element as HTMLElement).style.inlineSize || '0')
   })
+}
+
+async function expectVisibleFocusRing(locator: import('@playwright/test').Locator) {
+  await locator.page().keyboard.press('Tab')
+  await locator.focus()
+
+  const ring = await locator.evaluate((element) => {
+    const styles = getComputedStyle(element)
+    return {
+      boxShadow: styles.boxShadow,
+      outlineColor: styles.outlineColor,
+      outlineStyle: styles.outlineStyle,
+      outlineWidth: Number.parseFloat(styles.outlineWidth || '0'),
+    }
+  })
+
+  expect(ring.outlineStyle).not.toBe('none')
+  expect(ring.outlineWidth).toBeGreaterThanOrEqual(2)
+  expect(ring.outlineColor).not.toBe('rgba(0, 0, 0, 0)')
+  expect(ring.boxShadow).not.toBe('none')
 }
 
 async function readTopBarHeight(page: import('@playwright/test').Page): Promise<number> {
