@@ -310,20 +310,45 @@ test('adds a local PDF and reopens it through the view-only PDF viewer', async (
   await openFileThroughFloatingMenu(page, {
     name: 'Daily Paper.pdf',
     mimeType: 'application/octet-stream',
-    buffer: createSimplePdfBuffer(['Daily Paper', 'Daily Paper page two']),
+    buffer: createSimplePdfBuffer(['Daily Paper alpha headline', 'Daily Paper page two']),
   })
 
   await expect(page.getByTestId('pdf-viewer')).toBeVisible()
   await expect(page.getByTestId('pdf-viewer')).toBeFocused()
   await expect(page.getByRole('heading', { name: 'Daily Paper' })).toBeVisible()
-  await expect(page.getByText('PDF 保持原样显示, 不做文字提取或上传。')).toBeVisible()
+  await expect(page.getByText('PDF 保持原样显示; 只有使用搜索时才在浏览器内读取文本层, 不上传。')).toBeVisible()
   await expect(page.getByTestId('pdf-viewer-canvas')).toBeVisible()
   await expect(page.getByText('1 / 2')).toBeVisible()
   const initialProgress = await readReadingProgressPercent(page)
   expect(initialProgress).toBeGreaterThanOrEqual(45)
 
   await page.getByTestId('floating-affordance-button').click()
-  await expect(page.getByTestId('floating-affordance-menu').getByRole('button', { name: /搜索 PDF 搜索即将支持/ })).toBeDisabled()
+  await page.getByTestId('floating-affordance-menu').getByRole('button', { name: /搜索 Cmd\/Ctrl\+F/ }).click()
+  await expect(page.getByTestId('reader-find-bar')).toBeVisible()
+  await page.getByTestId('reader-find-input').fill('Daily')
+  await expect(page.getByTestId('reader-find-counter')).toContainText('1 / 2')
+  await expect(page.getByTestId('reader-find-counter')).toContainText('第 1 页')
+  await expect(page.locator('.pdf-viewer__search-match')).toHaveCount(1)
+  await expect.poll(async () => {
+    return page.evaluate(() => {
+      const marker = document.querySelector('.pdf-viewer__search-match')
+      const textRun = document.querySelector('.pdf-viewer__text-layer span[data-pdf-text-index]')
+      const markerWidth = marker?.getBoundingClientRect().width ?? 0
+      const textRunWidth = textRun?.getBoundingClientRect().width ?? 0
+
+      return textRunWidth > 0 ? markerWidth / textRunWidth : 1
+    })
+  }).toBeLessThan(0.55)
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('reader-find-counter')).toContainText('2 / 2')
+  await expect(page.getByTestId('reader-find-counter')).toContainText('第 2 页')
+  await expect(page.getByTestId('pdf-viewer').getByText('2 / 2')).toBeVisible()
+  await page.keyboard.press('Shift+Enter')
+  await expect(page.getByTestId('pdf-viewer').getByText('1 / 2')).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('reader-find-bar')).toHaveCount(0)
+
+  await page.getByTestId('floating-affordance-button').click()
   await page.getByTestId('floating-affordance-menu').getByRole('button', { name: /^书签此处/ }).click()
   await expect(page.getByTestId('reader-outline-button')).toBeVisible()
   await page.getByTestId('reader-outline-button').click()
@@ -462,6 +487,22 @@ test('supports continuous scroll mode for local PDFs with bounded rendered pages
   await expect.poll(() => page.getByTestId('pdf-viewer-scroll-canvas').count()).toBeLessThan(8)
 
   const stage = page.getByTestId('pdf-viewer-stage')
+  await page.keyboard.press('Control+F')
+  await page.getByTestId('reader-find-input').fill('page 1')
+  await expect(page.getByTestId('reader-find-counter')).toContainText('1 / 1')
+  await expect(page.getByTestId('reader-find-counter')).toContainText('第 1 页')
+  await expect.poll(async () => page.locator('.pdf-viewer__search-match--active').count()).toBeGreaterThan(0)
+  await expect.poll(async () => page.getByTestId('pdf-viewer-scroll-text-layer').locator('span[data-pdf-text-index]').count()).toBeGreaterThan(0)
+
+  await page.getByTestId('reader-find-input').fill('page 7')
+  await expect(page.getByTestId('reader-find-counter')).toContainText('1 / 1')
+  await expect(page.getByTestId('reader-find-counter')).toContainText('第 7 页')
+  await expect(page.getByText('7 / 8')).toBeVisible()
+  await expect.poll(() => stage.evaluate(element => element.scrollTop)).toBeGreaterThan(0)
+  await expect.poll(() => page.getByTestId('pdf-viewer-scroll-canvas').count()).toBeLessThan(8)
+  await expect.poll(async () => page.locator('.pdf-viewer__search-match--active').count()).toBeGreaterThan(0)
+  await page.keyboard.press('Escape')
+
   await page.getByLabel('跳转页码').fill('6')
   await page.keyboard.press('Enter')
   await expect(page.getByText('6 / 8')).toBeVisible()
@@ -510,6 +551,23 @@ test('supports continuous scroll mode for local PDFs with bounded rendered pages
   await expect(page.getByTestId('pdf-viewer-canvas')).toBeVisible()
   await expect(page.getByRole('button', { name: '翻页' })).toHaveAttribute('aria-pressed', 'true')
   await expect(page.getByText(expectedPage)).toBeVisible()
+})
+
+test('reports local PDFs without searchable text instead of showing a silent zero result', async ({ page }) => {
+  await page.goto('/')
+
+  await openFileThroughFloatingMenu(page, {
+    name: 'Scanned.pdf',
+    mimeType: 'application/pdf',
+    buffer: createSimplePdfBuffer(''),
+  })
+
+  await expect(page.getByTestId('pdf-viewer')).toBeVisible()
+  await page.keyboard.press('Control+F')
+  await page.getByTestId('reader-find-input').fill('alpha')
+
+  await expect(page.getByTestId('reader-find-counter')).toContainText('无可搜索文本')
+  await expect(page.locator('.app-shell__live-status')).toContainText('此 PDF 没有可搜索的文本')
 })
 
 test('shows a recoverable error for malformed local PDFs', async ({ page }) => {
