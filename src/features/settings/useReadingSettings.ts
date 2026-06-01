@@ -8,6 +8,7 @@ import {
   writePersistedReadingSettings,
 } from '@/lib/theme/tokens'
 import type { PersistedReadingSettings, ReadingTokenName } from '@/lib/theme/tokens'
+import { loadOptionalReadingFont } from '@/lib/theme/fonts'
 
 import {
   createLocalFontFamilyId,
@@ -132,6 +133,7 @@ export function useReadingSettings(options: {
 
     localFonts.value = registeredFonts
     const normalizedFontFamily = fallbackMissingLocalFont(state.fontFamily, localFonts.value)
+    await loadOptionalReadingFont(normalizedFontFamily)
 
     if (normalizedFontFamily !== state.fontFamily) {
       state.fontFamily = normalizedFontFamily
@@ -186,6 +188,7 @@ export function useReadingSettings(options: {
 
   function updateFontFamily(value: ReadingFontFamilyId): void {
     state.fontFamily = fallbackMissingLocalFont(value, localFonts.value)
+    void loadOptionalReadingFont(state.fontFamily)
     commit()
   }
 
@@ -271,6 +274,7 @@ export function useReadingSettings(options: {
     }
 
     applySnapshotToState(state, preset.settings, localFonts.value)
+    void loadOptionalReadingFont(state.fontFamily)
     commit()
     return true
   }
