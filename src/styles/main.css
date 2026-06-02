@@ -1,3 +1,27 @@
+@font-face {
+  font-family: "Literata Preview";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/optional/literata-preview-normal.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Atkinson Hyperlegible Preview";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/optional/atkinson-hyperlegible-preview-normal.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "LXGW WenKai Preview";
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+  src: url("/fonts/optional/lxgw-wenkai-preview-normal.woff2") format("woff2");
+}
+
 * {
   box-sizing: border-box;
 }

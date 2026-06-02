@@ -2,8 +2,10 @@
 import { computed, nextTick, onMounted, onUnmounted, shallowRef, useTemplateRef, watch } from 'vue'
 
 import {
+  confirmedOptionalFontStorageKey,
   contrastRatio,
   getCustomThemeChecks,
+  getReadingFontFamilyOption,
   hasReadableCustomTheme,
   normalizeHexColor,
   readingContrastOptions,
@@ -28,11 +30,13 @@ import type {
   ReadingOutlinePositionId,
   ReadingPageMarginId,
   ReadingParagraphGapId,
+  ReadingSettingOption,
   ReadingThemeChoice,
 } from '@/features/settings/readingSettingsOptions'
 import type { ReadingPreset } from '@/features/settings/readingPresets'
 import type { LocalFontOption } from '@/features/settings/localFonts'
 import type { ReadingCustomizationState, ReadingSettingsMessage } from '@/features/settings/useReadingSettings'
+import { loadOptionalReadingFont } from '@/lib/theme/fonts'
 
 const props = defineProps<{
   activePresetName: string
@@ -78,6 +82,10 @@ const pendingDeletePresetId = shallowRef<string | null>(null)
 const renamingLocalFontId = shallowRef<string | null>(null)
 const renameLocalFontInput = shallowRef('')
 const pendingDeleteLocalFontId = shallowRef<string | null>(null)
+const pendingDownloadFontId = shallowRef<ReadingFontFamilyId | null>(null)
+const isPendingDownloadLoading = shallowRef(false)
+const optionalFontDownloadMessage = shallowRef('')
+const confirmedOptionalFontIds = shallowRef<ReadonlySet<string>>(readConfirmedOptionalFontIds())
 const rootRef = useTemplateRef<HTMLElement>('root')
 const localFontInputRef = useTemplateRef<HTMLInputElement>('localFontInput')
 const showOutlinePositionControl = computed(() => props.showOutlinePositionControl && isDesktopOutlineViewport.value)
@@ -104,8 +112,8 @@ const settingsPanelCaption = computed(() => {
   return activePanel.value === 'main' ? '即时预览当前正文' : '外观快照'
 })
 const currentPresetName = computed(() => props.activePresetName)
-const fontFamilyOptions = computed(() => [
-  ...readingFontFamilyOptions,
+const fontFamilyOptions = computed<readonly ReadingSettingOption<ReadingFontFamilyId>[]>(() => [
+  ...readingFontFamilyOptions as readonly ReadingSettingOption<ReadingFontFamilyId>[],
   ...props.localFonts.map(font => ({
     id: font.familyId,
     label: font.name,
@@ -113,6 +121,11 @@ const fontFamilyOptions = computed(() => [
     tokenValue: font.fontStack,
   })),
 ])
+const pendingDownloadFontOption = computed(() =>
+  pendingDownloadFontId.value
+    ? getReadingFontFamilyOption(pendingDownloadFontId.value)
+    : undefined,
+)
 const normalizedPresetNameInput = computed(() => normalizePresetNameInput(presetNameInput.value))
 const normalizedRenamePresetInput = computed(() => normalizePresetNameInput(renamePresetInput.value))
 const normalizedRenameLocalFontInput = computed(() => normalizePresetNameInput(renameLocalFontInput.value))
@@ -289,6 +302,41 @@ function requestDeleteLocalFont(id: string): void {
   cancelRenameLocalFont()
 }
 
+function readConfirmedOptionalFontIds(): ReadonlySet<string> {
+  if (typeof window === 'undefined') {
+    return new Set()
+  }
+
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(confirmedOptionalFontStorageKey) ?? '[]')
+    return new Set(Array.isArray(parsed) ? parsed.filter(value => typeof value === 'string') : [])
+  }
+  catch {
+    return new Set()
+  }
+}
+
+function hasConfirmedOptionalFont(id: ReadingFontFamilyId): boolean {
+  return confirmedOptionalFontIds.value.has(id)
+}
+
+function rememberConfirmedOptionalFont(id: ReadingFontFamilyId): void {
+  const next = new Set(confirmedOptionalFontIds.value)
+  next.add(id)
+  confirmedOptionalFontIds.value = next
+
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  try {
+    window.localStorage.setItem(confirmedOptionalFontStorageKey, JSON.stringify(Array.from(next)))
+  }
+  catch {
+    // Confirmation persistence is a convenience only; selection still works.
+  }
+}
+
 function describePreset(preset: ReadingPreset): string {
   const themeLabel = readingThemeOptions.find(option => option.id === preset.settings.theme)?.label ?? '主题'
   const fontLabel = fontFamilyOptions.value.find(option => option.id === preset.settings.fontFamily)?.label ?? '默认字体'
@@ -373,7 +421,49 @@ function selectPageMargin(value: ReadingPageMarginId): void {
 }
 
 function selectFontFamily(value: ReadingFontFamilyId): void {
+  const option = getReadingFontFamilyOption(value)
+
+  optionalFontDownloadMessage.value = ''
+
+  if (option?.confirmDownload && !hasConfirmedOptionalFont(value)) {
+    pendingDownloadFontId.value = value
+    return
+  }
+
+  pendingDownloadFontId.value = null
   emit('updateFontFamily', value)
+}
+
+function cancelPendingDownloadFont(): void {
+  pendingDownloadFontId.value = null
+  isPendingDownloadLoading.value = false
+  optionalFontDownloadMessage.value = ''
+}
+
+async function confirmPendingDownloadFont(): Promise<void> {
+  const fontId = pendingDownloadFontId.value
+  const option = pendingDownloadFontOption.value
+
+  if (!fontId || !option) {
+    return
+  }
+
+  isPendingDownloadLoading.value = true
+  optionalFontDownloadMessage.value = `正在加载${option.label}...`
+
+  const loaded = await loadOptionalReadingFont(fontId, { failOnError: true }).catch(() => false)
+
+  if (!loaded) {
+    isPendingDownloadLoading.value = false
+    optionalFontDownloadMessage.value = '字体加载失败,请检查网络后重试。'
+    return
+  }
+
+  rememberConfirmedOptionalFont(fontId)
+  pendingDownloadFontId.value = null
+  isPendingDownloadLoading.value = false
+  optionalFontDownloadMessage.value = ''
+  emit('updateFontFamily', fontId)
 }
 
 function selectTheme(value: ReadingThemeChoice): void {
@@ -502,12 +592,53 @@ function syncOutlineViewport(): void {
                 :aria-checked="props.settings.fontFamily === option.id"
                 :aria-label="option.ariaLabel"
                 :data-option-id="option.id"
-                :style="{ fontFamily: option.tokenValue }"
+                :data-pending-download="pendingDownloadFontId === option.id ? 'true' : undefined"
+                :style="{ fontFamily: option.previewTokenValue ?? option.tokenValue }"
                 data-settings-item
                 @click="selectFontFamily(option.id)"
               >
-                {{ option.label }}
+                <span class="reading-settings__segment-label">{{ option.label }}</span>
+                <span v-if="option.badge" class="reading-settings__segment-badge">
+                  {{ option.badge }}<template v-if="option.confirmDownload"> · {{ option.confirmDownload.sizeLabel }}</template>
+                </span>
               </button>
+            </div>
+            <div
+              v-if="pendingDownloadFontOption"
+              class="reading-settings__download-confirm"
+              role="status"
+              data-testid="optional-font-download-confirm"
+            >
+              <span>
+                <strong>启用 {{ pendingDownloadFontOption.label }}</strong>
+                <span>{{ pendingDownloadFontOption.confirmDownload?.message }}</span>
+              </span>
+              <div class="reading-settings__download-actions">
+                <button
+                  class="reading-settings__download-action"
+                  type="button"
+                  :disabled="isPendingDownloadLoading"
+                  data-testid="optional-font-download-accept"
+                  @click="confirmPendingDownloadFont"
+                >
+                  {{ isPendingDownloadLoading ? '加载中' : '下载并启用' }}
+                </button>
+                <button
+                  class="reading-settings__download-action reading-settings__download-action--muted"
+                  type="button"
+                  :disabled="isPendingDownloadLoading"
+                  @click="cancelPendingDownloadFont"
+                >
+                  取消
+                </button>
+              </div>
+              <span
+                v-if="optionalFontDownloadMessage"
+                class="reading-settings__download-message"
+                :data-kind="optionalFontDownloadMessage.includes('失败') ? 'error' : 'info'"
+              >
+                {{ optionalFontDownloadMessage }}
+              </span>
             </div>
             <div class="reading-settings__font-actions">
               <input
@@ -1453,8 +1584,87 @@ function syncOutlineViewport(): void {
 }
 
 .reading-settings__segment {
+  display: grid;
+  gap: 0.14rem;
+  place-items: center;
   padding: 0.35rem 0.45rem;
   overflow-wrap: anywhere;
+}
+
+.reading-settings__segment[data-pending-download="true"] {
+  border-color: var(--reading-accent);
+  box-shadow: inset 0 0 0 1px var(--reading-accent);
+}
+
+.reading-settings__segment-label {
+  line-height: 1.16;
+}
+
+.reading-settings__segment-badge {
+  color: var(--reading-fg-muted);
+  font-family: var(--reading-font-code);
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1.15;
+}
+
+.reading-settings__download-confirm {
+  display: grid;
+  gap: 0.55rem;
+  margin-block-start: 0.5rem;
+  padding: 0.62rem;
+  border: 1px solid color-mix(in srgb, var(--reading-accent) 62%, var(--reading-rule));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--reading-accent) 8%, var(--reading-bg));
+}
+
+.reading-settings__download-confirm > span:first-child {
+  display: grid;
+  gap: 0.2rem;
+  color: var(--reading-fg);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.reading-settings__download-confirm > span:first-child > span {
+  color: var(--reading-fg-muted);
+}
+
+.reading-settings__download-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.reading-settings__download-action {
+  min-block-size: 44px;
+  border: 1px solid var(--reading-rule);
+  border-radius: 12px;
+  background: var(--reading-bg);
+  color: var(--reading-accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.reading-settings__download-action--muted {
+  color: var(--reading-fg-muted);
+}
+
+.reading-settings__download-action:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.reading-settings__download-message {
+  color: var(--reading-fg-muted);
+  font-size: 0.78rem;
+}
+
+.reading-settings__download-message[data-kind="error"] {
+  color: var(--reading-accent);
+  font-weight: 700;
 }
 
 .reading-settings__summary-row {
