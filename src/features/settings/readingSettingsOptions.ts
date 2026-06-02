@@ -7,7 +7,7 @@ export type ReadingLineHeightId = '1.5' | '1.7' | '1.9'
 export type ReadingLetterSpacingId = 'tight' | 'standard' | 'loose'
 export type ReadingParagraphGapId = 'compact' | 'standard' | 'loose'
 export type ReadingPageMarginId = 'compact' | 'standard' | 'spacious'
-export type ReadingBuiltInFontFamilyId = 'serif' | 'system-serif' | 'system-sans' | 'mono'
+export type ReadingBuiltInFontFamilyId = 'serif' | 'literata' | 'atkinson' | 'system-serif' | 'system-sans' | 'mono'
 export type ReadingLocalFontFamilyId = `local:${string}`
 export type ReadingFontFamilyId = ReadingBuiltInFontFamilyId | ReadingLocalFontFamilyId
 export type ReadingThemeChoice = 'system' | 'light' | 'dark' | 'sepia' | 'custom'
@@ -42,6 +42,8 @@ export const defaultCustomTheme = {
 } as const satisfies ReadingCustomThemeState
 
 export const serifFontStack = '"Newsreader", Georgia, "Songti SC", "Noto Serif CJK SC", serif'
+export const literataFontStack = '"Literata Variable", "Newsreader", Georgia, "Songti SC", "Noto Serif CJK SC", serif'
+export const atkinsonFontStack = '"Atkinson Hyperlegible", -apple-system, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif'
 export const systemSerifFontStack = 'Georgia, "Songti SC", "Noto Serif CJK SC", serif'
 export const systemSansFontStack = '-apple-system, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif'
 export const monoFontStack = '"Space Mono", ui-monospace, SFMono-Regular, Menlo, "PingFang SC", "Noto Sans CJK SC", monospace'
@@ -90,6 +92,8 @@ export const readingPageMarginOptions = [
 
 export const readingFontFamilyOptions = [
   { id: 'serif', label: 'Newsreader', ariaLabel: '正文字体 Newsreader', tokenValue: serifFontStack },
+  { id: 'literata', label: 'Literata', ariaLabel: '正文字体 Literata', tokenValue: literataFontStack },
+  { id: 'atkinson', label: 'Atkinson', ariaLabel: '正文字体 Atkinson Hyperlegible', tokenValue: atkinsonFontStack },
   { id: 'system-serif', label: '系统衬线', ariaLabel: '正文字体 系统衬线', tokenValue: systemSerifFontStack },
   { id: 'system-sans', label: '系统无衬线', ariaLabel: '正文字体 系统无衬线', tokenValue: systemSansFontStack },
   { id: 'mono', label: 'Space Mono', ariaLabel: '正文字体 Space Mono', tokenValue: monoFontStack },

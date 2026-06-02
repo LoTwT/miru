@@ -5,6 +5,7 @@ import {
   darkThemeTokenOverrides,
   deriveCustomThemeTokenOverrides,
   lightThemeTokenOverrides,
+  readingFontFamilyOptions,
   sepiaThemeTokenOverrides,
 } from '@/features/settings/readingSettingsOptions'
 import { useReadingSettings } from '@/features/settings/useReadingSettings'
@@ -214,6 +215,29 @@ describe('reading customization settings', () => {
     const settings = useReadingSettings({ root, storage })
 
     expect(settings.state.fontFamily).toBe('system-sans')
+  })
+
+  it('offers curated optional font options and restores them from token overrides', () => {
+    const optionIds = readingFontFamilyOptions.map(option => option.id)
+
+    expect(optionIds).toContain('literata')
+    expect(optionIds).toContain('atkinson')
+
+    const settings = useReadingSettings({ root, storage })
+
+    settings.updateFontFamily('literata')
+
+    expect(root.style.getPropertyValue('--reading-font-body')).toContain('"Literata Variable"')
+    expect(root.style.getPropertyValue('--reading-font-body')).toContain('"Songti SC"')
+
+    const persisted = readPersistedReadingSettings(storage)
+
+    expect(persisted?.fontFamily).toBeUndefined()
+    expect(persisted?.tokenOverrides?.['--reading-font-body']).toContain('"Literata Variable"')
+
+    const restored = useReadingSettings({ root: document.createElement('html'), storage })
+
+    expect(restored.state.fontFamily).toBe('literata')
   })
 
   it('reset clears customization overrides without losing remote image mode', () => {

@@ -1512,6 +1512,37 @@ test('customizes reading settings, persists them, and resets to defaults', async
   expect(await page.evaluate(() => localStorage.getItem('miru:reading-settings:v1'))).toBeNull()
 })
 
+test('loads curated optional reading fonts only after selection', async ({ page }) => {
+  const optionalFontRequests: string[] = []
+  page.on('request', (request) => {
+    const pathname = new URL(request.url()).pathname
+    if (pathname.startsWith('/fonts/optional/')) {
+      optionalFontRequests.push(pathname)
+    }
+  })
+
+  await page.goto('/')
+  await expect(page.getByRole('heading', { name: 'miru' })).toBeVisible()
+  expect(optionalFontRequests).toHaveLength(0)
+
+  await page.getByTestId('reading-settings-button').click()
+  await expect(page.getByRole('radio', { name: '正文字体 Literata' })).toBeVisible()
+  await expect(page.getByRole('radio', { name: '正文字体 Atkinson Hyperlegible' })).toBeVisible()
+  expect(optionalFontRequests).toHaveLength(0)
+
+  await page.getByRole('radio', { name: '正文字体 Atkinson Hyperlegible' }).click()
+  await expect.poll(() => optionalFontRequests.filter(pathname => pathname.includes('atkinson-hyperlegible')).length).toBeGreaterThanOrEqual(2)
+  expect(optionalFontRequests.some(pathname => pathname.includes('literata'))).toBe(false)
+
+  await expect.poll(() => readInlineReadingTokens(page)).toMatchObject({
+    fontBody: '"Atkinson Hyperlegible", -apple-system, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif',
+  })
+
+  const persisted = await page.evaluate(() => JSON.parse(localStorage.getItem('miru:reading-settings:v1') ?? '{}'))
+  expect(persisted.fontFamily).toBeUndefined()
+  expect(persisted.tokenOverrides['--reading-font-body']).toContain('"Atkinson Hyperlegible"')
+})
+
 test('uploads, persists, and safely deletes local reading fonts without third-party requests', async ({ page }) => {
   const requestHosts = new Set<string>()
   page.on('request', (request) => {
