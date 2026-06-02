@@ -451,9 +451,9 @@ async function confirmPendingDownloadFont(): Promise<void> {
   isPendingDownloadLoading.value = true
   optionalFontDownloadMessage.value = `正在加载${option.label}...`
 
-  await loadOptionalReadingFont(fontId)
+  const loaded = await loadOptionalReadingFont(fontId, { failOnError: true }).catch(() => false)
 
-  if (!isFontReady(fontId)) {
+  if (!loaded) {
     isPendingDownloadLoading.value = false
     optionalFontDownloadMessage.value = '字体加载失败,请检查网络后重试。'
     return
@@ -464,18 +464,6 @@ async function confirmPendingDownloadFont(): Promise<void> {
   isPendingDownloadLoading.value = false
   optionalFontDownloadMessage.value = ''
   emit('updateFontFamily', fontId)
-}
-
-function isFontReady(fontId: ReadingFontFamilyId): boolean {
-  if (typeof document === 'undefined' || !('fonts' in document)) {
-    return true
-  }
-
-  if (fontId === 'lxgw-wenkai') {
-    return document.fonts.check('300 16px "LXGW WenKai"', '霞鹜文楷')
-  }
-
-  return true
 }
 
 function selectTheme(value: ReadingThemeChoice): void {

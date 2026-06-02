@@ -10,6 +10,10 @@ interface OptionalFontFaceDefinition {
   source: string
 }
 
+type OptionalFontTestWindow = Window & {
+  __miruOptionalFontLoadFailures?: readonly string[]
+}
+
 const latinUnicodeRange = 'U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD'
 
 const optionalFontFaces = {
@@ -74,6 +78,10 @@ const optionalFontLoadPromises = new Map<OptionalReadingFontId, Promise<void>>()
 
 export type OptionalReadingFontId = keyof typeof optionalFontFaces
 
+interface LoadOptionalReadingFontOptions {
+  failOnError?: boolean
+}
+
 export async function loadReadingFont(font: ReadingFontId): Promise<void> {
   await fontLoaders[font]()
 }
@@ -86,29 +94,45 @@ export function isOptionalReadingFontId(value: string): value is OptionalReading
   return value in optionalFontFaces
 }
 
-export async function loadOptionalReadingFont(font: string): Promise<void> {
+export async function loadOptionalReadingFont(font: string, options: LoadOptionalReadingFontOptions = {}): Promise<boolean> {
   if (!isOptionalReadingFontId(font) || typeof FontFace === 'undefined' || typeof document === 'undefined' || !('fonts' in document)) {
-    return
+    return false
   }
 
-  const existing = optionalFontLoadPromises.get(font)
-  if (existing) {
-    await existing
-    return
+  if ((window as OptionalFontTestWindow).__miruOptionalFontLoadFailures?.includes(font)) {
+    if (options.failOnError) {
+      throw new Error(`Forced optional font load failure: ${font}`)
+    }
+
+    return false
   }
 
-  const loading = Promise.all(
-    optionalFontFaces[font].map(async (definition) => {
-      const face = new FontFace(definition.family, definition.source, definition.descriptors)
-      const loadedFace = await face.load()
-      document.fonts.add(loadedFace)
-    }),
-  )
-    .then(() => undefined)
-    .catch(() => {
+  let loading = optionalFontLoadPromises.get(font)
+
+  if (!loading) {
+    loading = Promise.all(
+      optionalFontFaces[font].map(async (definition) => {
+        const face = new FontFace(definition.family, definition.source, definition.descriptors)
+        const loadedFace = await face.load()
+        document.fonts.add(loadedFace)
+      }),
+    ).then(() => undefined)
+
+    optionalFontLoadPromises.set(font, loading)
+    loading.catch(() => {
       optionalFontLoadPromises.delete(font)
     })
+  }
 
-  optionalFontLoadPromises.set(font, loading)
-  await loading
+  try {
+    await loading
+    return true
+  }
+  catch (error) {
+    if (options.failOnError) {
+      throw error
+    }
+
+    return false
+  }
 }

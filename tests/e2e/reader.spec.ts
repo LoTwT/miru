@@ -1591,6 +1591,30 @@ test('confirms the LXGW WenKai large optional font before loading the full packa
   await expect(page.getByTestId('optional-font-download-confirm')).toHaveCount(0)
 })
 
+test('keeps LXGW WenKai confirmation open when the large font download fails', async ({ page }) => {
+  await page.goto('/')
+  await page.evaluate(() => {
+    const testWindow = window as Window & { __miruOptionalFontLoadFailures?: string[] }
+    testWindow.__miruOptionalFontLoadFailures = ['lxgw-wenkai']
+  })
+
+  await page.getByTestId('reading-settings-button').click()
+  await page.getByRole('radio', { name: '正文字体 霞鹜文楷' }).click()
+  await page.getByTestId('optional-font-download-accept').click()
+
+  await expect(page.getByTestId('optional-font-download-confirm')).toBeVisible()
+  await expect(page.getByText('字体加载失败,请检查网络后重试。')).toBeVisible()
+  await expect.poll(() => readInlineReadingTokens(page)).toMatchObject({
+    fontBody: '',
+  })
+
+  const persistedSettings = await page.evaluate(() => JSON.parse(localStorage.getItem('miru:reading-settings:v1') ?? '{}'))
+  const confirmedFonts = await page.evaluate(() => JSON.parse(localStorage.getItem('miru:confirmed-optional-fonts:v1') ?? '[]'))
+
+  expect(persistedSettings.tokenOverrides?.['--reading-font-body']).toBeUndefined()
+  expect(confirmedFonts).not.toContain('lxgw-wenkai')
+})
+
 test('uploads, persists, and safely deletes local reading fonts without third-party requests', async ({ page }) => {
   const requestHosts = new Set<string>()
   page.on('request', (request) => {
