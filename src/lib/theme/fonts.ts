@@ -35,6 +35,17 @@ const optionalFontFaces = {
       },
     },
   ],
+  'lxgw-wenkai': [
+    {
+      family: 'LXGW WenKai',
+      source: 'url("/fonts/optional/lxgw-wenkai-300-normal.woff2") format("woff2")',
+      descriptors: {
+        display: 'swap',
+        style: 'normal',
+        weight: '300',
+      },
+    },
+  ],
   atkinson: [
     {
       family: 'Atkinson Hyperlegible',

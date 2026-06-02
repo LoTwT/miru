@@ -221,6 +221,7 @@ describe('reading customization settings', () => {
     const optionIds = readingFontFamilyOptions.map(option => option.id)
 
     expect(optionIds).toContain('literata')
+    expect(optionIds).toContain('lxgw-wenkai')
     expect(optionIds).toContain('atkinson')
 
     const settings = useReadingSettings({ root, storage })
@@ -238,6 +239,24 @@ describe('reading customization settings', () => {
     const restored = useReadingSettings({ root: document.createElement('html'), storage })
 
     expect(restored.state.fontFamily).toBe('literata')
+  })
+
+  it('offers LXGW WenKai as an optional Chinese font and restores it from token overrides', () => {
+    const settings = useReadingSettings({ root, storage })
+
+    settings.updateFontFamily('lxgw-wenkai')
+
+    expect(root.style.getPropertyValue('--reading-font-body')).toContain('"LXGW WenKai"')
+    expect(root.style.getPropertyValue('--reading-font-body')).toContain('"Songti SC"')
+
+    const persisted = readPersistedReadingSettings(storage)
+
+    expect(persisted?.fontFamily).toBeUndefined()
+    expect(persisted?.tokenOverrides?.['--reading-font-body']).toContain('"LXGW WenKai"')
+
+    const restored = useReadingSettings({ root: document.createElement('html'), storage })
+
+    expect(restored.state.fontFamily).toBe('lxgw-wenkai')
   })
 
   it('reset clears customization overrides without losing remote image mode', () => {

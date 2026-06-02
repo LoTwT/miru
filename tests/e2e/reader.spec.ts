@@ -1520,6 +1520,8 @@ test('loads curated optional reading fonts only after selection', async ({ page 
       optionalFontRequests.push(pathname)
     }
   })
+  const previewFontRequests = () => optionalFontRequests.filter(pathname => pathname.includes('preview'))
+  const fullFontRequests = () => optionalFontRequests.filter(pathname => !pathname.includes('preview') && !pathname.includes('LICENSES'))
 
   await page.goto('/')
   await expect(page.getByRole('heading', { name: 'miru' })).toBeVisible()
@@ -1527,12 +1529,15 @@ test('loads curated optional reading fonts only after selection', async ({ page 
 
   await page.getByTestId('reading-settings-button').click()
   await expect(page.getByRole('radio', { name: '正文字体 Literata' })).toBeVisible()
+  await expect(page.getByRole('radio', { name: '正文字体 霞鹜文楷' })).toBeVisible()
   await expect(page.getByRole('radio', { name: '正文字体 Atkinson Hyperlegible' })).toBeVisible()
-  expect(optionalFontRequests).toHaveLength(0)
+  await expect.poll(() => previewFontRequests().length).toBeGreaterThanOrEqual(3)
+  expect(fullFontRequests()).toHaveLength(0)
 
   await page.getByRole('radio', { name: '正文字体 Atkinson Hyperlegible' }).click()
-  await expect.poll(() => optionalFontRequests.filter(pathname => pathname.includes('atkinson-hyperlegible')).length).toBeGreaterThanOrEqual(2)
-  expect(optionalFontRequests.some(pathname => pathname.includes('literata'))).toBe(false)
+  await expect.poll(() => fullFontRequests().filter(pathname => pathname.includes('atkinson-hyperlegible')).length).toBeGreaterThanOrEqual(2)
+  expect(fullFontRequests().some(pathname => pathname.includes('literata'))).toBe(false)
+  expect(fullFontRequests().some(pathname => pathname.includes('lxgw-wenkai'))).toBe(false)
 
   await expect.poll(() => readInlineReadingTokens(page)).toMatchObject({
     fontBody: '"Atkinson Hyperlegible", -apple-system, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif',
@@ -1541,6 +1546,49 @@ test('loads curated optional reading fonts only after selection', async ({ page 
   const persisted = await page.evaluate(() => JSON.parse(localStorage.getItem('miru:reading-settings:v1') ?? '{}'))
   expect(persisted.fontFamily).toBeUndefined()
   expect(persisted.tokenOverrides['--reading-font-body']).toContain('"Atkinson Hyperlegible"')
+})
+
+test('confirms the LXGW WenKai large optional font before loading the full package', async ({ page }) => {
+  const optionalFontRequests: string[] = []
+  page.on('request', (request) => {
+    const pathname = new URL(request.url()).pathname
+    if (pathname.startsWith('/fonts/optional/')) {
+      optionalFontRequests.push(pathname)
+    }
+  })
+  const fullFontRequests = () => optionalFontRequests.filter(pathname => !pathname.includes('preview') && !pathname.includes('LICENSES'))
+
+  await page.goto('/')
+  await page.getByTestId('reading-settings-button').click()
+  await expect(page.getByRole('radio', { name: '正文字体 霞鹜文楷' })).toBeVisible()
+  expect(fullFontRequests()).toHaveLength(0)
+
+  await page.getByRole('radio', { name: '正文字体 霞鹜文楷' }).click()
+  await expect(page.getByTestId('optional-font-download-confirm')).toContainText('约 8.8MB')
+  expect(fullFontRequests()).toHaveLength(0)
+
+  await page.getByRole('button', { name: '取消' }).click()
+  await expect(page.getByTestId('optional-font-download-confirm')).toHaveCount(0)
+  expect(fullFontRequests()).toHaveLength(0)
+
+  await page.getByRole('radio', { name: '正文字体 霞鹜文楷' }).click()
+  await page.getByTestId('optional-font-download-accept').click()
+  await expect.poll(() => fullFontRequests().filter(pathname => pathname.includes('lxgw-wenkai-300-normal')).length).toBe(1)
+
+  await expect.poll(() => readInlineReadingTokens(page)).toMatchObject({
+    fontBody: '"LXGW WenKai", "Songti SC", "Noto Serif CJK SC", serif',
+  })
+
+  const persistedSettings = await page.evaluate(() => JSON.parse(localStorage.getItem('miru:reading-settings:v1') ?? '{}'))
+  const confirmedFonts = await page.evaluate(() => JSON.parse(localStorage.getItem('miru:confirmed-optional-fonts:v1') ?? '[]'))
+
+  expect(persistedSettings.fontFamily).toBeUndefined()
+  expect(persistedSettings.tokenOverrides['--reading-font-body']).toContain('"LXGW WenKai"')
+  expect(confirmedFonts).toContain('lxgw-wenkai')
+
+  await page.getByRole('radio', { name: '正文字体 Newsreader' }).click()
+  await page.getByRole('radio', { name: '正文字体 霞鹜文楷' }).click()
+  await expect(page.getByTestId('optional-font-download-confirm')).toHaveCount(0)
 })
 
 test('uploads, persists, and safely deletes local reading fonts without third-party requests', async ({ page }) => {

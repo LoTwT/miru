@@ -36,6 +36,33 @@ Literata-Italic[opsz,wght].ttf: Copyright 2017 The Literata Project Authors
 
 License: SIL Open Font License, Version 1.1.
 
+LXGW WenKai
+-----------
+
+Source package: @fontsource/lxgw-wenkai@5.2.5
+Source project: https://github.com/fontsource/font-files
+Upstream source: https://github.com/lxgw/LxgwWenKai
+Files:
+- lxgw-wenkai-300-normal.woff2
+- lxgw-wenkai-preview-normal.woff2
+
+Copyright 2021-2023 LXGW (https://github.com/lxgw/LxgwWenKai)
+Copyright 2020 The Klee Project Authors (https://github.com/fontworks-fonts/Klee)
+
+License: SIL Open Font License, Version 1.1.
+
+Preview subsets
+---------------
+
+Files:
+- literata-preview-normal.woff2
+- atkinson-hyperlegible-preview-normal.woff2
+- lxgw-wenkai-preview-normal.woff2
+
+These preview files are tiny subsets generated from the corresponding
+source font files above. They keep the same copyright notices and SIL
+Open Font License terms as their source fonts.
+
 
 -----------------------------------------------------------
 SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007

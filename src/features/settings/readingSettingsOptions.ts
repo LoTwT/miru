@@ -7,7 +7,7 @@ export type ReadingLineHeightId = '1.5' | '1.7' | '1.9'
 export type ReadingLetterSpacingId = 'tight' | 'standard' | 'loose'
 export type ReadingParagraphGapId = 'compact' | 'standard' | 'loose'
 export type ReadingPageMarginId = 'compact' | 'standard' | 'spacious'
-export type ReadingBuiltInFontFamilyId = 'serif' | 'literata' | 'atkinson' | 'system-serif' | 'system-sans' | 'mono'
+export type ReadingBuiltInFontFamilyId = 'serif' | 'literata' | 'lxgw-wenkai' | 'atkinson' | 'system-serif' | 'system-sans' | 'mono'
 export type ReadingLocalFontFamilyId = `local:${string}`
 export type ReadingFontFamilyId = ReadingBuiltInFontFamilyId | ReadingLocalFontFamilyId
 export type ReadingThemeChoice = 'system' | 'light' | 'dark' | 'sepia' | 'custom'
@@ -20,6 +20,12 @@ export interface ReadingSettingOption<T extends string> {
   label: string
   ariaLabel: string
   tokenValue: string
+  badge?: string
+  confirmDownload?: {
+    message: string
+    sizeLabel: string
+  }
+  previewTokenValue?: string
 }
 
 export interface ReadingCustomThemeState {
@@ -43,6 +49,7 @@ export const defaultCustomTheme = {
 
 export const serifFontStack = '"Newsreader", Georgia, "Songti SC", "Noto Serif CJK SC", serif'
 export const literataFontStack = '"Literata Variable", "Newsreader", Georgia, "Songti SC", "Noto Serif CJK SC", serif'
+export const lxgwWenkaiFontStack = '"LXGW WenKai", "Songti SC", "Noto Serif CJK SC", serif'
 export const atkinsonFontStack = '"Atkinson Hyperlegible", -apple-system, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif'
 export const systemSerifFontStack = 'Georgia, "Songti SC", "Noto Serif CJK SC", serif'
 export const systemSansFontStack = '-apple-system, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif'
@@ -92,12 +99,46 @@ export const readingPageMarginOptions = [
 
 export const readingFontFamilyOptions = [
   { id: 'serif', label: 'Newsreader', ariaLabel: '正文字体 Newsreader', tokenValue: serifFontStack },
-  { id: 'literata', label: 'Literata', ariaLabel: '正文字体 Literata', tokenValue: literataFontStack },
-  { id: 'atkinson', label: 'Atkinson', ariaLabel: '正文字体 Atkinson Hyperlegible', tokenValue: atkinsonFontStack },
+  {
+    id: 'literata',
+    label: 'Literata',
+    ariaLabel: '正文字体 Literata',
+    tokenValue: literataFontStack,
+    previewTokenValue: '"Literata Preview", "Newsreader", Georgia, serif',
+  },
+  {
+    id: 'lxgw-wenkai',
+    label: '霞鹜文楷',
+    ariaLabel: '正文字体 霞鹜文楷',
+    tokenValue: lxgwWenkaiFontStack,
+    previewTokenValue: '"LXGW WenKai Preview", "Songti SC", "Noto Serif CJK SC", serif',
+    badge: '大字体',
+    confirmDownload: {
+      message: '霞鹜文楷是中文大字体,首次启用会从本站下载约 8.8MB 到本机缓存。字体不会上传,也不会进入离线预缓存。',
+      sizeLabel: '约 8.8MB',
+    },
+  },
+  {
+    id: 'atkinson',
+    label: 'Atkinson',
+    ariaLabel: '正文字体 Atkinson Hyperlegible',
+    tokenValue: atkinsonFontStack,
+    previewTokenValue: '"Atkinson Hyperlegible Preview", -apple-system, "Segoe UI", sans-serif',
+  },
   { id: 'system-serif', label: '系统衬线', ariaLabel: '正文字体 系统衬线', tokenValue: systemSerifFontStack },
   { id: 'system-sans', label: '系统无衬线', ariaLabel: '正文字体 系统无衬线', tokenValue: systemSansFontStack },
   { id: 'mono', label: 'Space Mono', ariaLabel: '正文字体 Space Mono', tokenValue: monoFontStack },
 ] as const satisfies readonly ReadingSettingOption<ReadingBuiltInFontFamilyId>[]
+
+export const confirmedOptionalFontStorageKey = 'miru:confirmed-optional-fonts:v1'
+
+export function getReadingFontFamilyOption(value: ReadingFontFamilyId): ReadingSettingOption<ReadingBuiltInFontFamilyId> | undefined {
+  return readingFontFamilyOptions.find(option => option.id === value)
+}
+
+export function requiresReadingFontDownloadConfirmation(value: ReadingFontFamilyId): boolean {
+  return Boolean(getReadingFontFamilyOption(value)?.confirmDownload)
+}
 
 export const readingThemeOptions = [
   { id: 'system', label: '跟随系统', ariaLabel: '主题 跟随系统' },
