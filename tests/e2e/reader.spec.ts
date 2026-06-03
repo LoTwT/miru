@@ -1161,6 +1161,100 @@ test('shows quiet outline navigation only for heading-rich documents', async ({ 
   }
 })
 
+test('keeps long outline navigation scrollable without dragging reader content', async ({ page }) => {
+  const longOutlineMarkdown = [
+    '# Long outline',
+    '',
+    'Start.',
+    '',
+    ...Array.from({ length: 36 }, (_, index) => [
+      `## Outline section ${String(index + 1).padStart(2, '0')}`,
+      '',
+      `Section ${index + 1} body.`,
+      '',
+    ].join('\n')),
+    '## Final outline stop',
+    '',
+    'End.',
+  ].join('\n')
+
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto('/')
+  await pasteText(page, longOutlineMarkdown)
+  await expect(page.getByTestId('reader-outline-rail')).toBeVisible()
+
+  const desktopScrollMetrics = await page.evaluate(() => {
+    const scrollBox = document.querySelector<HTMLElement>('[data-testid="reader-outline-scroll"]')
+      ?? document.querySelector<HTMLElement>('[data-testid="reader-outline-rail"]')
+
+    if (!scrollBox) {
+      return { clientHeight: 0, scrollHeight: 0, scrollTop: 0 }
+    }
+
+    scrollBox.scrollTop = scrollBox.scrollHeight
+
+    return {
+      clientHeight: Math.round(scrollBox.clientHeight),
+      scrollHeight: Math.round(scrollBox.scrollHeight),
+      scrollTop: Math.round(scrollBox.scrollTop),
+    }
+  })
+
+  expect(desktopScrollMetrics.scrollHeight).toBeGreaterThan(desktopScrollMetrics.clientHeight)
+  expect(desktopScrollMetrics.scrollTop).toBeGreaterThan(0)
+  await expect(page.getByTestId('reader-outline').getByRole('link', { name: 'Final outline stop' })).toBeInViewport()
+
+  await page.evaluate(() => window.scrollTo(0, 480))
+  const desktopReaderScrollBefore = await page.evaluate(() => Math.round(window.scrollY))
+  await page.evaluate(() => {
+    const scrollBox = document.querySelector<HTMLElement>('[data-testid="reader-outline-scroll"]')
+      ?? document.querySelector<HTMLElement>('[data-testid="reader-outline-rail"]')
+    if (scrollBox) {
+      scrollBox.scrollTop = 0
+    }
+  })
+  await page.getByTestId('reader-outline-rail').hover()
+  await page.mouse.wheel(0, 720)
+  await expect.poll(() => page.evaluate(() => Math.round(window.scrollY))).toBe(desktopReaderScrollBefore)
+
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.reload()
+  await pasteText(page, longOutlineMarkdown)
+  await expect(page.getByRole('heading', { name: 'Long outline' })).toBeVisible()
+  const mobileReaderScrollBefore = await page.evaluate(() => Math.round(window.scrollY))
+
+  await page.getByTestId('reader-outline-button').click()
+  const panel = page.getByTestId('reader-outline-panel')
+  await expect(panel).toBeVisible()
+  await expect.poll(() => page.evaluate(() => getComputedStyle(document.body).position)).toBe('fixed')
+  await expect.poll(() => page.evaluate(() => document.body.style.top)).toBe(`-${mobileReaderScrollBefore}px`)
+
+  const mobileScrollMetrics = await page.evaluate(() => {
+    const scrollBox = document.querySelector<HTMLElement>('[data-testid="reader-outline-scroll"]')
+      ?? document.querySelector<HTMLElement>('[data-testid="reader-outline-panel"]')
+
+    if (!scrollBox) {
+      return { clientHeight: 0, scrollHeight: 0, scrollTop: 0 }
+    }
+
+    scrollBox.scrollTop = scrollBox.scrollHeight
+
+    return {
+      clientHeight: Math.round(scrollBox.clientHeight),
+      scrollHeight: Math.round(scrollBox.scrollHeight),
+      scrollTop: Math.round(scrollBox.scrollTop),
+    }
+  })
+
+  expect(mobileScrollMetrics.scrollHeight).toBeGreaterThan(mobileScrollMetrics.clientHeight)
+  expect(mobileScrollMetrics.scrollTop).toBeGreaterThan(0)
+  await expect(panel.getByRole('link', { name: 'Final outline stop' })).toBeInViewport()
+
+  await page.mouse.wheel(0, 720)
+  await expect.poll(() => page.evaluate(() => document.body.style.top)).toBe(`-${mobileReaderScrollBefore}px`)
+  await expect.poll(() => page.evaluate(() => Math.round(window.scrollY))).toBe(0)
+})
+
 test('navigates from the outline and expands a collapsed parent section first', async ({ page }) => {
   await page.goto('/')
 
