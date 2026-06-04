@@ -13,6 +13,7 @@ import type {
   PdfReadingPosition,
   ReadingPosition,
   UpdateLibraryEntryInput,
+  UrlLibrarySource,
 } from './types'
 
 export const libraryDatabaseName = 'miru:library:v1'
@@ -110,6 +111,15 @@ export function createLibraryStore(options: LibraryStoreOptions = {}) {
 
   async function addMarkdownDocument(input: AddMarkdownDocumentInput): Promise<LibraryEntry> {
     const byteSize = byteSizeOfText(input.markdown)
+    const contentHash = hashText(input.markdown)
+    const existingEntries = input.source.kind === 'url'
+      ? await findMarkdownEntriesByUrl(input.source)
+      : []
+
+    if (existingEntries.length > 0) {
+      return await updateExistingMarkdownDocument(input, existingEntries, byteSize, contentHash)
+    }
+
     await ensureStorageBudget(byteSize)
 
     const id = createId()
@@ -126,6 +136,7 @@ export function createLibraryStore(options: LibraryStoreOptions = {}) {
       lastOpenedAt: timestamp,
       pinned: false,
       byteSize,
+      contentHash,
       schemaVersion: 1,
     }
 
@@ -138,6 +149,72 @@ export function createLibraryStore(options: LibraryStoreOptions = {}) {
     ])
 
     return entry
+  }
+
+  async function findMarkdownEntryByUrl(source: UrlLibrarySource): Promise<LibraryEntry | null> {
+    return selectCanonicalUrlEntry(await findMarkdownEntriesByUrl(source))
+  }
+
+  async function isMarkdownContentChanged(id: string, markdown: string): Promise<boolean> {
+    const db = await getDb()
+    const body = await db.get('markdownBodies', id)
+    return body?.markdown !== markdown
+  }
+
+  async function updateExistingMarkdownDocument(
+    input: AddMarkdownDocumentInput,
+    matchingEntries: LibraryEntry[],
+    byteSize: number,
+    contentHash: string,
+  ): Promise<LibraryEntry> {
+    const existingEntry = selectCanonicalUrlEntry(matchingEntries)
+
+    if (!existingEntry) {
+      throw new LibraryEntryNotFoundError('url-match')
+    }
+
+    const db = await getDb()
+    const previousBody = await db.get('markdownBodies', existingEntry.id)
+    const contentChanged = previousBody?.markdown !== input.markdown
+    const additionalBytes = Math.max(0, byteSize - existingEntry.byteSize)
+    if (additionalBytes > 0) {
+      await ensureStorageBudget(additionalBytes)
+    }
+
+    const title = resolveUpdatedMarkdownTitle(existingEntry, previousBody?.markdown ?? '', input)
+    const timestamp = now()
+    const nextEntry: LibraryEntry = {
+      ...existingEntry,
+      title,
+      sortTitle: normalizeSortTitle(title),
+      source: input.source,
+      updatedAt: timestamp,
+      lastOpenedAt: timestamp,
+      byteSize,
+      contentHash,
+    }
+    const duplicateEntries = matchingEntries.filter(entry => entry.id !== existingEntry.id)
+
+    const tx = db.transaction(['entries', 'markdownBodies', 'positions'], 'readwrite')
+    const entriesStore = tx.objectStore('entries')
+    const markdownBodiesStore = tx.objectStore('markdownBodies')
+    const positionsStore = tx.objectStore('positions')
+    const operations: Promise<unknown>[] = [
+      entriesStore.put(nextEntry),
+      markdownBodiesStore.put({ documentId: existingEntry.id, markdown: input.markdown }),
+      ...duplicateEntries.flatMap(entry => [
+        entriesStore.delete(entry.id),
+        markdownBodiesStore.delete(entry.id),
+        positionsStore.delete(entry.id),
+      ]),
+    ]
+
+    if (contentChanged) {
+      operations.push(positionsStore.delete(existingEntry.id))
+    }
+
+    await Promise.all([...operations, tx.done])
+    return nextEntry
   }
 
   async function addPdfDocument(input: AddPdfDocumentInput): Promise<LibraryEntry> {
@@ -311,6 +388,19 @@ export function createLibraryStore(options: LibraryStoreOptions = {}) {
     return nextEntry
   }
 
+  async function findMarkdownEntriesByUrl(source: UrlLibrarySource): Promise<LibraryEntry[]> {
+    const db = await getDb()
+    const entries = await db.getAll('entries')
+    return entries.filter(entry =>
+      entry.type === 'markdown'
+      && entry.source.kind === 'url'
+      && (
+        entry.source.inputUrl === source.inputUrl
+        || entry.source.requestUrl === source.requestUrl
+      ),
+    )
+  }
+
   async function ensureStorageBudget(incomingBytes: number): Promise<void> {
     const estimate = await estimateStorage()
 
@@ -331,7 +421,9 @@ export function createLibraryStore(options: LibraryStoreOptions = {}) {
     close,
     countStoreEntries,
     deleteEntry,
+    findMarkdownEntryByUrl,
     getReadingPosition,
+    isMarkdownContentChanged,
     listEntries,
     openMarkdownDocument,
     openPdfDocument,
@@ -364,6 +456,35 @@ export function sortLibraryEntries(entries: LibraryEntry[], sortMode: LibrarySor
 
 function compareDateDesc(left: string, right: string): number {
   return right.localeCompare(left)
+}
+
+function selectCanonicalUrlEntry(entries: LibraryEntry[]): LibraryEntry | null {
+  if (entries.length === 0) {
+    return null
+  }
+
+  return [...entries].sort((left, right) => {
+    if (left.pinned !== right.pinned) {
+      return left.pinned ? -1 : 1
+    }
+
+    return compareDateDesc(left.lastOpenedAt ?? left.updatedAt, right.lastOpenedAt ?? right.updatedAt)
+  })[0] ?? null
+}
+
+function resolveUpdatedMarkdownTitle(existingEntry: LibraryEntry, previousMarkdown: string, input: AddMarkdownDocumentInput): string {
+  if (input.title !== undefined) {
+    return normalizeTitle(input.title)
+  }
+
+  const nextTitle = normalizeTitle(deriveMarkdownTitle(input.markdown, input.label, input.source))
+  const previousTitle = normalizeTitle(deriveMarkdownTitle(
+    previousMarkdown,
+    existingEntry.source.kind === 'url' ? existingEntry.source.inputUrl : undefined,
+    existingEntry.source,
+  ))
+
+  return existingEntry.title === previousTitle ? nextTitle : existingEntry.title
 }
 
 function deriveMarkdownTitle(markdown: string, label?: string, source?: AddMarkdownDocumentInput['source']): string {
@@ -461,6 +582,17 @@ function stripFileExtension(fileName: string): string | null {
 
 function byteSizeOfText(text: string): number {
   return new Blob([text]).size
+}
+
+function hashText(value: string): string {
+  let hash = 0x811C9DC5
+
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, 0x01000193)
+  }
+
+  return `fnv1a-${(hash >>> 0).toString(16).padStart(8, '0')}`
 }
 
 function createDocumentId(): string {

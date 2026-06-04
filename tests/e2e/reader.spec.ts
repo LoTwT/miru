@@ -805,6 +805,67 @@ test('uses a clean display title for URL imports without leaking the full URL in
   await expect(page.getByTestId('library-entry').filter({ hasText: 'https://example.com/guides/daily-note.md' })).toHaveCount(0)
 })
 
+test('prompts to update repeated URL imports and clears the library from the toolbar', async ({ page }) => {
+  let fetchCount = 0
+  await page.route('https://example.com/library/fresh.md', async (route) => {
+    fetchCount += 1
+    await route.fulfill({
+      contentType: 'text/markdown',
+      headers: { 'Cache-Control': 'public, max-age=3600' },
+      body: fetchCount === 1
+        ? '# Remote Note\n\nOld content.'
+        : '# Remote Note\n\nUpdated content.',
+    })
+  })
+
+  await page.goto('/')
+
+  await page.getByTestId('floating-affordance-button').click()
+  await page.getByLabel('URL').fill('https://example.com/library/fresh.md')
+  await page.getByRole('button', { name: '拉取' }).click()
+  await expect(page.getByRole('heading', { name: 'Remote Note' })).toBeVisible()
+  await expect(page.getByText('Old content.')).toBeVisible()
+  await page.getByTestId('floating-affordance-button').click()
+  await page.getByRole('button', { name: '书签此处' }).click()
+  await expect.poll(() => page.evaluate(() => {
+    const raw = localStorage.getItem('miru:reader-bookmarks:v1')
+    return raw ? JSON.parse(raw).length : 0
+  })).toBe(1)
+
+  await page.getByTestId('floating-affordance-button').click()
+  await page.getByLabel('URL').fill('https://example.com/library/fresh.md')
+  await page.getByRole('button', { name: '拉取' }).click()
+
+  const conflict = page.getByTestId('url-import-conflict')
+  await expect(conflict).toBeVisible()
+  await expect(conflict).toContainText('该链接已在文库中')
+  await expect(conflict).toContainText('Remote Note')
+  await expect(page.getByText('Updated content.')).toHaveCount(0)
+  expect(fetchCount).toBe(2)
+
+  await page.getByRole('button', { name: '更新到最新' }).click()
+  await expect(page.getByText('Updated content.')).toBeVisible()
+  await expect(page.getByTestId('floating-affordance-menu')).not.toBeVisible()
+  await expect.poll(() => page.evaluate(() => {
+    const raw = localStorage.getItem('miru:reader-bookmarks:v1')
+    return raw ? JSON.parse(raw).length : 0
+  })).toBe(0)
+
+  await page.getByTestId('library-open-button').click()
+  await expect(page.getByTestId('library-entry').filter({ hasText: 'Remote Note' })).toHaveCount(1)
+  await page.getByTestId('library-management-button').click()
+  await page.getByTestId('library-clear-button').click()
+  const clearDialog = page.getByRole('dialog', { name: '清空文库?' })
+  await expect(clearDialog).toBeVisible()
+  await expect(page.getByText('将删除全部 1 篇文档')).toBeVisible()
+  await expect(page.getByText('不影响你的阅读设置、字体/主题、示例文档入口。')).toBeVisible()
+  await clearDialog.getByRole('button', { name: '清空全部' }).click()
+
+  await expect(page.getByTestId('library-entry')).toHaveCount(0)
+  await expect(page.getByTestId('library-empty')).toBeVisible()
+  await expect(page.getByRole('button', { name: '回到示例文档' })).toBeVisible()
+})
+
 test('auto-fetches a bare URL pasted into the reader', async ({ page }) => {
   await page.route('https://example.com/readme.md', async route => route.fulfill({
     contentType: 'text/markdown',
