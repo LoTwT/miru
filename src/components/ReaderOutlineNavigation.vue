@@ -33,20 +33,83 @@ const rootRef = useTemplateRef<HTMLElement>('root')
 const panelRef = useTemplateRef<HTMLElement>('panel')
 
 let lastScrollY = 0
+let outlineAutoRevealPausedUntil = 0
 let recedeTimer: ReturnType<typeof setTimeout> | undefined
 let mediaQuery: MediaQueryList | undefined
+
+const OUTLINE_AUTO_REVEAL_PAUSE_MS = 1000
 
 const hasOutline = computed(() => props.items.length > 0)
 const hasBookmarks = computed(() => props.bookmarks.length > 0)
 const hasNavigation = computed(() => hasOutline.value || hasBookmarks.value)
 
-function focusFirstOutlineItem(): void {
+function isRenderedElement(element: HTMLElement): boolean {
+  return element.getClientRects().length > 0
+}
+
+function findActiveOutlineItem(): HTMLElement | undefined {
+  if (!props.activeId) {
+    return undefined
+  }
+
+  const items = rootRef.value?.querySelectorAll<HTMLElement>('[data-outline-item]')
+  return Array.from(items ?? []).find(item => item.dataset.outlineId === props.activeId && isRenderedElement(item))
+}
+
+function focusInitialOutlineItem(): void {
   window.setTimeout(() => {
-    const item = panelRef.value?.querySelector<HTMLElement>('[data-outline-item]')
-    if (item && item.offsetParent !== null) {
-      item.focus()
+    const item = findActiveOutlineItem() ?? panelRef.value?.querySelector<HTMLElement>('[data-outline-item]')
+    if (item && isRenderedElement(item)) {
+      item.focus({ preventScroll: true })
     }
   }, 0)
+}
+
+function pauseOutlineAutoReveal(): void {
+  outlineAutoRevealPausedUntil = Date.now() + OUTLINE_AUTO_REVEAL_PAUSE_MS
+}
+
+function revealActiveOutlineItem(options: { force?: boolean } = {}): void {
+  if (!props.activeId || (props.mode === 'sheet' && !props.isOpen)) {
+    return
+  }
+
+  if (!options.force) {
+    const isPaused = Date.now() < outlineAutoRevealPausedUntil
+    if (isPaused || isHovering.value || isFocusWithin.value) {
+      return
+    }
+  }
+
+  const scrollBox = rootRef.value?.querySelector<HTMLElement>('[data-testid="reader-outline-scroll"]')
+  const item = findActiveOutlineItem()
+  if (!scrollBox || !item || scrollBox.clientHeight <= 0) {
+    return
+  }
+
+  const scrollRect = scrollBox.getBoundingClientRect()
+  const itemRect = item.getBoundingClientRect()
+  const comfort = Math.min(Math.max(itemRect.height, 36), scrollBox.clientHeight * 0.24)
+  const visibleTop = scrollRect.top + comfort
+  const visibleBottom = scrollRect.bottom - comfort
+
+  let nextScrollTop: number | undefined
+  if (itemRect.top < visibleTop) {
+    nextScrollTop = scrollBox.scrollTop + itemRect.top - visibleTop
+  }
+  else if (itemRect.bottom > visibleBottom) {
+    nextScrollTop = scrollBox.scrollTop + itemRect.bottom - visibleBottom
+  }
+
+  if (nextScrollTop === undefined) {
+    return
+  }
+
+  const maxScrollTop = Math.max(0, scrollBox.scrollHeight - scrollBox.clientHeight)
+  scrollBox.scrollTo({
+    top: Math.min(Math.max(nextScrollTop, 0), maxScrollTop),
+    behavior: prefersReducedMotion.value ? 'auto' : 'smooth',
+  })
 }
 
 function navigateTo(id: string): void {
@@ -136,9 +199,19 @@ watch(() => props.isOpen, async (value) => {
   if (value && props.mode === 'sheet') {
     isReceded.value = false
     await nextTick()
-    focusFirstOutlineItem()
+    revealActiveOutlineItem({ force: true })
+    focusInitialOutlineItem()
   }
 })
+
+watch(
+  () => [props.activeId, props.isOpen, props.items.length, props.mode] as const,
+  async () => {
+    await nextTick()
+    revealActiveOutlineItem()
+  },
+  { flush: 'post' },
+)
 
 onMounted(() => {
   mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
@@ -146,7 +219,10 @@ onMounted(() => {
   lastScrollY = window.scrollY
 
   if (props.mode === 'sheet' && props.isOpen) {
-    focusFirstOutlineItem()
+    void nextTick(() => {
+      revealActiveOutlineItem({ force: true })
+      focusInitialOutlineItem()
+    })
   }
 
   mediaQuery.addEventListener('change', syncReducedMotion)
@@ -187,7 +263,14 @@ onUnmounted(() => {
       <p class="reader-outline__label">
         文档大纲
       </p>
-      <div class="reader-outline__scroll" data-testid="reader-outline-scroll">
+      <div
+        class="reader-outline__scroll"
+        data-testid="reader-outline-scroll"
+        @keydown="pauseOutlineAutoReveal"
+        @pointerdown="pauseOutlineAutoReveal"
+        @touchstart.passive="pauseOutlineAutoReveal"
+        @wheel.passive="pauseOutlineAutoReveal"
+      >
         <ol v-if="hasOutline" class="reader-outline__list">
           <li v-for="item in props.items" :key="item.id" class="reader-outline__list-item">
             <div class="reader-outline__item-row">
@@ -196,6 +279,7 @@ onUnmounted(() => {
                 :href="`#${item.id}`"
                 :aria-current="props.activeId === item.id ? 'location' : undefined"
                 data-outline-item
+                :data-outline-id="item.id"
                 @click.prevent="navigateTo(item.id)"
               >
                 <span class="reader-outline__tick" aria-hidden="true" />
@@ -266,7 +350,14 @@ onUnmounted(() => {
         </button>
       </header>
 
-      <div class="reader-outline__scroll reader-outline__scroll--sheet" data-testid="reader-outline-scroll">
+      <div
+        class="reader-outline__scroll reader-outline__scroll--sheet"
+        data-testid="reader-outline-scroll"
+        @keydown="pauseOutlineAutoReveal"
+        @pointerdown="pauseOutlineAutoReveal"
+        @touchstart.passive="pauseOutlineAutoReveal"
+        @wheel.passive="pauseOutlineAutoReveal"
+      >
         <ol v-if="hasOutline" class="reader-outline__sheet-list">
           <li v-for="item in props.items" :key="item.id" class="reader-outline__list-item">
             <div class="reader-outline__item-row">
@@ -275,6 +366,7 @@ onUnmounted(() => {
                 :href="`#${item.id}`"
                 :aria-current="props.activeId === item.id ? 'location' : undefined"
                 data-outline-item
+                :data-outline-id="item.id"
                 @click.prevent="navigateTo(item.id)"
               >
                 <span class="reader-outline__tick" aria-hidden="true" />
@@ -464,6 +556,7 @@ onUnmounted(() => {
   grid-template-columns: 0.42rem minmax(0, 1fr);
   gap: 0.48rem;
   align-items: center;
+  scroll-margin-block: 40px;
   min-block-size: 36px;
   border-radius: 10px;
   color: var(--reading-fg-muted);

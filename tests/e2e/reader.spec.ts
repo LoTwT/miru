@@ -1255,6 +1255,62 @@ test('keeps long outline navigation scrollable without dragging reader content',
   await expect.poll(() => page.evaluate(() => Math.round(window.scrollY))).toBe(0)
 })
 
+test('keeps the active outline item visible while the reader scrolls', async ({ page }) => {
+  const autoRevealMarkdown = [
+    '# Active outline reveal',
+    '',
+    'Start.',
+    '',
+    ...Array.from({ length: 28 }, (_, index) => [
+      `## Follow section ${String(index + 1).padStart(2, '0')}`,
+      '',
+      Array.from({ length: 8 }, (_, paragraphIndex) =>
+        `Paragraph ${index + 1}.${paragraphIndex + 1} keeps this section tall enough for scroll-spy.`,
+      ).join('\n\n'),
+      '',
+    ].join('\n')),
+  ].join('\n')
+
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto('/')
+  await pasteText(page, autoRevealMarkdown)
+  await expect(page.getByTestId('reader-outline-rail')).toBeVisible()
+
+  await scrollHeadingNearTop(page, 'Follow section 24')
+  await expect.poll(async () => {
+    const state = await readOutlineItemState(page, 'Follow section 24')
+    return Boolean(state?.isCurrent && state.isInsideScrollBox && state.scrollTop > 0)
+  }).toBe(true)
+
+  await setOutlineScrollTop(page, 0)
+  await page.getByTestId('reader-outline-rail').hover()
+  const pausedScrollTop = await readOutlineScrollTop(page)
+  await scrollHeadingNearTop(page, 'Follow section 26')
+  await expect.poll(async () => {
+    const state = await readOutlineItemState(page, 'Follow section 26')
+    return Boolean(state?.isCurrent)
+  }).toBe(true)
+  await page.waitForTimeout(260)
+  await expect.poll(() => readOutlineScrollTop(page)).toBe(pausedScrollTop)
+
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/')
+  await pasteText(page, autoRevealMarkdown)
+  await scrollHeadingNearTop(page, 'Follow section 20')
+
+  await page.getByTestId('reader-outline-button').click()
+  const panel = page.getByTestId('reader-outline-panel')
+  await expect(panel).toBeVisible()
+
+  await expect.poll(async () => {
+    const state = await readOutlineItemState(page, 'Follow section 20')
+    return Boolean(state?.isCurrent && state.isInsideScrollBox && state.scrollTop > 0)
+  }).toBe(true)
+  await expect.poll(() =>
+    page.evaluate(() => Boolean(document.querySelector('[data-testid="reader-outline-panel"]')?.contains(document.activeElement))),
+  ).toBe(true)
+})
+
 test('navigates from the outline and expands a collapsed parent section first', async ({ page }) => {
   await page.goto('/')
 
@@ -2392,6 +2448,67 @@ async function pasteText(page: import('@playwright/test').Page, text: string) {
 async function readReadingProgressPercent(page: import('@playwright/test').Page): Promise<number> {
   return page.getByTestId('reading-progress-fill').evaluate((element) => {
     return Number.parseFloat((element as HTMLElement).style.inlineSize || '0')
+  })
+}
+
+async function scrollHeadingNearTop(page: import('@playwright/test').Page, name: string): Promise<void> {
+  await page.getByRole('heading', { name }).evaluate((heading) => {
+    const rect = heading.getBoundingClientRect()
+    window.scrollTo({
+      top: rect.top + window.scrollY - 92,
+      behavior: 'auto',
+    })
+  })
+}
+
+async function readOutlineItemState(page: import('@playwright/test').Page, label: string) {
+  return page.evaluate((targetLabel) => {
+    const scrollBox = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="reader-outline-scroll"]'))
+      .find(element => element.getClientRects().length > 0)
+
+    if (!scrollBox) {
+      return null
+    }
+
+    const item = Array.from(scrollBox.querySelectorAll<HTMLElement>('[data-outline-item]'))
+      .find(element => element.textContent?.trim() === targetLabel)
+
+    if (!item) {
+      return null
+    }
+
+    const scrollRect = scrollBox.getBoundingClientRect()
+    const itemRect = item.getBoundingClientRect()
+
+    return {
+      isCurrent: item.getAttribute('aria-current') === 'location',
+      isInsideScrollBox: itemRect.top >= scrollRect.top - 1 && itemRect.bottom <= scrollRect.bottom + 1,
+      itemBottom: Math.round(itemRect.bottom),
+      itemTop: Math.round(itemRect.top),
+      scrollBottom: Math.round(scrollRect.bottom),
+      scrollTop: Math.round(scrollBox.scrollTop),
+      scrollViewportTop: Math.round(scrollRect.top),
+    }
+  }, label)
+}
+
+async function setOutlineScrollTop(page: import('@playwright/test').Page, scrollTop: number): Promise<void> {
+  await page.evaluate((nextScrollTop) => {
+    const scrollBox = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="reader-outline-scroll"]'))
+      .find(element => element.getClientRects().length > 0)
+
+    if (scrollBox) {
+      scrollBox.scrollTop = nextScrollTop
+    }
+  }, scrollTop)
+}
+
+async function readOutlineScrollTop(page: import('@playwright/test').Page): Promise<number> {
+  return page.evaluate(() => {
+    const scrollBox = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="reader-outline-scroll"]'))
+      .find(element => element.getClientRects().length > 0)
+
+    return Math.round(scrollBox?.scrollTop ?? 0)
   })
 }
 
