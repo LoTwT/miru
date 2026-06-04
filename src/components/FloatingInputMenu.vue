@@ -8,6 +8,10 @@ const props = defineProps<{
   isOpen: boolean
   searchUnavailableText: string
   status: string
+  urlConflict: {
+    domain: string
+    title: string
+  } | null
 }>()
 
 const emit = defineEmits<{
@@ -16,7 +20,9 @@ const emit = defineEmits<{
   paste: []
   openFile: [file: File]
   openLibrary: []
+  openExistingUrl: []
   fetchUrl: [url: string]
+  updateExistingUrl: []
   search: []
   clear: []
   print: []
@@ -227,6 +233,38 @@ onMounted(() => {
       </div>
     </form>
 
+    <div
+      v-if="props.urlConflict"
+      class="floating-input__url-conflict"
+      role="group"
+      aria-label="重复 URL 导入"
+      data-testid="url-import-conflict"
+    >
+      <p>该链接已在文库中</p>
+      <small>
+        {{ props.urlConflict.title }}<template v-if="props.urlConflict.domain"> · {{ props.urlConflict.domain }}</template>
+      </small>
+      <div class="floating-input__url-conflict-actions">
+        <button
+          class="floating-input__url-conflict-button"
+          type="button"
+          data-menu-item
+          @click="emit('openExistingUrl')"
+        >
+          打开已有
+        </button>
+        <button
+          class="floating-input__url-conflict-button floating-input__url-conflict-button--primary"
+          type="button"
+          :disabled="props.isFetchingUrl"
+          data-menu-item
+          @click="emit('updateExistingUrl')"
+        >
+          更新到最新
+        </button>
+      </div>
+    </div>
+
     <button
       class="floating-input__item"
       type="button"
@@ -422,6 +460,58 @@ onMounted(() => {
 .floating-input__fetch:disabled {
   cursor: progress;
   opacity: 0.65;
+}
+
+.floating-input__url-conflict {
+  display: grid;
+  gap: 0.65rem;
+  margin-block: 0 0.55rem;
+  padding: 0.72rem;
+  border: 1px solid color-mix(in srgb, var(--reading-accent) 34%, var(--reading-rule));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--reading-accent) 8%, var(--reading-bg));
+}
+
+.floating-input__url-conflict p,
+.floating-input__url-conflict small {
+  margin: 0;
+}
+
+.floating-input__url-conflict p {
+  color: var(--reading-fg);
+  font-weight: 620;
+}
+
+.floating-input__url-conflict small {
+  color: var(--reading-fg-muted);
+  overflow-wrap: anywhere;
+}
+
+.floating-input__url-conflict-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.floating-input__url-conflict-button {
+  min-block-size: 44px;
+  padding-inline: 0.78rem;
+  border: 1px solid var(--reading-rule);
+  border-radius: 10px;
+  color: var(--reading-fg);
+  background: var(--reading-bg);
+  cursor: pointer;
+  font: inherit;
+}
+
+.floating-input__url-conflict-button:hover,
+.floating-input__url-conflict-button:focus-visible {
+  border-color: var(--reading-accent);
+}
+
+.floating-input__url-conflict-button--primary {
+  border-color: color-mix(in srgb, var(--reading-accent) 62%, transparent);
+  background: color-mix(in srgb, var(--reading-accent) 12%, transparent);
 }
 
 .floating-input__status {

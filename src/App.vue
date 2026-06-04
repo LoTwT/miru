@@ -32,6 +32,11 @@ import type { ReaderOutlineItem } from '@/features/reader/outlineNavigation'
 type AppMode = 'reader' | 'library' | 'pdf'
 type CommandSurfaceId = 'actions' | 'outline' | 'settings'
 
+interface PendingUrlImport {
+  document: ReaderDocument
+  entry: LibraryEntry
+}
+
 const documentState = reactive<ReaderDocument>({
   source: 'sample',
   label: 'miru sample',
@@ -44,6 +49,7 @@ const librarySortMode = shallowRef<LibrarySortMode>('last-opened')
 const activeLibraryEntryId = shallowRef<string | null>(null)
 const libraryStatus = shallowRef('')
 const inputMenuStatus = shallowRef('')
+const pendingUrlImport = shallowRef<PendingUrlImport | null>(null)
 const pendingRestorePosition = shallowRef<MarkdownReadingPosition | null>(null)
 const activePdfDocument = shallowRef<OpenPdfDocumentResult | null>(null)
 const isDragging = shallowRef(false)
@@ -113,6 +119,17 @@ const currentDocumentBookmarks = computed(() =>
     ? readerBookmarks.value.filter(bookmark => bookmark.documentKey === activeBookmarkDocumentKey.value)
     : [],
 )
+const pendingUrlImportConflict = computed(() => {
+  const pending = pendingUrlImport.value
+  if (!pending) {
+    return null
+  }
+
+  return {
+    title: pending.entry.title,
+    domain: pending.entry.source.kind === 'url' ? pending.entry.source.domain : '',
+  }
+})
 const bookmarkedHeadingIds = computed(() =>
   currentDocumentBookmarks.value
     .filter(bookmark => bookmark.kind === 'markdown-heading' && bookmark.target.headingId)
@@ -306,6 +323,10 @@ function closeSurface(options: { restoreFocus?: boolean, previousSurfaceId?: Com
   const previousSurfaceId = options.previousSurfaceId ?? openSurfaceId.value
   openSurfaceId.value = null
   setPageScrollLocked(false)
+
+  if (previousSurfaceId === 'actions') {
+    pendingUrlImport.value = null
+  }
 
   if (options.restoreFocus) {
     const trigger = getSurfaceTrigger(previousSurfaceId)
@@ -746,6 +767,7 @@ function updateActiveOutlineId(id: string): void {
 async function loadIncomingDocument(document: ReaderDocument): Promise<void> {
   libraryStatus.value = ''
   inputMenuStatus.value = ''
+  pendingUrlImport.value = null
   closeFindBar({ restoreFocus: false })
 
   if (document.source === 'sample') {
@@ -760,8 +782,23 @@ async function loadIncomingDocument(document: ReaderDocument): Promise<void> {
   }
 
   try {
-    await saveActiveReadingPosition()
     const source = document.librarySource ?? createFallbackLibrarySource(document)
+    const existingUrlEntry = source.kind === 'url'
+      ? await libraryStore.findMarkdownEntryByUrl(source)
+      : null
+
+    if (existingUrlEntry) {
+      pendingUrlImport.value = {
+        document,
+        entry: existingUrlEntry,
+      }
+      inputMenuStatus.value = ''
+      liveStatus.value = '该链接已在文库中'
+      openSurface('actions')
+      return
+    }
+
+    await saveActiveReadingPosition()
     const entry = await libraryStore.addMarkdownDocument({
       markdown: document.markdown,
       source,
@@ -778,6 +815,69 @@ async function loadIncomingDocument(document: ReaderDocument): Promise<void> {
     else {
       libraryStatus.value = '无法加入文库。当前文档没有被替换, 请稍后再试。'
       inputMenuStatus.value = libraryStatus.value
+    }
+    openSurface('actions')
+  }
+}
+
+async function openPendingUrlImport(): Promise<void> {
+  const pending = pendingUrlImport.value
+  if (!pending) {
+    return
+  }
+
+  pendingUrlImport.value = null
+  closeSurface()
+  await openLibraryEntry(pending.entry)
+  liveStatus.value = '已打开文库中的已有文档'
+}
+
+async function updatePendingUrlImport(): Promise<void> {
+  const pending = pendingUrlImport.value
+  if (!pending) {
+    return
+  }
+
+  pendingUrlImport.value = null
+  const source = pending.document.librarySource ?? createFallbackLibrarySource(pending.document)
+
+  if (source.kind !== 'url') {
+    return
+  }
+
+  try {
+    closeSurface()
+
+    if (activeLibraryEntryId.value && activeLibraryEntryId.value !== pending.entry.id) {
+      await saveActiveReadingPosition()
+    }
+
+    const contentChanged = await libraryStore.isMarkdownContentChanged(pending.entry.id, pending.document.markdown)
+    const updated = await libraryStore.addMarkdownDocument({
+      markdown: pending.document.markdown,
+      source,
+      label: pending.document.label,
+    })
+
+    if (contentChanged) {
+      persistReaderBookmarks(removeBookmarksForDocument(readerBookmarks.value, libraryBookmarkKey(updated.id)))
+    }
+
+    await refreshLibraryEntries()
+    await openLibraryEntry(updated, {
+      skipSave: contentChanged && activeLibraryEntryId.value === updated.id,
+    })
+
+    liveStatus.value = contentChanged
+      ? '已更新到最新, 阅读位置和书签已重置'
+      : '内容没有变化, 已打开已有文档'
+  }
+  catch (reason) {
+    if (reason instanceof LibraryQuotaExceededError) {
+      inputMenuStatus.value = '本机存储空间不够, 没有更新文库。可以删除一些文档后再试。'
+    }
+    else {
+      inputMenuStatus.value = '无法更新文库。已有文档已保留, 请稍后再试。'
     }
     openSurface('actions')
   }
@@ -818,12 +918,14 @@ async function loadIncomingPdf(file: File): Promise<void> {
   }
 }
 
-async function openLibraryEntry(entry: LibraryEntry): Promise<void> {
+async function openLibraryEntry(entry: LibraryEntry, options: { skipSave?: boolean } = {}): Promise<void> {
   libraryStatus.value = ''
   closeFindBar({ restoreFocus: false })
 
   if (entry.type === 'pdf') {
-    await saveActiveReadingPosition()
+    if (!options.skipSave) {
+      await saveActiveReadingPosition()
+    }
     const opened = await libraryStore.openPdfDocument(entry.id)
 
     if (!opened) {
@@ -841,7 +943,9 @@ async function openLibraryEntry(entry: LibraryEntry): Promise<void> {
     return
   }
 
-  await saveActiveReadingPosition()
+  if (!options.skipSave) {
+    await saveActiveReadingPosition()
+  }
   const opened = await libraryStore.openMarkdownDocument(entry.id)
 
   if (!opened) {
@@ -1360,6 +1464,7 @@ function focusLibraryView(): void {
         :is-fetching-url="isFetchingUrl"
         :can-bookmark="isBookmarkAvailable"
         :can-search="isSearchAvailable"
+        :url-conflict="pendingUrlImportConflict"
         :search-unavailable-text="searchUnavailableText"
         :status="status"
         @update:is-open="setActionsSurfaceOpen"
@@ -1368,6 +1473,8 @@ function focusLibraryView(): void {
         @open-file="loadFromFile"
         @open-library="showLibrary"
         @fetch-url="loadFromUrl"
+        @open-existing-url="openPendingUrlImport"
+        @update-existing-url="updatePendingUrlImport"
         @search="openFindBar"
         @clear="resetToSample"
         @print="printDocument"

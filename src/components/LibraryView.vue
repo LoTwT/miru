@@ -26,6 +26,7 @@ const pendingClear = shallowRef(false)
 const renamingId = shallowRef<string | null>(null)
 const renameValue = shallowRef('')
 const openActionsEntryId = shallowRef<string | null>(null)
+const isLibraryMenuOpen = shallowRef(false)
 const rootRef = useTemplateRef<HTMLElement>('root')
 const deleteCancelRef = useTemplateRef<HTMLButtonElement>('deleteCancel')
 const clearCancelRef = useTemplateRef<HTMLButtonElement>('clearCancel')
@@ -82,6 +83,7 @@ function confirmDelete(): void {
 }
 
 function requestClear(): void {
+  closeAllMenus()
   dialogRestoreTarget = document.activeElement instanceof HTMLElement ? document.activeElement : null
   pendingClear.value = true
 }
@@ -97,6 +99,7 @@ function openSample(): void {
 }
 
 function toggleActionsMenu(entry: LibraryEntry): void {
+  isLibraryMenuOpen.value = false
   openActionsEntryId.value = openActionsEntryId.value === entry.id ? null : entry.id
 }
 
@@ -104,8 +107,22 @@ function closeActionsMenu(): void {
   openActionsEntryId.value = null
 }
 
+function toggleLibraryMenu(): void {
+  closeActionsMenu()
+  isLibraryMenuOpen.value = !isLibraryMenuOpen.value
+}
+
+function closeLibraryMenu(): void {
+  isLibraryMenuOpen.value = false
+}
+
+function closeAllMenus(): void {
+  closeActionsMenu()
+  closeLibraryMenu()
+}
+
 function onDocumentPointerDown(event: PointerEvent): void {
-  if (!openActionsEntryId.value) {
+  if (!openActionsEntryId.value && !isLibraryMenuOpen.value) {
     return
   }
 
@@ -119,7 +136,12 @@ function onDocumentPointerDown(event: PointerEvent): void {
     return
   }
 
-  closeActionsMenu()
+  const libraryMenuRoot = rootRef.value?.querySelector<HTMLElement>('.library-view__management[data-management-open="true"]')
+  if (libraryMenuRoot?.contains(target)) {
+    return
+  }
+
+  closeAllMenus()
 }
 
 function isActionsMenuOpen(entry: LibraryEntry): boolean {
@@ -294,6 +316,40 @@ watch(pendingClear, async (value) => {
       </label>
 
       <div class="library-view__toolbar-actions">
+        <div
+          v-if="hasEntries"
+          class="library-view__management"
+          :data-management-open="isLibraryMenuOpen ? 'true' : undefined"
+        >
+          <button
+            class="library-view__management-button"
+            type="button"
+            aria-label="文库管理"
+            :aria-expanded="isLibraryMenuOpen"
+            aria-controls="library-management-menu"
+            data-testid="library-management-button"
+            @click="toggleLibraryMenu"
+          >
+            管理
+          </button>
+          <div
+            v-if="isLibraryMenuOpen"
+            id="library-management-menu"
+            class="library-view__management-menu"
+            role="menu"
+            @keydown.esc.stop.prevent="closeLibraryMenu"
+          >
+            <button
+              class="library-view__management-item library-view__management-item--danger"
+              type="button"
+              role="menuitem"
+              data-testid="library-clear-button"
+              @click="requestClear"
+            >
+              清空全部
+            </button>
+          </div>
+        </div>
         <button class="library-view__primary" type="button" data-testid="library-add-button" @click="emit('add')">
           ＋ 加入
         </button>
@@ -517,9 +573,6 @@ watch(pendingClear, async (value) => {
 
       <footer class="library-view__footer">
         <p>文档、PDF 原件和阅读位置都只存在本机 IndexedDB。删除后无法在 miru 中恢复。</p>
-        <button class="library-view__danger-link" type="button" @click="requestClear">
-          清空文库
-        </button>
       </footer>
     </div>
 
@@ -562,14 +615,17 @@ watch(pendingClear, async (value) => {
           清空文库?
         </h2>
         <p class="library-dialog__copy">
-          这会删除所有本地文档、PDF 原件和阅读位置。阅读设置会保留。
+          将删除全部 {{ props.entries.length }} 篇文档及其阅读位置、书签、缓存。此操作不可恢复。
+        </p>
+        <p class="library-dialog__copy">
+          不影响你的阅读设置、字体/主题、示例文档入口。
         </p>
         <div class="library-dialog__actions">
           <button ref="clearCancel" class="library-dialog__button" type="button" @click="closeDialogs">
             取消
           </button>
           <button class="library-dialog__danger" type="button" @click="confirmClear">
-            清空
+            清空全部
           </button>
         </div>
       </div>
@@ -591,8 +647,7 @@ watch(pendingClear, async (value) => {
 }
 
 .library-entry__action,
-.library-entry__danger,
-.library-view__danger-link {
+.library-entry__danger {
   width: fit-content;
   min-block-size: 2.75rem;
   padding: 0;
@@ -609,9 +664,7 @@ watch(pendingClear, async (value) => {
 .library-entry__action:hover,
 .library-entry__action:focus-visible,
 .library-entry__danger:hover,
-.library-entry__danger:focus-visible,
-.library-view__danger-link:hover,
-.library-view__danger-link:focus-visible {
+.library-entry__danger:focus-visible {
   color: var(--reading-fg);
 }
 
@@ -716,6 +769,62 @@ watch(pendingClear, async (value) => {
   border-color: color-mix(in srgb, var(--reading-rule) 72%, transparent);
   color: var(--reading-fg-muted);
   background: color-mix(in srgb, var(--reading-bg) 94%, var(--reading-fg) 6%);
+}
+
+.library-view__management {
+  position: relative;
+}
+
+.library-view__management-button {
+  min-block-size: 2.75rem;
+  padding: 0 0.9rem;
+  border: 1px solid color-mix(in srgb, var(--reading-rule) 72%, transparent);
+  border-radius: 8px;
+  color: var(--reading-fg-muted);
+  background: var(--reading-bg);
+  cursor: pointer;
+  font: inherit;
+}
+
+.library-view__management-button:hover,
+.library-view__management-button:focus-visible {
+  border-color: var(--reading-accent);
+  color: var(--reading-fg);
+}
+
+.library-view__management-menu {
+  position: absolute;
+  inset-block-start: calc(100% + 0.35rem);
+  inset-inline-end: 0;
+  z-index: 20;
+  display: grid;
+  min-inline-size: 9.5rem;
+  padding: 0.35rem;
+  border: 1px solid color-mix(in srgb, var(--reading-rule) 86%, transparent);
+  border-radius: 8px;
+  background: var(--reading-bg);
+  box-shadow: 0 16px 40px color-mix(in srgb, var(--reading-fg) 14%, transparent);
+}
+
+.library-view__management-item {
+  min-block-size: 2.75rem;
+  border: 0;
+  border-radius: 6px;
+  padding: 0 0.75rem;
+  color: var(--reading-fg);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  text-align: start;
+}
+
+.library-view__management-item:hover,
+.library-view__management-item:focus-visible {
+  background: color-mix(in srgb, var(--reading-accent) 10%, transparent);
+}
+
+.library-view__management-item--danger {
+  color: color-mix(in srgb, #9b2f23 82%, var(--reading-fg));
 }
 
 .library-view__status {
@@ -910,8 +1019,7 @@ watch(pendingClear, async (value) => {
   color: color-mix(in srgb, #9b2f23 82%, var(--reading-fg));
 }
 
-.library-entry__danger,
-.library-view__danger-link {
+.library-entry__danger {
   color: color-mix(in srgb, #9b2f23 82%, var(--reading-fg));
 }
 

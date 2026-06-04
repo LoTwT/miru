@@ -88,6 +88,7 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
 
     try {
       const response = await fetch(normalized.requestUrl, {
+        cache: 'no-store',
         mode: 'cors',
         credentials: 'omit',
         referrerPolicy: 'no-referrer',

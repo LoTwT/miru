@@ -110,6 +110,52 @@ describe('local library store', () => {
     expect(fallbackEntry.title).toBe('getting-started')
   })
 
+  it('updates an existing URL-imported Markdown entry instead of duplicating it', async () => {
+    const store = createTestStore()
+    const source = {
+      kind: 'url' as const,
+      inputUrl: 'https://example.com/docs/fresh-note.md',
+      requestUrl: 'https://example.com/docs/fresh-note.md',
+      domain: 'example.com',
+    }
+
+    const first = await store.addMarkdownDocument({
+      markdown: '# Fresh note\n\nOld content.',
+      source,
+      label: source.inputUrl,
+    })
+    await expect(store.findMarkdownEntryByUrl(source)).resolves.toMatchObject({ id: first.id })
+    await store.saveReadingPosition({
+      documentId: first.id,
+      type: 'markdown',
+      scrollY: 420,
+      activeHeadingId: 'fresh-note',
+    })
+
+    const updated = await store.addMarkdownDocument({
+      markdown: '# Fresh note\n\nUpdated content.',
+      source,
+      label: source.inputUrl,
+    })
+
+    expect(updated.id).toBe(first.id)
+    expect(updated.createdAt).toBe(first.createdAt)
+    expect(updated.updatedAt).not.toBe(first.updatedAt)
+    expect(updated.byteSize).toBe(new TextEncoder().encode('# Fresh note\n\nUpdated content.').byteLength)
+    expect(await store.listEntries()).toHaveLength(1)
+    expect(await store.getReadingPosition(first.id)).toBeNull()
+
+    const opened = await store.openMarkdownDocument(first.id)
+    expect(opened?.markdown).toBe('# Fresh note\n\nUpdated content.')
+    expect(opened?.position).toBeNull()
+    expect(await store.countStoreEntries()).toEqual({
+      entries: 1,
+      markdownBodies: 1,
+      pdfBodies: 0,
+      positions: 0,
+    })
+  })
+
   it('stores PDF entries as blobs without hydrating blobs into the bookshelf list', async () => {
     const store = createTestStore()
     const blob = createPdfBlob()
