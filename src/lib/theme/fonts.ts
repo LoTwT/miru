@@ -1,5 +1,8 @@
 const fontLoaders = {
-  ayingottReadingFonts: () => import('@ayingott/theme/fonts.css'),
+  defaultReadingFonts: () => Promise.all([
+    import('@/styles/theme-fonts.css'),
+    import('@/styles/newsreader.css'),
+  ]),
 } as const
 
 export type ReadingFontId = keyof typeof fontLoaders
@@ -87,7 +90,7 @@ export async function loadReadingFont(font: ReadingFontId): Promise<void> {
 }
 
 export async function loadDefaultReadingFonts(): Promise<void> {
-  await loadReadingFont('ayingottReadingFonts')
+  await loadReadingFont('defaultReadingFonts')
 }
 
 export function isOptionalReadingFontId(value: string): value is OptionalReadingFontId {

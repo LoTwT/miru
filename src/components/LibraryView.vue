@@ -638,6 +638,8 @@ watch(pendingClear, async (value) => {
   max-width: min(100%, 48rem);
   margin: 0 auto;
   padding: clamp(2.5rem, 7vw, 5rem) 0 7rem;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
 }
 
 .library-view__hero {
@@ -652,20 +654,18 @@ watch(pendingClear, async (value) => {
   min-block-size: 2.75rem;
   padding: 0;
   border: 0;
-  color: var(--reading-fg-muted);
+  color: var(--text-secondary);
   background: transparent;
   font: inherit;
   text-decoration: underline;
-  text-decoration-color: color-mix(in srgb, var(--reading-fg-muted) 38%, transparent);
+  text-decoration-color: color-mix(in srgb, var(--text-secondary) 38%, transparent);
   text-underline-offset: 0.18em;
   cursor: pointer;
 }
 
 .library-entry__action:hover,
-.library-entry__action:focus-visible,
-.library-entry__danger:hover,
-.library-entry__danger:focus-visible {
-  color: var(--reading-fg);
+.library-entry__action:focus-visible {
+  color: var(--text-primary);
 }
 
 .library-view__eyebrow,
@@ -674,7 +674,7 @@ watch(pendingClear, async (value) => {
 .library-view__empty-copy,
 .library-view__footer,
 .library-dialog__copy {
-  color: var(--reading-fg-muted);
+  color: var(--text-secondary);
 }
 
 .library-view__eyebrow {
@@ -685,8 +685,8 @@ watch(pendingClear, async (value) => {
 
 .library-view__title {
   margin: 0;
-  color: var(--reading-fg);
-  font-family: var(--reading-font-heading);
+  color: var(--text-primary);
+  font-family: var(--font-display);
   font-size: clamp(2.55rem, 7vw, 4rem);
   font-weight: 680;
   line-height: 0.98;
@@ -716,17 +716,17 @@ watch(pendingClear, async (value) => {
 .library-view__sort-label {
   display: grid;
   gap: 0.35rem;
-  color: var(--reading-fg-muted);
+  color: var(--text-secondary);
   font-size: 0.86rem;
 }
 
 .library-view__sort,
 .library-entry__rename-input {
   min-block-size: 2.75rem;
-  border: 1px solid color-mix(in srgb, var(--reading-rule) 86%, transparent);
-  border-radius: 8px;
-  color: var(--reading-fg);
-  background: var(--reading-bg);
+  border: var(--border-width-control) solid var(--border-default);
+  border-radius: var(--radius-control);
+  color: var(--text-primary);
+  background: var(--surface-elevated);
   font: inherit;
 }
 
@@ -743,10 +743,10 @@ watch(pendingClear, async (value) => {
 .library-entry__rename button {
   min-block-size: 2.75rem;
   padding: 0 1rem;
-  border: 1px solid color-mix(in srgb, var(--reading-accent) 62%, transparent);
-  border-radius: 8px;
-  color: var(--reading-fg);
-  background: color-mix(in srgb, var(--reading-accent) 8%, transparent);
+  border: var(--border-width-control) solid var(--border-default);
+  border-radius: var(--radius-control);
+  color: var(--text-primary);
+  background: var(--accent-soft);
   font: inherit;
   cursor: pointer;
 }
@@ -761,14 +761,14 @@ watch(pendingClear, async (value) => {
 .library-dialog__button:focus-visible,
 .library-entry__rename button:hover,
 .library-entry__rename button:focus-visible {
-  border-color: var(--reading-accent);
-  background: color-mix(in srgb, var(--reading-accent) 14%, transparent);
+  border-color: var(--accent-primary);
+  background: var(--accent-soft);
 }
 
 .library-view__secondary {
-  border-color: color-mix(in srgb, var(--reading-rule) 72%, transparent);
-  color: var(--reading-fg-muted);
-  background: color-mix(in srgb, var(--reading-bg) 94%, var(--reading-fg) 6%);
+  border-color: var(--border-default);
+  color: var(--text-secondary);
+  background: var(--surface-subtle);
 }
 
 .library-view__management {
@@ -778,58 +778,59 @@ watch(pendingClear, async (value) => {
 .library-view__management-button {
   min-block-size: 2.75rem;
   padding: 0 0.9rem;
-  border: 1px solid color-mix(in srgb, var(--reading-rule) 72%, transparent);
-  border-radius: 8px;
-  color: var(--reading-fg-muted);
-  background: var(--reading-bg);
+  border: var(--border-width-control) solid var(--border-default);
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  background: var(--surface-elevated);
   cursor: pointer;
   font: inherit;
 }
 
 .library-view__management-button:hover,
 .library-view__management-button:focus-visible {
-  border-color: var(--reading-accent);
-  color: var(--reading-fg);
+  border-color: var(--accent-primary);
+  color: var(--text-primary);
 }
 
 .library-view__management-menu {
   position: absolute;
   inset-block-start: calc(100% + 0.35rem);
   inset-inline-end: 0;
-  z-index: 20;
+  z-index: var(--z-popover);
   display: grid;
   min-inline-size: 9.5rem;
-  padding: 0.35rem;
-  border: 1px solid color-mix(in srgb, var(--reading-rule) 86%, transparent);
-  border-radius: 8px;
-  background: var(--reading-bg);
-  box-shadow: 0 16px 40px color-mix(in srgb, var(--reading-fg) 14%, transparent);
+  padding: var(--spacing-1-5);
+  border: var(--border-width-surface) solid var(--border-default);
+  border-radius: var(--radius-card);
+  background: var(--surface-elevated);
+  box-shadow: var(--shadow-panel);
 }
 
 .library-view__management-item {
   min-block-size: 2.75rem;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   padding: 0 0.75rem;
-  color: var(--reading-fg);
+  color: var(--text-primary);
   background: transparent;
   cursor: pointer;
   font: inherit;
   text-align: start;
 }
 
-.library-view__management-item:hover,
-.library-view__management-item:focus-visible {
-  background: color-mix(in srgb, var(--reading-accent) 10%, transparent);
+.library-view__management-item:not(.library-view__management-item--danger):hover,
+.library-view__management-item:not(.library-view__management-item--danger):focus-visible {
+  background: var(--accent-soft);
 }
 
 .library-view__management-item--danger {
-  color: color-mix(in srgb, #9b2f23 82%, var(--reading-fg));
+  background: var(--status-danger-bg);
+  color: var(--status-danger-fg);
 }
 
 .library-view__status {
   margin: 0 0 1rem;
-  color: var(--reading-accent);
+  color: var(--text-accent);
 }
 
 .library-view__empty {
@@ -837,12 +838,12 @@ watch(pendingClear, async (value) => {
   place-items: start;
   gap: 0.9rem;
   padding: clamp(2rem, 8vw, 4rem) 0;
-  border-block-start: 1px solid color-mix(in srgb, var(--reading-rule) 45%, transparent);
+  border-block-start: var(--border-width-thin) solid var(--border-subtle);
 }
 
 .library-view__empty-title {
   margin: 0;
-  font-family: var(--reading-font-heading);
+  font-family: var(--font-display);
   font-size: 1.65rem;
 }
 
@@ -858,8 +859,8 @@ watch(pendingClear, async (value) => {
 
 .library-view__section-title {
   margin: 0 0 0.75rem;
-  color: var(--reading-fg-muted);
-  font-family: var(--reading-font-body);
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
   font-size: 0.9rem;
   font-weight: 600;
 }
@@ -870,7 +871,7 @@ watch(pendingClear, async (value) => {
   padding: 0;
   margin: 0;
   list-style: none;
-  border-block-start: 1px solid color-mix(in srgb, var(--reading-rule) 55%, transparent);
+  border-block-start: var(--border-width-thin) solid var(--border-subtle);
 }
 
 .library-entry {
@@ -878,15 +879,15 @@ watch(pendingClear, async (value) => {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 1.25rem;
   padding: 1rem 0;
-  border-block-end: 1px solid color-mix(in srgb, var(--reading-rule) 42%, transparent);
+  border-block-end: var(--border-width-thin) solid var(--border-subtle);
 }
 
 .library-entry--active .library-entry__title-button {
-  color: var(--reading-accent);
+  color: var(--text-accent);
 }
 
 .library-entry--sample .library-entry__title-button {
-  color: var(--reading-fg);
+  color: var(--text-primary);
 }
 
 .library-entry__main {
@@ -900,22 +901,22 @@ watch(pendingClear, async (value) => {
 .library-entry__type {
   min-inline-size: 2.35rem;
   padding: 0.2rem 0.45rem;
-  border: 1px solid color-mix(in srgb, var(--reading-rule) 65%, transparent);
-  border-radius: 6px;
-  color: var(--reading-fg-muted);
+  border: var(--border-width-control) solid var(--border-default);
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
   font-size: 0.72rem;
   font-weight: 700;
   text-align: center;
 }
 
 .library-entry__type[data-entry-type="pdf"] {
-  color: var(--reading-accent);
-  border-color: color-mix(in srgb, var(--reading-accent) 54%, transparent);
+  color: var(--text-accent);
+  border-color: var(--accent-primary);
 }
 
 .library-entry__type[data-entry-type="sample"] {
-  color: var(--reading-fg-muted);
-  background: color-mix(in srgb, var(--reading-accent) 8%, transparent);
+  color: var(--text-secondary);
+  background: var(--accent-soft);
 }
 
 .library-entry__body {
@@ -933,8 +934,8 @@ watch(pendingClear, async (value) => {
   padding: 0;
   background: transparent;
   overflow-wrap: anywhere;
-  color: var(--reading-fg);
-  font-family: var(--reading-font-heading);
+  color: var(--text-primary);
+  font-family: var(--font-display);
   font-size: 1.28rem;
   font-weight: 620;
   line-height: inherit;
@@ -944,7 +945,7 @@ watch(pendingClear, async (value) => {
 
 .library-entry__title-button:hover,
 .library-entry__title-button:focus-visible {
-  color: var(--reading-accent);
+  color: var(--text-accent);
 }
 
 .library-entry__meta {
@@ -972,10 +973,10 @@ watch(pendingClear, async (value) => {
 .library-entry__more {
   min-inline-size: 2.75rem;
   min-block-size: 2.75rem;
-  border: 1px solid color-mix(in srgb, var(--reading-rule) 72%, transparent);
-  border-radius: 8px;
-  color: var(--reading-fg);
-  background: var(--reading-bg);
+  border: var(--border-width-control) solid var(--border-default);
+  border-radius: var(--radius-control);
+  color: var(--text-primary);
+  background: var(--surface-elevated);
   font: inherit;
   font-size: 1.35rem;
   line-height: 1;
@@ -986,41 +987,58 @@ watch(pendingClear, async (value) => {
   position: absolute;
   inset-block-start: calc(100% + 0.35rem);
   inset-inline-end: 0;
-  z-index: 20;
+  z-index: var(--z-popover);
   display: grid;
   min-inline-size: 9.5rem;
-  padding: 0.35rem;
-  border: 1px solid color-mix(in srgb, var(--reading-rule) 86%, transparent);
-  border-radius: 8px;
-  background: var(--reading-bg);
-  box-shadow: 0 16px 40px color-mix(in srgb, var(--reading-fg) 14%, transparent);
+  padding: var(--spacing-1-5);
+  border: var(--border-width-surface) solid var(--border-default);
+  border-radius: var(--radius-card);
+  background: var(--surface-elevated);
+  box-shadow: var(--shadow-panel);
 }
 
 .library-entry__menu-item {
   min-block-size: 2.75rem;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   padding: 0 0.75rem;
-  color: var(--reading-fg);
+  color: var(--text-primary);
   background: transparent;
   font: inherit;
   text-align: start;
   cursor: pointer;
 }
 
-.library-entry__menu-item:hover,
-.library-entry__menu-item:focus-visible,
+.library-entry__menu-item:not(.library-entry__menu-item--danger):hover,
+.library-entry__menu-item:not(.library-entry__menu-item--danger):focus-visible {
+  background: var(--accent-soft);
+}
+
 .library-entry__more:hover,
 .library-entry__more:focus-visible {
-  background: color-mix(in srgb, var(--reading-accent) 10%, transparent);
+  background: var(--accent-soft);
 }
 
 .library-entry__menu-item--danger {
-  color: color-mix(in srgb, #9b2f23 82%, var(--reading-fg));
+  background: var(--status-danger-bg);
+  color: var(--status-danger-fg);
 }
 
 .library-entry__danger {
-  color: color-mix(in srgb, #9b2f23 82%, var(--reading-fg));
+  border-color: var(--status-danger-border);
+  background: var(--status-danger-bg);
+  color: var(--status-danger-fg);
+}
+
+.library-entry__danger:hover,
+.library-entry__danger:focus-visible,
+.library-entry__menu-item--danger:hover,
+.library-entry__menu-item--danger:focus-visible,
+.library-view__management-item--danger:hover,
+.library-view__management-item--danger:focus-visible {
+  border-color: var(--status-danger-border);
+  background: var(--status-danger-bg);
+  color: var(--status-danger-fg);
 }
 
 .library-entry__rename {
@@ -1040,7 +1058,7 @@ watch(pendingClear, async (value) => {
   justify-content: space-between;
   gap: 1rem;
   padding-top: 1.5rem;
-  border-block-start: 1px solid color-mix(in srgb, var(--reading-rule) 45%, transparent);
+  border-block-start: var(--border-width-thin) solid var(--border-subtle);
   font-size: 0.9rem;
 }
 
@@ -1051,30 +1069,32 @@ watch(pendingClear, async (value) => {
 .library-dialog {
   position: fixed;
   inset: 0;
-  z-index: 60;
+  z-index: var(--z-modal);
   display: grid;
   place-items: center;
   padding: 1.25rem;
-  background: color-mix(in srgb, var(--reading-bg) 76%, #000 24%);
+  background: color-mix(in srgb, var(--text-primary) 24%, transparent);
 }
 
 .library-dialog__panel {
   width: min(100%, 29rem);
-  padding: 1.35rem;
-  border: 1px solid color-mix(in srgb, var(--reading-rule) 86%, transparent);
-  border-radius: 8px;
-  background: var(--reading-bg);
-  box-shadow: 0 24px 60px color-mix(in srgb, var(--reading-fg) 16%, transparent);
+  padding: var(--spacing-5);
+  border: var(--border-width-surface) solid var(--border-default);
+  border-radius: var(--radius-card);
+  background: var(--surface-panel);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-panel);
 }
 
 .library-dialog__title {
   margin: 0;
-  font-family: var(--reading-font-heading);
+  font-family: var(--font-display);
   font-size: 1.5rem;
 }
 
 .library-dialog__copy {
   margin: 0.7rem 0 0;
+  color: var(--text-secondary);
 }
 
 .library-dialog__actions {
@@ -1085,9 +1105,21 @@ watch(pendingClear, async (value) => {
 }
 
 .library-dialog__danger {
-  border-color: color-mix(in srgb, #9b2f23 72%, transparent);
-  color: #fdf8f0;
-  background: #9b2f23;
+  border-color: var(--status-danger-border);
+  color: var(--status-danger-fg);
+  background: var(--status-danger-bg);
+}
+
+.library-dialog__button {
+  border-color: var(--border-default);
+  color: var(--text-primary);
+  background: var(--surface-elevated);
+}
+
+.library-dialog__button:hover,
+.library-dialog__button:focus-visible {
+  border-color: var(--accent-primary);
+  background: var(--accent-soft);
 }
 
 @media (max-width: 720px) {

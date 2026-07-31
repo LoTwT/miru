@@ -1,3 +1,7 @@
+@import "tailwindcss";
+@import "@ayingott/theme";
+@import "@ayingott/theme/brutal.css";
+
 @font-face {
   font-family: "Literata Preview";
   font-style: normal;
@@ -27,32 +31,11 @@
 }
 
 :root {
-  color-scheme: light dark;
-  --reading-bg: #fbf8f1;
-  --reading-fg: #24211d;
-  --reading-fg-muted: #6f685f;
-  --reading-link: #275f71;
-  --reading-link-hover: #1d4f60;
-  --reading-accent: #9d5f34;
-  --reading-rule: #ded3c4;
-  --reading-code-fg: #24211d;
-  --reading-code-bg: #f0eadf;
-  --reading-focus: color-mix(in srgb, var(--reading-accent) 82%, var(--reading-fg));
-  --reading-focus-shadow: 0 0 0 4px color-mix(in srgb, var(--reading-accent) 22%, transparent);
+  --font-reading: "Newsreader", Georgia, "Songti SC", "Noto Serif CJK SC", serif;
+  --reading-accent-text: var(--reading-link);
+  --reading-accent-contrast: var(--accent-contrast);
   --reading-anchor-offset: 5.5rem;
-  --reading-measure: 65ch;
-  --reading-font-size: 18px;
-  --reading-line-height: 1.7;
-  --reading-letter-spacing: 0;
-  --reading-page-margin: clamp(1.25rem, 4vw, 4rem);
-  --reading-font-body: "Newsreader", Georgia, "Songti SC", "Noto Serif CJK SC", serif;
-  --reading-font-heading: Newsreader, Georgia, serif;
-  --reading-font-mono: "Space Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  --reading-paragraph-gap: 1.12em;
-  --reading-scale-h1: calc(var(--reading-font-size) * 3.2);
-  --reading-scale-h2: calc(var(--reading-font-size) * 1.95);
-  --reading-scale-h3: calc(var(--reading-font-size) * 1.2);
-  --reading-scale-h4: var(--reading-font-size);
+  --reading-page-margin: var(--layout-page-gutter);
   background: var(--reading-bg);
   color: var(--reading-fg);
   font-family: system-ui, sans-serif;
@@ -61,15 +44,27 @@
   -webkit-font-smoothing: antialiased;
 }
 
+:root,
+:root.brutal {
+  --reading-scale-h1: calc(var(--reading-font-size) * 3.2);
+  --reading-scale-h2: calc(var(--reading-font-size) * 1.95);
+  --reading-scale-h3: calc(var(--reading-font-size) * 1.2);
+  --reading-scale-h4: var(--reading-font-size);
+}
+
 :root[data-reading-contrast="soft"] {
-  --reading-fg: #4a453d;
-  --reading-fg-muted: #71695f;
+  --reading-fg: var(--text-secondary);
+  --reading-fg-muted: var(--text-muted);
 }
 
 :root[data-reading-contrast="strong"] {
-  --reading-fg: #17130f;
-  --reading-fg-muted: #322d26;
-  --reading-rule: #c7b8a0;
+  --reading-fg: var(--text-primary);
+  --reading-fg-muted: var(--text-secondary);
+  --reading-rule: var(--border-strong);
+}
+
+:root.brutal[data-reading-contrast="strong"] {
+  --reading-fg-muted: var(--text-primary);
 }
 
 body {
@@ -87,9 +82,9 @@ input:focus-visible,
 select:focus-visible,
 textarea:focus-visible,
 a:focus-visible {
-  outline: 2px solid var(--reading-focus);
-  outline-offset: 3px;
-  box-shadow: var(--reading-focus-shadow);
+  outline: var(--border-width-thick) solid var(--focus-ring-color);
+  outline-offset: var(--spacing-1);
+  box-shadow: var(--focus-ring-shadow);
 }
 
 .reader-surface__content > :first-child {
@@ -145,13 +140,16 @@ a:focus-visible {
   block-size: 44px;
   padding: 0;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--reading-fg-muted);
   cursor: pointer;
   opacity: 0.45;
   transform: translateY(-50%);
-  transition: opacity 160ms ease, background-color 160ms ease, color 160ms ease;
+  transition:
+    opacity var(--duration-normal) var(--ease-standard),
+    background-color var(--duration-normal) var(--ease-standard),
+    color var(--duration-normal) var(--ease-standard);
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -174,8 +172,8 @@ a:focus-visible {
 }
 
 .reader-heading-toggle:focus-visible {
-  outline: 2px solid var(--reading-focus);
-  outline-offset: 3px;
+  outline: var(--border-width-thick) solid var(--reading-focus);
+  outline-offset: var(--spacing-1);
   box-shadow: var(--reading-focus-shadow);
 }
 
@@ -184,7 +182,7 @@ a:focus-visible {
   block-size: calc(var(--reading-scale-h1) * 0.36);
   fill: currentColor;
   transform-origin: 50% 50%;
-  transition: transform 160ms ease;
+  transition: transform var(--duration-normal) var(--ease-standard);
 }
 
 .reader-heading-toggle[data-reader-heading-level="2"] .reader-heading-toggle__icon {
@@ -211,6 +209,23 @@ a:focus-visible {
   font-weight: 600;
 }
 
+.reader-surface__content h4 {
+  font-size: var(--reading-scale-h4);
+}
+
+.reader-surface__content h5 {
+  font-size: calc(var(--reading-font-size) * 0.9);
+}
+
+.reader-surface__content h6 {
+  font-size: calc(var(--reading-font-size) * 0.82);
+}
+
+.reader-surface__content a:focus-visible {
+  outline-color: var(--reading-focus);
+  box-shadow: var(--reading-focus-shadow);
+}
+
 .reader-surface__content p,
 .reader-surface__content ul,
 .reader-surface__content ol,
@@ -226,6 +241,26 @@ a:focus-visible {
 .reader-surface__content table,
 .reader-surface__content pre {
   margin: var(--reading-paragraph-gap) 0;
+}
+
+.reader-surface__content :is(ul, ol) {
+  padding-inline-start: var(--spacing-6);
+}
+
+.reader-surface__content ul {
+  list-style-type: disc;
+}
+
+.reader-surface__content ul ul {
+  list-style-type: circle;
+}
+
+.reader-surface__content ul ul ul {
+  list-style-type: square;
+}
+
+.reader-surface__content ol {
+  list-style-type: decimal;
 }
 
 .reader-surface__content li + li {
@@ -249,7 +284,7 @@ a:focus-visible {
 }
 
 .reader-surface__content :is(h1, h2, h3) > a.header-anchor:focus-visible {
-  outline: 2px solid var(--reading-focus);
+  outline: var(--border-width-thick) solid var(--reading-focus);
   outline-offset: 0.18em;
   box-shadow: var(--reading-focus-shadow);
 }
@@ -258,7 +293,7 @@ a:focus-visible {
   content: "  ¶";
   color: var(--reading-fg-muted);
   opacity: 0;
-  transition: opacity 160ms ease;
+  transition: opacity var(--duration-normal) var(--ease-standard);
 }
 
 @media (hover: hover) {
@@ -269,13 +304,13 @@ a:focus-visible {
 }
 
 .reader-surface__content blockquote {
-  padding-left: 1rem;
-  border-left: 3px solid var(--reading-accent);
+  padding-left: var(--spacing-4);
+  border-left: var(--border-width-heavy) solid var(--reading-accent);
   color: var(--reading-fg-muted);
 }
 
 .reader-surface__content code {
-  border-radius: 0.25rem;
+  border-radius: var(--radius-sm);
   background: var(--reading-code-bg);
   color: var(--reading-code-fg);
   font-family: var(--reading-font-mono);
@@ -288,9 +323,9 @@ a:focus-visible {
 
 .reader-surface__content pre {
   overflow-x: auto;
-  padding: 1rem;
-  border: 1px solid var(--reading-rule);
-  border-radius: 8px;
+  padding: var(--spacing-4);
+  border: var(--border-width-surface) solid var(--reading-rule);
+  border-radius: var(--radius-card);
   background: var(--reading-code-bg);
   line-height: 1.55;
 }
@@ -308,8 +343,8 @@ a:focus-visible {
   display: block;
   max-width: 100%;
   height: auto;
-  margin: 1.5rem auto;
-  border-radius: 8px;
+  margin: var(--spacing-6) auto;
+  border-radius: var(--radius-card);
 }
 
 .reader-surface__content table {
@@ -323,7 +358,7 @@ a:focus-visible {
 .reader-surface__content th,
 .reader-surface__content td {
   padding: 0.55rem 0.75rem;
-  border: 1px solid var(--reading-rule);
+  border: var(--border-width-surface) solid var(--reading-rule);
   text-align: left;
   vertical-align: top;
 }
@@ -356,17 +391,17 @@ a:focus-visible {
   inline-size: 0.95rem;
   block-size: 0.95rem;
   margin: 0.16em 0 0;
-  border: 1.5px solid var(--reading-rule);
-  border-radius: 0.22rem;
+  border: var(--border-width-control) solid var(--reading-rule);
+  border-radius: var(--radius-control);
   background: var(--reading-bg);
-  color: var(--reading-accent);
+  color: var(--reading-accent-text);
   cursor: default;
 }
 
 .reader-surface__content .task-list-item-checkbox:checked {
   border-color: var(--reading-accent);
   background: var(--reading-accent);
-  color: var(--reading-bg);
+  color: var(--reading-accent-contrast);
 }
 
 .reader-surface__content .task-list-item-checkbox:checked::before {
@@ -384,75 +419,40 @@ a:focus-visible {
 
 .markdown-image-placeholder {
   display: block;
-  margin: 1.5rem 0;
-  padding: 1rem;
-  border: 1px dashed var(--reading-rule);
-  border-radius: 8px;
+  margin: var(--spacing-6) 0;
+  padding: var(--spacing-4);
+  border: var(--border-width-control) dashed var(--reading-rule);
+  border-radius: var(--radius-card);
   background: var(--reading-code-bg);
   color: var(--reading-fg-muted);
-  font-family: system-ui, sans-serif;
-  font-size: 0.92rem;
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --reading-bg: #171615;
-    --reading-fg: #ebe4d7;
-    --reading-fg-muted: #b0a797;
-    --reading-link: #8dc7d7;
-    --reading-link-hover: #bce8f2;
-    --reading-accent: #d99663;
-    --reading-rule: #3b352f;
-    --reading-code-fg: #ebe4d7;
-    --reading-code-bg: #22201e;
-  }
-
-  :root[data-reading-contrast="soft"]:not([data-reading-theme="light"]):not([data-reading-theme="sepia"]) {
-    --reading-fg: #cfc5b8;
-    --reading-fg-muted: #9f9587;
-  }
-
-  :root[data-reading-contrast="strong"]:not([data-reading-theme="light"]):not([data-reading-theme="sepia"]) {
-    --reading-fg: #fff8ed;
-    --reading-fg-muted: #cdc2b3;
-  }
-
-  .reader-surface__content .shiki,
-  .reader-surface__content .shiki span {
-    color: var(--shiki-dark) !important;
-  }
-}
-
-:root[data-reading-theme="dark"] {
-  color-scheme: dark;
-}
-
-:root[data-reading-theme="light"],
-:root[data-reading-theme="sepia"] {
-  color-scheme: light;
-}
-
-:root[data-reading-theme="sepia"][data-reading-contrast="soft"] {
+:root[data-reading-scheme="sepia"][data-reading-contrast="soft"] {
   --reading-fg: #66553c;
   --reading-fg-muted: #705f45;
 }
 
-:root[data-reading-theme="sepia"][data-reading-contrast="strong"] {
+:root[data-reading-scheme="sepia"][data-reading-contrast="strong"] {
   --reading-fg: #2a2012;
   --reading-fg-muted: #3e3220;
   --reading-rule: #ab8b48;
 }
 
-:root[data-reading-theme="dark"] .reader-surface__content .shiki,
-:root[data-reading-theme="dark"] .reader-surface__content .shiki span {
+:root.dark .reader-surface__content .shiki,
+:root.dark .reader-surface__content .shiki span {
   color: var(--shiki-dark) !important;
 }
 
-:root[data-reading-theme="light"] .reader-surface__content .shiki,
-:root[data-reading-theme="light"] .reader-surface__content .shiki span,
-:root[data-reading-theme="sepia"] .reader-surface__content .shiki,
-:root[data-reading-theme="sepia"] .reader-surface__content .shiki span {
+:root:not(.dark) .reader-surface__content .shiki,
+:root:not(.dark) .reader-surface__content .shiki span {
   color: var(--shiki-light) !important;
+}
+
+:root:is([data-reading-scheme="custom"], [data-reading-scheme="sepia"]) .reader-surface__content .shiki,
+:root:is([data-reading-scheme="custom"], [data-reading-scheme="sepia"]) .reader-surface__content .shiki span {
+  color: var(--reading-code-fg) !important;
 }
 
 @media (max-width: 700px) {
@@ -499,13 +499,15 @@ a:focus-visible {
 
 @media print {
   :root {
-    color-scheme: light;
+    color-scheme: light !important;
     --reading-bg: #ffffff !important;
     --reading-fg: #161616 !important;
     --reading-fg-muted: #555555 !important;
     --reading-link: #111111 !important;
     --reading-link-hover: #111111 !important;
     --reading-accent: #555555 !important;
+    --reading-accent-text: #555555 !important;
+    --reading-accent-contrast: #ffffff !important;
     --reading-rule: #d8d8d8 !important;
     --reading-code-fg: #161616 !important;
     --reading-code-bg: #f6f6f6 !important;
@@ -563,8 +565,10 @@ a:focus-visible {
     padding-inline-start: 0 !important;
   }
 
-  .reader-section[hidden] {
-    display: block !important;
+  @layer base {
+    .reader-section[hidden] {
+      display: block !important;
+    }
   }
 
   .reader-surface__content h1,
@@ -602,10 +606,12 @@ a:focus-visible {
     white-space: pre-wrap;
   }
 
-  .reader-surface__content .shiki,
-  .reader-surface__content .shiki span {
+  :root.dark .reader-surface__content .shiki,
+  :root.dark .reader-surface__content .shiki span,
+  :root:not(.dark) .reader-surface__content .shiki,
+  :root:not(.dark) .reader-surface__content .shiki span {
     background: var(--reading-code-bg) !important;
-    color: var(--shiki-light, var(--reading-code-fg)) !important;
+    color: var(--reading-code-fg) !important;
   }
 
   .reader-surface__content table {

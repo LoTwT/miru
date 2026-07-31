@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const fetchedMarkdown = '# Remote doc\n\nLoaded from URL.'
 
@@ -14,18 +14,44 @@ test('renders the sample document and supports paste input', async ({ page }) =>
   await expect(page.getByText('顶部 ⋯ 菜单').first()).toBeVisible()
   await expect(page.getByTestId('floating-affordance-button')).toBeVisible()
 
+  const listPresentation = await page.locator('.reader-surface__content ul:not(.contains-task-list)').first().evaluate((list) => {
+    const style = getComputedStyle(list)
+    return {
+      listStyleType: style.listStyleType,
+      paddingInlineStart: Number.parseFloat(style.paddingInlineStart),
+    }
+  })
+  expect(listPresentation.listStyleType).toBe('disc')
+  expect(listPresentation.paddingInlineStart).toBeGreaterThan(0)
+
   await page.evaluate(() => {
     const event = new ClipboardEvent('paste', {
       clipboardData: new DataTransfer(),
       bubbles: true,
       cancelable: true,
     })
-    event.clipboardData?.setData('text/plain', '# Pasted doc\n\nHello **miru**.')
+    event.clipboardData?.setData('text/plain', [
+      '# Pasted doc',
+      '',
+      'Hello **miru**.',
+      '',
+      '#### Fourth level',
+      '',
+      '##### Fifth level',
+      '',
+      '###### Sixth level',
+    ].join('\n'))
     document.querySelector('main')?.dispatchEvent(event)
   })
 
   await expect(page.getByRole('heading', { name: 'Pasted doc' })).toBeVisible()
   await expect(page.getByText('Hello miru.')).toBeVisible()
+
+  const deepHeadingSizes = await page.locator('.reader-surface__content :is(h4, h5, h6)').evaluateAll(headings =>
+    headings.map(heading => Number.parseFloat(getComputedStyle(heading).fontSize)),
+  )
+  expect(deepHeadingSizes[0]).toBeGreaterThan(deepHeadingSizes[1] ?? 0)
+  expect(deepHeadingSizes[1]).toBeGreaterThan(deepHeadingSizes[2] ?? 0)
 })
 
 test('renders the reader footer with privacy copy and safe links', async ({ page }) => {
@@ -661,6 +687,9 @@ test('prints a clean full document without app chrome', async ({ page }) => {
   await expect.poll(() =>
     page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--reading-bg').trim()),
   ).toMatch(/^#fff(?:fff)?$/)
+  await expect.poll(() =>
+    page.evaluate(() => getComputedStyle(document.documentElement).colorScheme),
+  ).toBe('light')
 
   const linkAfter = await page
     .locator('.reader-surface__content a[href="https://example.com/resource"]')
@@ -1541,7 +1570,7 @@ test('persists desktop outline position and hides the control on narrow screens'
   const leftLayout = await readOutlineLayout(page)
   expect(leftLayout.railRight).toBeLessThan(leftLayout.contentLeft)
   expect(leftLayout.contentLeft - leftLayout.railRight).toBeGreaterThan(56)
-  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('miru:reading-settings:v1') ?? '{}').outlinePosition)).toBe('left')
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('miru:reading-settings:v2') ?? '{}').outlinePosition)).toBe('left')
 
   await page.reload()
   await expect(page.getByTestId('reader-outline-rail')).toBeVisible()
@@ -1550,7 +1579,7 @@ test('persists desktop outline position and hides the control on narrow screens'
 
   await page.getByTestId('reading-settings-button').click()
   await page.getByRole('button', { name: '恢复默认' }).click()
-  await expect.poll(() => page.evaluate(() => localStorage.getItem('miru:reading-settings:v1'))).toBeNull()
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('miru:reading-settings:v2'))).toBeNull()
   const resetLayout = await readOutlineLayout(page)
   expect(resetLayout.railLeft).toBeGreaterThan(resetLayout.contentRight)
 
@@ -1652,7 +1681,7 @@ test('customizes reading settings, persists them, and resets to defaults', async
   await page.getByRole('radio', { name: '字间距 松' }).click()
   await page.getByRole('radio', { name: '段间距 松' }).click()
   await page.getByRole('radio', { name: '页边距 宽松' }).click()
-  await page.getByRole('radio', { name: '主题 Sepia' }).click()
+  await page.getByRole('radio', { name: '配色 Sepia' }).click()
   await page.getByRole('radio', { name: '对比 醒目' }).click()
   await page.getByRole('radio', { name: '正文字体 系统无衬线' }).click()
 
@@ -1668,7 +1697,8 @@ test('customizes reading settings, persists them, and resets to defaults', async
     rule: '#ab8b48',
     codeBg: '#e2cb99',
     fontBody: '-apple-system, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif',
-    readingTheme: 'sepia',
+    readingStyle: 'brutal',
+    readingScheme: 'sepia',
     readingContrast: 'strong',
   })
   await expect.poll(() => readReadingTypography(page)).toMatchObject({
@@ -1694,7 +1724,8 @@ test('customizes reading settings, persists them, and resets to defaults', async
     fgMuted: '#3e3220',
     rule: '#ab8b48',
     codeBg: '#e2cb99',
-    readingTheme: 'sepia',
+    readingStyle: 'brutal',
+    readingScheme: 'sepia',
     readingContrast: 'strong',
   })
   await expect.poll(() => readReadingTypography(page)).toMatchObject({
@@ -1713,14 +1744,15 @@ test('customizes reading settings, persists them, and resets to defaults', async
     pageMargin: '',
     bg: '',
     fontBody: '',
-    readingTheme: '',
+    readingStyle: 'brutal',
+    readingScheme: 'system',
     readingContrast: '',
   })
   await expect.poll(() => readThemeSnapshot(page)).toMatchObject({
-    readingBg: '#fbf8f1',
-    appBg: 'rgb(251, 248, 241)',
+    readingBg: '#fcf6ea',
+    appBg: 'rgb(252, 246, 234)',
   })
-  expect(await page.evaluate(() => localStorage.getItem('miru:reading-settings:v1'))).toBeNull()
+  expect(await page.evaluate(() => localStorage.getItem('miru:reading-settings:v2'))).toBeNull()
 })
 
 test('loads curated optional reading fonts only after selection', async ({ page }) => {
@@ -1754,7 +1786,7 @@ test('loads curated optional reading fonts only after selection', async ({ page 
     fontBody: '"Atkinson Hyperlegible", -apple-system, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif',
   })
 
-  const persisted = await page.evaluate(() => JSON.parse(localStorage.getItem('miru:reading-settings:v1') ?? '{}'))
+  const persisted = await page.evaluate(() => JSON.parse(localStorage.getItem('miru:reading-settings:v2') ?? '{}'))
   expect(persisted.fontFamily).toBeUndefined()
   expect(persisted.tokenOverrides['--reading-font-body']).toContain('"Atkinson Hyperlegible"')
 })
@@ -1790,7 +1822,7 @@ test('confirms the LXGW WenKai large optional font before loading the full packa
     fontBody: '"LXGW WenKai", "Songti SC", "Noto Serif CJK SC", serif',
   })
 
-  const persistedSettings = await page.evaluate(() => JSON.parse(localStorage.getItem('miru:reading-settings:v1') ?? '{}'))
+  const persistedSettings = await page.evaluate(() => JSON.parse(localStorage.getItem('miru:reading-settings:v2') ?? '{}'))
   const confirmedFonts = await page.evaluate(() => JSON.parse(localStorage.getItem('miru:confirmed-optional-fonts:v1') ?? '[]'))
 
   expect(persistedSettings.fontFamily).toBeUndefined()
@@ -1819,7 +1851,7 @@ test('keeps LXGW WenKai confirmation open when the large font download fails', a
     fontBody: '',
   })
 
-  const persistedSettings = await page.evaluate(() => JSON.parse(localStorage.getItem('miru:reading-settings:v1') ?? '{}'))
+  const persistedSettings = await page.evaluate(() => JSON.parse(localStorage.getItem('miru:reading-settings:v2') ?? '{}'))
   const confirmedFonts = await page.evaluate(() => JSON.parse(localStorage.getItem('miru:confirmed-optional-fonts:v1') ?? '[]'))
 
   expect(persistedSettings.tokenOverrides?.['--reading-font-body']).toBeUndefined()
@@ -1836,7 +1868,7 @@ test('uploads, persists, and safely deletes local reading fonts without third-pa
   await page.getByTestId('reading-settings-button').click()
 
   const uploadedFontName = 'space-mono-latin-400-normal'
-  const fontPath = path.join(process.cwd(), 'node_modules/@ayingott/theme/src/fonts/space-mono-latin-400-normal.woff2')
+  const fontPath = fileURLToPath(import.meta.resolve('@ayingott/theme/fonts/space-mono-latin-400-normal.woff2'))
   await page.getByTestId('local-font-file-input').setInputFiles(fontPath)
 
   const uploadedFontRadio = page.getByRole('radio', { name: `正文字体 ${uploadedFontName}` })
@@ -1851,14 +1883,14 @@ test('uploads, persists, and safely deletes local reading fonts without third-pa
   expect(fontStack).toContain('"Songti SC"')
   expect(fontStack).toContain('"Noto Serif CJK SC"')
 
-  const persistedSettings = await page.evaluate(() => JSON.parse(localStorage.getItem('miru:reading-settings:v1') ?? '{}'))
+  const persistedSettings = await page.evaluate(() => JSON.parse(localStorage.getItem('miru:reading-settings:v2') ?? '{}'))
   expect(persistedSettings.fontFamily).toMatch(/^local:font-/)
   expect(persistedSettings.tokenOverrides['--reading-font-body']).toContain('MiruLocalFont')
 
   await page.getByRole('button', { name: /管理预设/ }).click()
   await page.getByLabel('存为预设').fill('Uploaded face')
   await page.getByRole('button', { name: '保存' }).click()
-  const persistedPresets = await page.evaluate(() => JSON.parse(localStorage.getItem('miru:reading-presets:v1') ?? '{}'))
+  const persistedPresets = await page.evaluate(() => JSON.parse(localStorage.getItem('miru:reading-presets:v2') ?? '{}'))
   expect(persistedPresets.presets[0].settings.fontFamily).toBe(persistedSettings.fontFamily)
 
   await page.reload()
@@ -1890,6 +1922,7 @@ test('uploads, persists, and safely deletes local reading fonts without third-pa
 })
 
 test('rejects malformed local font uploads without changing the current font', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'dark' })
   await page.goto('/')
   await page.getByTestId('reading-settings-button').click()
 
@@ -1899,71 +1932,196 @@ test('rejects malformed local font uploads without changing the current font', a
     buffer: Buffer.from('not a valid font'),
   })
 
-  await expect(page.getByText('字体无法解析,请换一个字体文件。')).toBeVisible()
+  const fontError = page.getByText('字体无法解析,请换一个字体文件。')
+  await expect(fontError).toBeVisible()
+  const fontErrorColors = await fontError.evaluate((element) => {
+    const style = getComputedStyle(element)
+    return {
+      bg: style.backgroundColor,
+      fg: style.color,
+    }
+  })
+  expect(contrastRatio(fontErrorColors.fg, fontErrorColors.bg)).toBeGreaterThanOrEqual(4.5)
   await expect(page.getByRole('radio', { name: '正文字体 Newsreader' })).toHaveAttribute('aria-checked', 'true')
-  expect(await page.evaluate(() => localStorage.getItem('miru:reading-settings:v1'))).toBeNull()
+  expect(await page.evaluate(() => localStorage.getItem('miru:reading-settings:v2'))).toBeNull()
 })
 
-test('system theme clears explicit theme overrides and keeps OS dark following', async ({ page }) => {
+test('theme style and color scheme switch independently while preserving OS following', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'light' })
   await page.goto('/')
 
   await page.getByTestId('reading-settings-button').click()
-  await page.getByRole('radio', { name: '主题 深色' }).click()
+  await page.getByRole('radio', { name: '主题风格 Default' }).click()
+  await page.getByRole('radio', { name: '配色 深色' }).click()
   await expect.poll(() => readThemeSnapshot(page)).toMatchObject({
-    readingBg: '#171615',
-    appBg: 'rgb(23, 22, 21)',
-    codeBg: 'rgb(34, 32, 30)',
+    readingBg: '#121019',
+    appBg: 'rgb(18, 16, 25)',
+    codeBg: 'rgb(42, 38, 53)',
   })
+  await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute('content', '#121019')
 
   await page.emulateMedia({ colorScheme: 'dark' })
-  await page.getByRole('radio', { name: '主题 Sepia' }).click()
+  await page.getByRole('radio', { name: '配色 Sepia' }).click()
   await expect.poll(() => readInlineReadingTokens(page)).toMatchObject({
     bg: '#efe1bd',
-    readingTheme: 'sepia',
+    readingStyle: 'default',
+    readingScheme: 'sepia',
   })
+  await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute('content', '#efe1bd')
 
-  await page.getByRole('radio', { name: '主题 跟随系统' }).click()
+  await page.getByRole('radio', { name: '配色 跟随系统' }).click()
 
   await expect.poll(() => readInlineReadingTokens(page)).toMatchObject({
     bg: '',
-    readingTheme: '',
+    readingStyle: 'default',
+    readingScheme: 'system',
   })
   await expect.poll(() => readThemeSnapshot(page)).toMatchObject({
-    readingBg: '#171615',
-    appBg: 'rgb(23, 22, 21)',
+    readingBg: '#121019',
+    appBg: 'rgb(18, 16, 25)',
   })
+  await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute('content', '#121019')
+
+  const persisted = await page.evaluate(() => JSON.parse(localStorage.getItem('miru:reading-settings:v2') ?? '{}'))
+  expect(persisted).toMatchObject({
+    version: 2,
+    themeStyle: 'default',
+    colorScheme: 'system',
+  })
+  expect(persisted.tokenOverrides).toBeUndefined()
 })
 
-test('system contrast adjustment follows the resolved OS theme and keeps AA contrast', async ({ page }) => {
+test('defaults to Brutal, can switch to Default, and applies Theme structural roles', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'light' })
+  await page.goto('/')
+
+  const root = page.locator('html')
+
+  await expect(root).toHaveAttribute('data-reading-style', 'brutal')
+  await expect(root).toHaveAttribute('data-reading-scheme', 'system')
+  await expect(root).toHaveClass(/\bbrutal\b/)
+  await expect(root).not.toHaveClass(/\bdark\b/)
+  expect(await page.evaluate(() => localStorage.getItem('miru:reading-settings:v2'))).toBeNull()
+
+  await page.getByTestId('reading-settings-button').click()
+  const brutalTheme = page.getByRole('radio', { name: '主题风格 Brutal' })
+  const settingsPanel = page.getByTestId('reading-settings-panel')
+
+  await expect(brutalTheme).toHaveAttribute('aria-checked', 'true')
+  await expect.poll(() => readInlineReadingTokens(page)).toMatchObject({
+    bg: '',
+    readingStyle: 'brutal',
+    readingScheme: 'system',
+  })
+  await expect.poll(() => readComputedReadingColors(page)).toMatchObject({
+    bg: '#fcf6ea',
+    fg: '#111',
+    fgMuted: '#3a3429',
+    accent: '#ffd02f',
+    accentText: '#3d5afe',
+    rule: '#111',
+  })
+  await expect(settingsPanel).toHaveCSS('border-radius', '0px')
+  await expect(settingsPanel).toHaveCSS('border-top-width', '3px')
+  await expect(settingsPanel).toHaveCSS('background-color', 'rgb(255, 255, 255)')
+  await expect(settingsPanel).not.toHaveCSS('box-shadow', 'none')
+  await expect(page.getByTestId('reading-settings')).toHaveCSS('z-index', '10')
+
+  const lightColors = await readComputedReadingColors(page)
+  expect(contrastRatio(lightColors.fg, lightColors.bg)).toBeGreaterThanOrEqual(4.5)
+  expect(contrastRatio(lightColors.accentText, lightColors.bg)).toBeGreaterThanOrEqual(4.5)
+
+  await page.emulateMedia({ colorScheme: 'dark' })
+
+  await expect(root).toHaveClass(/\bdark\b/)
+  await expect.poll(() => readComputedReadingColors(page)).toMatchObject({
+    bg: '#161412',
+    fg: '#f5f2ea',
+    fgMuted: '#e7dfd2',
+    accent: '#ffd02f',
+    accentText: '#c3a6ff',
+    rule: '#f5f2ea',
+  })
+  await expect(settingsPanel).toHaveCSS('background-color', 'rgb(33, 30, 22)')
+
+  const darkColors = await readComputedReadingColors(page)
+  expect(contrastRatio(darkColors.fg, darkColors.bg)).toBeGreaterThanOrEqual(4.5)
+  expect(contrastRatio(darkColors.accentText, darkColors.bg)).toBeGreaterThanOrEqual(4.5)
+
+  await page.getByRole('radio', { name: '主题风格 Default' }).click()
+
+  await expect(root).toHaveAttribute('data-reading-style', 'default')
+  await expect(root).toHaveAttribute('data-reading-scheme', 'system')
+  await expect(root).not.toHaveClass(/\bbrutal\b/)
+  await expect(root).toHaveClass(/\bdark\b/)
+  await expect.poll(() => readComputedReadingColors(page)).toMatchObject({
+    bg: '#121019',
+    fg: '#f7f1e6',
+    fgMuted: '#d7cdbc',
+    accent: '#c7b6f5',
+    accentText: '#c7b6f5',
+  })
+
+  const persistedDefault = await page.evaluate(() => JSON.parse(localStorage.getItem('miru:reading-settings:v2') ?? '{}'))
+  expect(persistedDefault).toMatchObject({
+    version: 2,
+    themeStyle: 'default',
+    colorScheme: 'system',
+  })
+  expect(persistedDefault.tokenOverrides).toBeUndefined()
+
+  await page.keyboard.press('Escape')
+  await page.reload()
+
+  await expect(root).toHaveAttribute('data-reading-style', 'default')
+  await expect(root).toHaveAttribute('data-reading-scheme', 'system')
+  await expect(root).not.toHaveClass(/\bbrutal\b/)
+  await expect(root).toHaveClass(/\bdark\b/)
+
+  await page.getByTestId('reading-settings-button').click()
+  await page.getByRole('radio', { name: '主题风格 Brutal' }).click()
+
+  await expect(root).toHaveAttribute('data-reading-style', 'brutal')
+  await expect(root).toHaveAttribute('data-reading-scheme', 'system')
+  await expect(root).toHaveClass(/\bbrutal\b/)
+  expect(await page.evaluate(() => localStorage.getItem('miru:reading-settings:v2'))).toBeNull()
+})
+
+test('Default contrast adjustment follows the resolved OS theme and keeps AA contrast', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'dark' })
   await page.goto('/')
 
   await page.getByTestId('reading-settings-button').click()
+  await page.getByRole('radio', { name: '主题风格 Default' }).click()
   await page.getByRole('radio', { name: '对比 柔和' }).click()
 
   await expect.poll(() => readInlineReadingTokens(page)).toMatchObject({
     fg: '',
-    readingTheme: '',
+    readingStyle: 'default',
+    readingScheme: 'system',
     readingContrast: 'soft',
   })
 
   const darkColors = await readComputedReadingColors(page)
-  expect(darkColors.fg).toBe('#cfc5b8')
+  expect(darkColors.fg).toBe('#d7cdbc')
   expect(contrastRatio(darkColors.fg, darkColors.bg)).toBeGreaterThanOrEqual(4.5)
 
   await page.emulateMedia({ colorScheme: 'light' })
 
+  await expect(page.locator('html')).not.toHaveClass(/\bdark\b/)
+  await expect.poll(() => readComputedReadingColors(page)).toMatchObject({
+    bg: '#faf8f4',
+    fg: '#514a3e',
+  })
   const lightColors = await readComputedReadingColors(page)
-  expect(lightColors.fg).toBe('#4a453d')
+  expect(lightColors.fg).toBe('#514a3e')
   expect(contrastRatio(lightColors.fg, lightColors.bg)).toBeGreaterThanOrEqual(4.5)
 
   await page.getByRole('radio', { name: '对比 醒目' }).click()
 
   const strongLightColors = await readComputedReadingColors(page)
-  expect(strongLightColors.fg).toBe('#17130f')
-  expect(strongLightColors.fgMuted).toBe('#322d26')
-  expect(strongLightColors.rule).toBe('#c7b8a0')
+  expect(strongLightColors.fg).toBe('#191713')
+  expect(strongLightColors.fgMuted).toBe('#514a3e')
   expect(contrastRatio(strongLightColors.fg, strongLightColors.bg)).toBeGreaterThanOrEqual(4.5)
   expect(contrastRatio(strongLightColors.fgMuted, strongLightColors.bg)).toBeGreaterThanOrEqual(4.5)
 })
@@ -1972,15 +2130,28 @@ test('custom theme editor warns and auto-fixes AA contrast', async ({ page }) =>
   await page.goto('/')
 
   await page.getByTestId('reading-settings-button').click()
-  await page.getByRole('radio', { name: '主题 自定义' }).click()
-  await page.getByRole('button', { name: /编辑自定义主题/ }).click()
+  await page.getByRole('radio', { name: '配色 自定义' }).click()
+  await page.getByRole('button', { name: /编辑自定义配色/ }).click()
   await expect(page.getByTestId('reading-settings-custom-theme-panel')).toBeVisible()
 
-  await page.getByLabel('自定义主题 背景').fill('#ffffff')
-  await page.getByLabel('自定义主题 正文').fill('#bbbbbb')
-  await page.getByLabel('自定义主题 强调').fill('#cccccc')
-
   const contrastWarning = page.locator('.reading-settings__warning')
+
+  await page.getByLabel('自定义配色 背景').fill('#000000')
+  await page.getByLabel('自定义配色 正文').fill('#222222')
+  await page.getByLabel('自定义配色 强调').fill('#333333')
+  await expect(contrastWarning).toHaveAttribute('data-severity', 'critical')
+  const warningColors = await contrastWarning.evaluate((element) => {
+    const style = getComputedStyle(element)
+    return {
+      bg: style.backgroundColor,
+      fg: style.color,
+    }
+  })
+  expect(contrastRatio(warningColors.fg, warningColors.bg)).toBeGreaterThanOrEqual(4.5)
+
+  await page.getByLabel('自定义配色 背景').fill('#ffffff')
+  await page.getByLabel('自定义配色 正文').fill('#bbbbbb')
+  await page.getByLabel('自定义配色 强调').fill('#cccccc')
 
   await expect(page.getByText('正文与强调色对比不足，正文几乎无法阅读。')).toBeVisible()
   await expect(contrastWarning).toHaveAttribute('data-severity', 'critical')
@@ -1988,10 +2159,11 @@ test('custom theme editor warns and auto-fixes AA contrast', async ({ page }) =>
     bg: '#ffffff',
     fg: '#bbbbbb',
     accent: '#cccccc',
-    readingTheme: 'custom',
+    readingStyle: 'brutal',
+    readingScheme: 'custom',
   })
 
-  await page.getByLabel('自定义主题 正文').fill('#111111')
+  await page.getByLabel('自定义配色 正文').fill('#111111')
   await expect(page.getByText('强调色对比不足，链接和重点可能不清晰。')).toBeVisible()
   await expect(contrastWarning).toHaveAttribute('data-severity', 'notice')
 
@@ -2003,11 +2175,20 @@ test('custom theme editor warns and auto-fixes AA contrast', async ({ page }) =>
   expect(contrastRatio(fixedTokens.fg, fixedTokens.bg)).toBeGreaterThanOrEqual(4.5)
   expect(contrastRatio(fixedTokens.fgMuted, fixedTokens.bg)).toBeGreaterThanOrEqual(4.5)
   expect(contrastRatio(fixedTokens.accent, fixedTokens.bg)).toBeGreaterThanOrEqual(4.5)
+  expect(contrastRatio(fixedTokens.accentContrast, fixedTokens.accent)).toBeGreaterThanOrEqual(4.5)
+  expect(contrastRatio(fixedTokens.focus, fixedTokens.bg)).toBeGreaterThanOrEqual(3)
   expect(contrastRatio(fixedTokens.codeFg, fixedTokens.codeBg)).toBeGreaterThanOrEqual(4.5)
 
-  const persisted = await page.evaluate(() => JSON.parse(localStorage.getItem('miru:reading-settings:v1') ?? '{}'))
+  const fixedComputedColors = await readComputedReadingColors(page)
+  expect(contrastRatio(fixedComputedColors.accentText, fixedComputedColors.bg)).toBeGreaterThanOrEqual(4.5)
 
-  expect(persisted.presetId).toBe('custom')
+  const persisted = await page.evaluate(() => JSON.parse(localStorage.getItem('miru:reading-settings:v2') ?? '{}'))
+
+  expect(persisted).toMatchObject({
+    version: 2,
+    themeStyle: 'brutal',
+    colorScheme: 'custom',
+  })
   expect(persisted.customTheme.bg).toBe('#ffffff')
   expect(contrastRatio(persisted.customTheme.fg, persisted.customTheme.bg)).toBeGreaterThanOrEqual(4.5)
   expect(contrastRatio(persisted.customTheme.accent, persisted.customTheme.bg)).toBeGreaterThanOrEqual(4.5)
@@ -2016,7 +2197,8 @@ test('custom theme editor warns and auto-fixes AA contrast', async ({ page }) =>
 
   await expect.poll(() => readInlineReadingTokens(page)).toMatchObject({
     bg: '#ffffff',
-    readingTheme: 'custom',
+    readingStyle: 'brutal',
+    readingScheme: 'custom',
   })
   const reloadedTokens = await readInlineReadingTokens(page)
 
@@ -2024,6 +2206,186 @@ test('custom theme editor warns and auto-fixes AA contrast', async ({ page }) =>
   expect(contrastRatio(reloadedTokens.fgMuted, reloadedTokens.bg)).toBeGreaterThanOrEqual(4.5)
   expect(contrastRatio(reloadedTokens.accent, reloadedTokens.bg)).toBeGreaterThanOrEqual(4.5)
   expect(contrastRatio(reloadedTokens.codeFg, reloadedTokens.codeBg)).toBeGreaterThanOrEqual(4.5)
+})
+
+test('keeps desktop outline focus rings readable on Custom reading palettes', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.addInitScript(() => {
+    localStorage.setItem('miru:reading-settings:v2', JSON.stringify({
+      version: 2,
+      themeStyle: 'brutal',
+      colorScheme: 'custom',
+      customTheme: {
+        bg: '#777777',
+        fg: '#000000',
+        accent: '#000000',
+      },
+    }))
+  })
+  await page.goto('/')
+
+  const rail = page.getByTestId('reader-outline-rail')
+  await expect(rail).toBeVisible()
+
+  const outlineItem = rail.locator('.reader-outline__item').first()
+  await page.keyboard.press('Tab')
+  await outlineItem.focus()
+  await expect(outlineItem).toBeFocused()
+
+  const focusColors = await outlineItem.evaluate((element) => {
+    const appShell = document.querySelector<HTMLElement>('.app-shell')
+    const styles = getComputedStyle(element)
+
+    return {
+      background: appShell ? getComputedStyle(appShell).backgroundColor : '',
+      outline: styles.outlineColor,
+      outlineStyle: styles.outlineStyle,
+    }
+  })
+
+  expect(focusColors.outlineStyle).not.toBe('none')
+  expect(contrastRatio(focusColors.outline, focusColors.background)).toBeGreaterThanOrEqual(3)
+})
+
+test('keeps library chrome independent from low-contrast Custom reading colors', async ({ page }) => {
+  await page.addInitScript(() => {
+    localStorage.setItem('miru:reading-settings:v2', JSON.stringify({
+      version: 2,
+      themeStyle: 'default',
+      colorScheme: 'custom',
+      customTheme: {
+        bg: '#ffffff',
+        fg: '#bbbbbb',
+        accent: '#cccccc',
+      },
+    }))
+  })
+  await page.goto('/')
+  await page.getByTestId('library-open-button').click()
+
+  const appShell = page.locator('.app-shell')
+  await expect(appShell).toHaveClass(/\bapp-shell--library\b/)
+
+  const libraryColors = await page.getByTestId('library-view').evaluate((library) => {
+    const shell = library.closest<HTMLElement>('.app-shell')
+    const title = library.querySelector<HTMLElement>('.library-view__title')
+    const intro = library.querySelector<HTMLElement>('.library-view__intro')
+    const sort = library.querySelector<HTMLElement>('.library-view__sort')
+
+    return {
+      introFg: intro ? getComputedStyle(intro).color : '',
+      shellBg: shell ? getComputedStyle(shell).backgroundColor : '',
+      sortBg: sort ? getComputedStyle(sort).backgroundColor : '',
+      sortFg: sort ? getComputedStyle(sort).color : '',
+      titleFg: title ? getComputedStyle(title).color : '',
+    }
+  })
+
+  expect(contrastRatio(libraryColors.titleFg, libraryColors.shellBg)).toBeGreaterThanOrEqual(4.5)
+  expect(contrastRatio(libraryColors.introFg, libraryColors.shellBg)).toBeGreaterThanOrEqual(4.5)
+  expect(contrastRatio(libraryColors.sortFg, libraryColors.sortBg)).toBeGreaterThanOrEqual(4.5)
+})
+
+test('keeps settings status pairs readable in dark schemes', async ({ page }) => {
+  await page.emulateMedia({ colorScheme: 'dark' })
+  await page.goto('/')
+
+  await page.getByTestId('reading-settings-button').click()
+  await page.getByRole('radio', { name: '配色 自定义' }).click()
+  await page.getByRole('button', { name: /编辑自定义配色/ }).click()
+  await page.getByLabel('自定义配色 背景').fill('#000000')
+  await page.getByLabel('自定义配色 正文').fill('#222222')
+  await page.getByLabel('自定义配色 强调').fill('#333333')
+
+  const failedContrastRow = page.locator('.reading-settings__contrast-row[data-pass="false"]').first()
+  const failedRowColors = await failedContrastRow.evaluate((element) => {
+    const style = getComputedStyle(element)
+    return {
+      bg: style.backgroundColor,
+      fg: style.color,
+    }
+  })
+  expect(contrastRatio(failedRowColors.fg, failedRowColors.bg)).toBeGreaterThanOrEqual(4.5)
+
+  await page.getByRole('button', { name: '返回阅读设置' }).click()
+  const warningStatus = page.getByText('需要调整对比', { exact: true })
+  const warningStatusColors = await warningStatus.evaluate((element) => {
+    const style = getComputedStyle(element)
+    return {
+      bg: style.backgroundColor,
+      fg: style.color,
+    }
+  })
+  expect(contrastRatio(warningStatusColors.fg, warningStatusColors.bg)).toBeGreaterThanOrEqual(4.5)
+})
+
+test('keeps code and semantic panels readable with a dark Custom theme', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.addInitScript(() => {
+    localStorage.setItem('miru:reading-settings:v2', JSON.stringify({
+      version: 2,
+      themeStyle: 'default',
+      colorScheme: 'custom',
+      customTheme: {
+        bg: '#000000',
+        fg: '#ffffff',
+        accent: '#ffffff',
+      },
+    }))
+  })
+  await page.goto('/')
+
+  const root = page.locator('html')
+  await expect(root).toHaveAttribute('data-reading-style', 'default')
+  await expect(root).toHaveAttribute('data-reading-scheme', 'custom')
+  await expect(root).toHaveClass(/\bdark\b/)
+
+  const codeColors = await page.locator('.reader-surface__content .shiki span').first().evaluate((token) => {
+    const code = token.closest<HTMLElement>('.shiki')
+    return {
+      bg: code ? getComputedStyle(code).backgroundColor : '',
+      fg: getComputedStyle(token).color,
+    }
+  })
+  expect(contrastRatio(codeColors.fg, codeColors.bg)).toBeGreaterThanOrEqual(4.5)
+
+  await page.getByTestId('reader-outline-button').click()
+  const outlineColors = await page.getByTestId('reader-outline-panel').evaluate((panel) => {
+    const title = panel.querySelector<HTMLElement>('.reader-outline__title')
+    return {
+      bg: getComputedStyle(panel).backgroundColor,
+      fg: title ? getComputedStyle(title).color : '',
+    }
+  })
+  expect(contrastRatio(outlineColors.fg, outlineColors.bg)).toBeGreaterThanOrEqual(4.5)
+  await page.getByRole('button', { name: '关闭文档大纲' }).click()
+
+  await pasteText(page, '# Custom surface\n\nDark custom content.')
+  await page.getByTestId('library-open-button').click()
+
+  const entry = page.getByTestId('library-entry').filter({ hasText: 'Custom surface' })
+  await entry.getByRole('button', { name: 'Custom surface 更多操作' }).click()
+  const menu = entry.getByRole('menu')
+  const menuColors = await menu.evaluate((element) => {
+    const item = element.querySelector<HTMLElement>('.library-entry__menu-item:not(.library-entry__menu-item--danger)')
+    return {
+      bg: getComputedStyle(element).backgroundColor,
+      fg: item ? getComputedStyle(item).color : '',
+    }
+  })
+  expect(contrastRatio(menuColors.fg, menuColors.bg)).toBeGreaterThanOrEqual(4.5)
+
+  await menu.getByRole('menuitem', { name: '删除' }).click()
+  const dialog = page.getByRole('dialog', { name: /删除「Custom surface」/ })
+  const dialogColors = await dialog.evaluate((element) => {
+    const panel = element.querySelector<HTMLElement>('.library-dialog__panel')
+    const title = element.querySelector<HTMLElement>('.library-dialog__title')
+    return {
+      bg: panel ? getComputedStyle(panel).backgroundColor : '',
+      fg: title ? getComputedStyle(title).color : '',
+    }
+  })
+  expect(contrastRatio(dialogColors.fg, dialogColors.bg)).toBeGreaterThanOrEqual(4.5)
 })
 
 test('saves, applies, renames, and deletes reading presets', async ({ page }) => {
@@ -2035,11 +2397,11 @@ test('saves, applies, renames, and deletes reading presets', async ({ page }) =>
   await fontSizeSlider.press('ArrowRight')
   await fontSizeSlider.press('ArrowRight')
   await page.getByRole('radio', { name: '字间距 松' }).click()
-  await page.getByRole('radio', { name: '主题 自定义' }).click()
-  await page.getByRole('button', { name: /编辑自定义主题/ }).click()
-  await page.getByLabel('自定义主题 背景').fill('#ffffff')
-  await page.getByLabel('自定义主题 正文').fill('#111111')
-  await page.getByLabel('自定义主题 强调').fill('#767676')
+  await page.getByRole('radio', { name: '配色 自定义' }).click()
+  await page.getByRole('button', { name: /编辑自定义配色/ }).click()
+  await page.getByLabel('自定义配色 背景').fill('#ffffff')
+  await page.getByLabel('自定义配色 正文').fill('#111111')
+  await page.getByLabel('自定义配色 强调').fill('#767676')
   await page.getByRole('button', { name: '返回阅读设置' }).click()
 
   await page.getByRole('button', { name: /管理预设/ }).click()
@@ -2049,13 +2411,14 @@ test('saves, applies, renames, and deletes reading presets', async ({ page }) =>
   await page.getByLabel('存为预设').fill('Focus preset')
   await expect(page.getByText('已有同名预设，不会覆盖。')).toBeVisible()
 
-  const persistedAfterSave = await page.evaluate(() => JSON.parse(localStorage.getItem('miru:reading-presets:v1') ?? '{}'))
+  const persistedAfterSave = await page.evaluate(() => JSON.parse(localStorage.getItem('miru:reading-presets:v2') ?? '{}'))
   expect(persistedAfterSave.presets).toHaveLength(1)
   expect(persistedAfterSave.presets[0].name).toBe('Focus preset')
   expect(persistedAfterSave.presets[0].settings).toMatchObject({
     fontSize: '20',
     letterSpacing: 'loose',
-    theme: 'custom',
+    themeStyle: 'brutal',
+    colorScheme: 'custom',
     customTheme: {
       bg: '#ffffff',
       fg: '#111111',
@@ -2068,7 +2431,8 @@ test('saves, applies, renames, and deletes reading presets', async ({ page }) =>
     fontSize: '',
     letterSpacing: '',
     bg: '',
-    readingTheme: '',
+    readingStyle: 'brutal',
+    readingScheme: 'system',
   })
 
   await page.locator('.reading-settings__saved-preset').filter({ hasText: 'Focus preset' }).getByRole('button', { name: '应用' }).click()
@@ -2078,7 +2442,8 @@ test('saves, applies, renames, and deletes reading presets', async ({ page }) =>
     bg: '#ffffff',
     fg: '#111111',
     accent: '#767676',
-    readingTheme: 'custom',
+    readingStyle: 'brutal',
+    readingScheme: 'custom',
   })
   await expect(page.getByText('当前: Focus preset')).toBeVisible()
 
@@ -2094,7 +2459,7 @@ test('saves, applies, renames, and deletes reading presets', async ({ page }) =>
   await expect(renamedPreset).toHaveAttribute('data-pending-delete', 'true')
   await renamedPreset.getByRole('button', { name: '确认删除' }).click()
   await expect(page.getByText('Deep focus')).not.toBeVisible()
-  expect(await page.evaluate(() => localStorage.getItem('miru:reading-presets:v1'))).toBeNull()
+  expect(await page.evaluate(() => localStorage.getItem('miru:reading-presets:v2'))).toBeNull()
 })
 
 test('reading settings use a bottom sheet on narrow screens', async ({ page }) => {
@@ -2268,7 +2633,7 @@ test('uses a full-width outline sheet scrim on tablet and system dark', async ({
     await expect(page.getByTestId('reader-outline-button')).toBeFocused()
   }
 
-  async function selectTheme(name: string): Promise<void> {
+  async function selectReadingOption(name: string): Promise<void> {
     await page.getByTestId('reading-settings-button').click()
     await expect(page.getByTestId('reading-settings-panel')).toBeVisible()
     await page.getByRole('radio', { name }).click()
@@ -2280,7 +2645,9 @@ test('uses a full-width outline sheet scrim on tablet and system dark', async ({
   const scrollBeforeOutline = await page.evaluate(() => Math.round(window.scrollY))
   expect(scrollBeforeOutline).toBeGreaterThan(300)
 
-  await expect(page.locator('html')).not.toHaveAttribute('data-reading-theme')
+  await expect(page.locator('html')).toHaveAttribute('data-reading-style', 'brutal')
+  await expect(page.locator('html')).toHaveAttribute('data-reading-scheme', 'system')
+  await expect(page.locator('html')).toHaveClass(/\bbrutal\b/)
   expect(await readOutlineScrimStyle()).toMatchObject({
     animationName: expect.stringContaining('command-scrim-fade'),
     backgroundColor: 'rgba(0, 0, 0, 0.4)',
@@ -2305,24 +2672,35 @@ test('uses a full-width outline sheet scrim on tablet and system dark', async ({
   await closeOutlineScrim()
   await expect.poll(() => page.evaluate(() => Math.round(window.scrollY))).toBe(scrollBeforeOutline)
 
-  await selectTheme('主题 浅色')
-  await expect(page.locator('html')).toHaveAttribute('data-reading-theme', 'light')
+  await selectReadingOption('配色 浅色')
+  await expect(page.locator('html')).toHaveAttribute('data-reading-style', 'brutal')
+  await expect(page.locator('html')).toHaveAttribute('data-reading-scheme', 'light')
   expect((await readOutlineScrimStyle()).backgroundColor).toBe('rgba(0, 0, 0, 0.28)')
   await closeOutlineScrim()
 
-  await selectTheme('主题 Sepia')
-  await expect(page.locator('html')).toHaveAttribute('data-reading-theme', 'sepia')
+  await selectReadingOption('配色 Sepia')
+  await expect(page.locator('html')).toHaveAttribute('data-reading-style', 'brutal')
+  await expect(page.locator('html')).toHaveAttribute('data-reading-scheme', 'sepia')
   expect((await readOutlineScrimStyle()).backgroundColor).toBe('rgba(0, 0, 0, 0.28)')
   await closeOutlineScrim()
 
   await page.emulateMedia({ colorScheme: 'light' })
-  await selectTheme('主题 深色')
-  await expect(page.locator('html')).toHaveAttribute('data-reading-theme', 'dark')
+  await selectReadingOption('配色 深色')
+  await expect(page.locator('html')).toHaveAttribute('data-reading-style', 'brutal')
+  await expect(page.locator('html')).toHaveAttribute('data-reading-scheme', 'dark')
   expect((await readOutlineScrimStyle()).backgroundColor).toBe('rgba(0, 0, 0, 0.4)')
   await closeOutlineScrim()
 
-  await selectTheme('主题 跟随系统')
-  await expect(page.locator('html')).not.toHaveAttribute('data-reading-theme')
+  await selectReadingOption('主题风格 Default')
+  await expect(page.locator('html')).toHaveAttribute('data-reading-style', 'default')
+  await expect(page.locator('html')).toHaveAttribute('data-reading-scheme', 'dark')
+  await expect(page.locator('html')).not.toHaveClass(/\bbrutal\b/)
+  expect((await readOutlineScrimStyle()).backgroundColor).toBe('rgba(0, 0, 0, 0.4)')
+  await closeOutlineScrim()
+
+  await selectReadingOption('配色 跟随系统')
+  await expect(page.locator('html')).toHaveAttribute('data-reading-style', 'default')
+  await expect(page.locator('html')).toHaveAttribute('data-reading-scheme', 'system')
   expect((await readOutlineScrimStyle()).backgroundColor).toBe('rgba(0, 0, 0, 0.28)')
   await closeOutlineScrim()
 
@@ -2335,26 +2713,31 @@ test('uses a full-width outline sheet scrim on tablet and system dark', async ({
   await closeOutlineScrim()
 })
 
-test('follows OS color scheme changes for reading and code surfaces', async ({ page }) => {
+test('default Brutal follows OS color scheme changes for reading and code surfaces', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'light' })
   await page.goto('/')
 
+  await expect(page.locator('html')).toHaveAttribute('data-reading-style', 'brutal')
+  await expect(page.locator('html')).toHaveAttribute('data-reading-scheme', 'system')
   await expect(page.locator('.reader-surface__content')).toBeVisible()
 
   const lightTheme = await readThemeSnapshot(page)
+  const lightTypography = await readReadingTypography(page)
 
   await page.emulateMedia({ colorScheme: 'dark' })
 
   await expect.poll(() => readThemeSnapshot(page)).toMatchObject({
-    readingBg: '#171615',
-    appBg: 'rgb(23, 22, 21)',
-    codeBg: 'rgb(34, 32, 30)',
+    readingBg: '#161412',
+    appBg: 'rgb(22, 20, 18)',
+    codeBg: 'rgb(58, 52, 39)',
   })
 
   const darkTheme = await readThemeSnapshot(page)
+  const darkTypography = await readReadingTypography(page)
 
-  expect(lightTheme.readingBg).toBe('#fbf8f1')
+  expect(lightTheme.readingBg).toBe('#fcf6ea')
   expect(darkTheme.shikiColor).not.toBe(lightTheme.shikiColor)
+  expect(darkTypography).toEqual(lightTypography)
 })
 
 async function readThemeSnapshot(page: import('@playwright/test').Page) {
@@ -2386,11 +2769,14 @@ async function readInlineReadingTokens(page: import('@playwright/test').Page) {
       fg: root.style.getPropertyValue('--reading-fg').trim(),
       fgMuted: root.style.getPropertyValue('--reading-fg-muted').trim(),
       accent: root.style.getPropertyValue('--reading-accent').trim(),
+      accentContrast: root.style.getPropertyValue('--reading-accent-contrast').trim(),
+      focus: root.style.getPropertyValue('--reading-focus').trim(),
       rule: root.style.getPropertyValue('--reading-rule').trim(),
       codeFg: root.style.getPropertyValue('--reading-code-fg').trim(),
       codeBg: root.style.getPropertyValue('--reading-code-bg').trim(),
       fontBody: root.style.getPropertyValue('--reading-font-body').trim(),
-      readingTheme: root.dataset.readingTheme ?? '',
+      readingStyle: root.dataset.readingStyle ?? '',
+      readingScheme: root.dataset.readingScheme ?? '',
       readingContrast: root.dataset.readingContrast ?? '',
     }
   })
@@ -2426,6 +2812,9 @@ async function readComputedReadingColors(page: import('@playwright/test').Page) 
       bg: rootStyle.getPropertyValue('--reading-bg').trim(),
       fg: rootStyle.getPropertyValue('--reading-fg').trim(),
       fgMuted: rootStyle.getPropertyValue('--reading-fg-muted').trim(),
+      accent: rootStyle.getPropertyValue('--reading-accent').trim(),
+      accentText: rootStyle.getPropertyValue('--reading-accent-text').trim(),
+      accentContrast: rootStyle.getPropertyValue('--reading-accent-contrast').trim(),
       rule: rootStyle.getPropertyValue('--reading-rule').trim(),
     }
   })
@@ -2451,7 +2840,11 @@ function relativeLuminance(color: string): number {
 
 function parseRgbColor(color: string): [number, number, number] {
   if (color.startsWith('#')) {
-    const normalized = color.slice(1)
+    const raw = color.slice(1)
+    const normalized = raw.length === 3
+      ? raw.split('').map(channel => `${channel}${channel}`).join('')
+      : raw
+
     return [
       Number.parseInt(normalized.slice(0, 2), 16),
       Number.parseInt(normalized.slice(2, 4), 16),

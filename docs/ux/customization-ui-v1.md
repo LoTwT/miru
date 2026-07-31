@@ -4,7 +4,7 @@
 
 ## 1. Principle (reading-first)
 - Reading surface stays the hero; the panel is **chrome that recedes**. Live preview applies to the **real content** (not a preview box). Calm, on-brand, `--reading-*` tokens.
-- **Defaults = V0 current values → pure opt-in; an untouched reader sees zero change.**
+- **Default style = Brutal**; the independent color control defaults to following the OS light/dark scheme. Theme style Default remains the package's Paper/Ink option.
 
 ## 2. Affordance
 - **Independent `aA` control** (same layer as the FAB but independent state — does NOT reuse the load-FAB menu). Recedes on scroll like the FAB. Safari-Reader / Apple-Books "aA" mental model.
@@ -17,7 +17,8 @@
 | 行宽 Measure | **3**: 55 / 65 / 75 ch | 65 (V0) | `--reading-measure` |
 | 行距 Line-height | **3**: 1.5 / 1.7 / 1.9 | 1.7 (V0) | `--reading-line-height` |
 | 正文字体 Body font | **2**: serif / sans | serif (V0) | `--reading-font-body` |
-| 主题 Theme | **4**: 跟随系统 / 浅 / 深 / sepia | 跟随系统 (= V0 current; V0 already follows OS) | theme preset |
+| 主题风格 Theme style | **2**: Brutal / Default | Brutal | root style class |
+| 配色 Color scheme | **5**: 跟随系统 / 浅 / 深 / sepia / 自定义 | 跟随系统 | color scheme + reading tokens |
 | 重置 Reset | action | — | clears all overrides |
 
 - **字号 labels**: ascending "A" size glyphs (small→large A), language-neutral (fits miru's 中英 readers); px maps internally.
@@ -29,9 +30,9 @@
 - Panel positioned so the reading column stays visible while adjusting (desktop right-anchored; mobile sheet leaves text above).
 
 ## 5. Defaults · persistence · reset
-- **Empty persisted state = current** (跟随系统 + V0 values). Only an explicit choice writes an override/preset.
+- **Empty persisted state = Brutal + 跟随系统**. Style and color scheme persist independently as `themeStyle` and `colorScheme`; typography and reading overrides remain independent.
 - Persist via `useReadingSettings` composable + writePersist (localStorage-only; TL state layer). Restored on load (V0 already reads persisted).
-- **Reset「恢复默认」**= clear localStorage overrides → back to CSS/media + V0 token defaults (no base-token inline writes). Distinct from the **跟随系统** theme option (a theme choice, may write preset=system).
+- **Reset「恢复默认」**= clear localStorage overrides → back to Brutal + 跟随系统 + package reading defaults (no base-color inline writes). **Default** changes only the visual style; it does not change the selected color scheme.
 
 ## 6. Accessibility (non-modal reader popover — NOT full focus-trap)
 - Panel = reader popover/drawer: on open, focus moves into the panel; **Esc / outside-click / toggle `aA` closes and returns focus to `aA`**; Tab walks the panel controls naturally; **the page is NOT locked** — the reader can still reach the content / FAB (reading-first). (TL refinement, accepted.)
@@ -39,9 +40,11 @@
 - focus-visible rings (DS `focus-ring`); touch targets ≥44pt.
 - **reduced-motion**: panel open/close no slide (instant/fade); live-preview token changes apply without animated reflow.
 
-## 7. Themes + sepia
-- 4 themes. **Explicit light / dark / sepia via `:root[data-reading-theme=light|dark|sepia]` token override** (NOT JS-writing base). **跟随系统** = no `data-reading-theme` attr set → falls back to existing `prefers-color-scheme` media-query path (default, = V0). sepia = a `data-reading-theme=sepia` preset; switching away clears the attr/override (no residue). (Impl mechanism per PR #12.)
-- **Warm-paper sepia palette (miru-local preset override; UX brand-reviewed, QA to verify on implementation PR)**:
+## 7. Theme style + color scheme
+- Two independent controls. **Default** removes `.brutal` and uses the package's Paper/Ink structure; **Brutal** adds `.brutal`. The separate color control sets `.dark` from the OS or an explicit light/dark choice, while sepia/custom remain Miru-local reading palette overrides. Combinations such as Brutal + 深色 and Default + 浅色 are first-class states.
+- `@ayingott/theme@0.2.0` officially exports `@ayingott/theme/brutal.css`; Miru imports it after the default entry and no longer copies its palette. App chrome consumes the package's semantic roles, zero-radius card/control roles, heavy borders, hard shadows, status colors, focus roles, and reduced-motion/forced-colors behavior.
+- Persisted settings payload v2 stores `themeStyle` and `colorScheme` separately. Its v1 rollback projection keeps the combined legacy choice plus forward-compatible copies of both independent axes and a shared compatibility revision; this preserves all combinations and lets a later v2 deployment recover edits made while v1 was active. When the old writer strips those extra fields, non-theme edits are merged without losing an unchanged V2-only style, while an explicit V1 theme change still replaces both axes. Historical v1 `system` still migrates to Brutal + 跟随系统, and a partially invalid V2 payload defers to a healthy matching V1 projection.
+- **Warm-paper sepia palette (Miru-local preset override)**:
   - `--reading-bg #efe1bd`
   - `--reading-fg #463b29`
   - `--reading-fg-muted #64553e`
@@ -56,11 +59,11 @@
 ## 8. Acceptance (AC-C* + e2e)
 - AC-C1: `aA` reachable keyboard+touch; panel opens, Esc/outside/toggle closes + focus returns to `aA`; page not locked.
 - AC-C2: each discrete dial changes the real reading view immediately (no apply); measure mobile-safe (`max-inline-size: min(100%, var(--reading-measure))`, no overflow at 75ch on mobile).
-- AC-C3: reset restores V0 defaults (clears localStorage); settings persist + restore on reload.
+- AC-C3: reset restores Brutal + 跟随系统 defaults (clears localStorage); style, color scheme, and other settings persist + restore on reload.
 - AC-C4: a11y — controls keyboard/SR operable, labeled w/ values; reduced-motion respected; focus-visible present.
 - AC-C5: panel never permanently occludes the reading measure (desktop) / leaves text visible above (mobile sheet).
-- AC-C6: sepia preset AA-verified (QA); switching themes leaves no residual override.
-- e2e: discrete apply-live, reset, persist/restore, theme switch incl. sepia clear, mobile bottom-sheet no-overflow.
+- AC-C6: sepia and Brutal presets AA-verified (QA); switching themes leaves no residual override.
+- e2e: discrete apply-live, reset, persist/restore, independent style/color switching incl. sepia clear and Brutal OS light/dark, mobile bottom-sheet no-overflow.
 
 ## 9. Non-text / future notes (QA `267ee431`)
 - `code-bg #e2cb99` vs `bg #efe1bd` = **1.22:1** — intentional subtle code surface (consistent with light/dark); not text-AA-gated. Keep unless a future sepia-specific Shiki theme is introduced.

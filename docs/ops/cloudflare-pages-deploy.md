@@ -9,6 +9,7 @@ miru is a static Vite SPA with no backend, Pages Functions, Worker script, or se
 | Field | Value |
 | --- | --- |
 | Production branch | `main` |
+| Node.js | `24.18.0` (`.node-version`; supported range in `package.json#engines`) |
 | Package manager | `pnpm@10.25.0` (`package.json#packageManager`) |
 | Install command | `pnpm install --frozen-lockfile` |
 | Build command | `pnpm run build` |
@@ -63,7 +64,7 @@ Use this path once lo-user connects the Cloudflare project to GitHub.
 
 1. In Cloudflare, create/connect a Workers project for `LoTwT/miru`.
 2. Keep `wrangler.jsonc` as the source of truth.
-3. Ensure the build environment uses pnpm 10.25.0 if the dashboard asks for a package manager version.
+3. Keep the checked-in `.node-version` at a supported Node release. Cloudflare detects this file and currently uses Node 24.18.0; pnpm remains pinned by `package.json#packageManager`.
 4. Configure deploy to run:
 
    ```sh
@@ -113,7 +114,7 @@ find dist -maxdepth 2 -type f | sort
 sed -n '1,120p' dist/_headers
 ```
 
-`dist/_headers` must include the V0 CSP, `Referrer-Policy: no-referrer`, and `X-Content-Type-Options: nosniff`.
+`dist/_headers` must include the V0 CSP, `Referrer-Policy: no-referrer`, and `X-Content-Type-Options: nosniff`. `pnpm build` bundles the first-paint theme entry and fails if the SHA-256 allowed by `public/_headers` does not match the exact inline script bytes.
 
 ## Post-deploy Smoke
 

@@ -1,16 +1,27 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import {
-  contrastTokenOverridesByThemeAndChoice,
-  darkThemeTokenOverrides,
   deriveCustomThemeTokenOverrides,
-  lightThemeTokenOverrides,
+  fixCustomThemeToAA,
+  readingColorSchemeOptions,
   readingFontFamilyOptions,
+  readingThemeStyleOptions,
+  sepiaContrastTokenOverrides,
   sepiaThemeTokenOverrides,
 } from '@/features/settings/readingSettingsOptions'
 import { useReadingSettings } from '@/features/settings/useReadingSettings'
-import { readPersistedReadingPresets } from '@/features/settings/readingPresets'
-import { readPersistedReadingSettings } from '@/lib/theme/tokens'
+import {
+  legacyReadingPresetsStorageKey,
+  readingPresetsStorageKey,
+  readPersistedReadingPresets,
+  writePersistedReadingPresets,
+} from '@/features/settings/readingPresets'
+import {
+  legacyReadingSettingsStorageKey,
+  readingSettingsStorageKey,
+  readPersistedReadingSettings,
+  writePersistedReadingSettings,
+} from '@/lib/theme/tokens'
 
 function createStorage(): Storage {
   const data = new Map<string, string>()
@@ -24,6 +35,25 @@ function createStorage(): Storage {
     key: index => Array.from(data.keys())[index] ?? null,
     removeItem: key => data.delete(key),
     setItem: (key, value) => data.set(key, value),
+  }
+}
+
+function failWritesTo(storage: Storage, blockedKey: string): Storage {
+  return {
+    get length() {
+      return storage.length
+    },
+    clear: () => storage.clear(),
+    getItem: key => storage.getItem(key),
+    key: index => storage.key(index),
+    removeItem: key => storage.removeItem(key),
+    setItem: (key, value) => {
+      if (key === blockedKey) {
+        throw new Error('simulated write failure')
+      }
+
+      storage.setItem(key, value)
+    },
   }
 }
 
@@ -45,7 +75,7 @@ describe('reading customization settings', () => {
     settings.updateParagraphGap('loose')
     settings.updatePageMargin('spacious')
     settings.updateFontFamily('system-sans')
-    settings.updateTheme('sepia')
+    settings.updateColorScheme('sepia')
     settings.updateContrast('strong')
     settings.updateOutlinePosition('left')
 
@@ -60,13 +90,18 @@ describe('reading customization settings', () => {
     expect(root.style.getPropertyValue('--reading-fg-muted')).toBe('#3e3220')
     expect(root.style.getPropertyValue('--reading-rule')).toBe('#ab8b48')
     expect(root.style.getPropertyValue('--reading-code-bg')).toBe('#e2cb99')
-    expect(root.dataset.readingTheme).toBe('sepia')
+    expect(root.dataset.readingStyle).toBe('brutal')
+    expect(root.dataset.readingScheme).toBe('sepia')
     expect(root.dataset.readingContrast).toBe('strong')
     expect(settings.state.outlinePosition).toBe('left')
 
     const persisted = readPersistedReadingSettings(storage)
 
-    expect(persisted?.presetId).toBe('sepia')
+    expect(persisted).toMatchObject({
+      version: 2,
+      themeStyle: 'brutal',
+      colorScheme: 'sepia',
+    })
     expect(persisted?.tokenOverrides?.['--reading-font-size']).toBe('22px')
     expect(persisted?.tokenOverrides?.['--reading-measure']).toBe('75ch')
     expect(persisted?.tokenOverrides?.['--reading-letter-spacing']).toBe('0.03em')
@@ -79,22 +114,551 @@ describe('reading customization settings', () => {
     expect(persisted?.outlinePosition).toBe('left')
   })
 
-  it('switches back to system by clearing theme tokens while preserving typography overrides', () => {
+  it('switches style and color scheme independently while preserving typography overrides', () => {
     const settings = useReadingSettings({ root, storage })
 
     settings.updateFontSize('20')
-    settings.updateTheme('dark')
-    settings.updateTheme('system')
+    settings.updateColorScheme('dark')
+    settings.updateThemeStyle('default')
+    settings.updateColorScheme('system')
 
     expect(root.style.getPropertyValue('--reading-font-size')).toBe('20px')
     expect(root.style.getPropertyValue('--reading-bg')).toBe('')
-    expect(root.dataset.readingTheme).toBeUndefined()
+    expect(root.classList.contains('brutal')).toBe(false)
+    expect(root.dataset.readingStyle).toBe('default')
+    expect(root.dataset.readingScheme).toBe('system')
 
     const persisted = readPersistedReadingSettings(storage)
 
-    expect(persisted?.presetId).toBe('system')
+    expect(persisted).toMatchObject({
+      version: 2,
+      themeStyle: 'default',
+      colorScheme: 'system',
+    })
     expect(persisted?.tokenOverrides?.['--reading-font-size']).toBe('20px')
     expect(persisted?.tokenOverrides?.['--reading-bg']).toBeUndefined()
+  })
+
+  it('writes lossless rollback projections and restores v1-only edits after a rollback', () => {
+    const settings = useReadingSettings({ root, storage })
+
+    settings.updateThemeStyle('default')
+    settings.updateColorScheme('dark')
+
+    expect(JSON.parse(storage.getItem('miru:reading-settings:v2') ?? '{}')).toMatchObject({
+      version: 2,
+      themeStyle: 'default',
+      colorScheme: 'dark',
+    })
+    expect(JSON.parse(storage.getItem('miru:reading-settings:v1') ?? '{}')).toMatchObject({
+      version: 1,
+      presetId: 'dark',
+      themeStyle: 'default',
+      colorScheme: 'dark',
+    })
+    expect(JSON.parse(storage.getItem('miru:reading-settings:v1') ?? '{}').compatibilityRevision)
+      .toBe(JSON.parse(storage.getItem('miru:reading-settings:v2') ?? '{}').compatibilityRevision)
+
+    storage.setItem('miru:reading-settings:v1', JSON.stringify({
+      version: 1,
+      presetId: 'light',
+    }))
+
+    expect(readPersistedReadingSettings(storage)).toMatchObject({
+      version: 2,
+      themeStyle: 'default',
+      colorScheme: 'light',
+    })
+
+    storage.setItem('miru:reading-settings:v2', JSON.stringify({
+      version: 2,
+      themeStyle: 'invalid',
+      colorScheme: 'invalid',
+      contrast: 'invalid',
+      outlinePosition: 'center',
+      remoteImageMode: 'maybe',
+      customTheme: {
+        bg: '#fff',
+      },
+      tokenOverrides: {
+        '--reading-font-size': 'url(https://attacker.invalid/font)',
+      },
+    }))
+    expect(readPersistedReadingSettings(storage)).toMatchObject({
+      version: 2,
+      themeStyle: 'default',
+      colorScheme: 'light',
+    })
+
+    settings.updateColorScheme('dark')
+    settings.savePreset('Rollback preset')
+
+    expect(JSON.parse(storage.getItem('miru:reading-presets:v2') ?? '{}')).toMatchObject({
+      version: 2,
+      presets: [
+        expect.objectContaining({
+          settings: expect.objectContaining({
+            themeStyle: 'default',
+            colorScheme: 'dark',
+          }),
+        }),
+      ],
+    })
+    expect(JSON.parse(storage.getItem('miru:reading-presets:v1') ?? '{}')).toMatchObject({
+      version: 1,
+      presets: [
+        expect.objectContaining({
+          settings: expect.objectContaining({
+            theme: 'dark',
+            themeStyle: 'default',
+            colorScheme: 'dark',
+          }),
+        }),
+      ],
+    })
+    expect(JSON.parse(storage.getItem('miru:reading-presets:v1') ?? '{}').compatibilityRevision)
+      .toBe(JSON.parse(storage.getItem('miru:reading-presets:v2') ?? '{}').compatibilityRevision)
+  })
+
+  it('round-trips every style and color combination through the v1 projection', () => {
+    for (const themeStyle of readingThemeStyleOptions.map(option => option.id)) {
+      for (const colorScheme of readingColorSchemeOptions.map(option => option.id)) {
+        const caseStorage = createStorage()
+
+        writePersistedReadingSettings({
+          version: 2,
+          themeStyle,
+          colorScheme,
+        }, caseStorage)
+        caseStorage.removeItem(readingSettingsStorageKey)
+
+        expect(readPersistedReadingSettings(caseStorage)).toMatchObject({
+          version: 2,
+          themeStyle,
+          colorScheme,
+        })
+      }
+    }
+  })
+
+  it('recovers the committed v1 projection when the authoritative settings write fails', () => {
+    writePersistedReadingSettings({
+      version: 2,
+      themeStyle: 'default',
+      colorScheme: 'dark',
+    }, storage)
+    const failingStorage = failWritesTo(storage, readingSettingsStorageKey)
+
+    expect(() => writePersistedReadingSettings({
+      version: 2,
+      themeStyle: 'brutal',
+      colorScheme: 'light',
+    }, failingStorage)).toThrow('simulated write failure')
+
+    expect(readPersistedReadingSettings(storage)).toMatchObject({
+      version: 2,
+      themeStyle: 'brutal',
+      colorScheme: 'light',
+    })
+  })
+
+  it('preserves a v2-only style when an old writer changes only known settings fields', () => {
+    writePersistedReadingSettings({
+      version: 2,
+      themeStyle: 'brutal',
+      colorScheme: 'dark',
+    }, storage)
+
+    storage.setItem(legacyReadingSettingsStorageKey, JSON.stringify({
+      version: 1,
+      presetId: 'dark',
+      tokenOverrides: {
+        '--reading-font-size': '20px',
+      },
+    }))
+
+    expect(readPersistedReadingSettings(storage)).toMatchObject({
+      version: 2,
+      themeStyle: 'brutal',
+      colorScheme: 'dark',
+      tokenOverrides: {
+        '--reading-font-size': '20px',
+      },
+    })
+
+    storage.setItem(legacyReadingSettingsStorageKey, JSON.stringify({
+      version: 1,
+      presetId: 'light',
+      tokenOverrides: {
+        '--reading-font-size': '20px',
+      },
+    }))
+
+    expect(readPersistedReadingSettings(storage)).toMatchObject({
+      version: 2,
+      themeStyle: 'default',
+      colorScheme: 'light',
+    })
+  })
+
+  it('recovers the healthy v1 projection when one same-revision v2 field is invalid', () => {
+    writePersistedReadingSettings({
+      version: 2,
+      themeStyle: 'default',
+      colorScheme: 'dark',
+    }, storage)
+
+    const revision = JSON.parse(storage.getItem(readingSettingsStorageKey) ?? '{}').compatibilityRevision
+    storage.setItem(readingSettingsStorageKey, JSON.stringify({
+      version: 2,
+      themeStyle: 'invalid',
+      colorScheme: 'dark',
+      compatibilityRevision: revision,
+    }))
+
+    expect(readPersistedReadingSettings(storage)).toMatchObject({
+      version: 2,
+      themeStyle: 'default',
+      colorScheme: 'dark',
+    })
+  })
+
+  it('merges old-writer edits with valid v2 axes when another v2 field is damaged', () => {
+    writePersistedReadingSettings({
+      version: 2,
+      themeStyle: 'brutal',
+      colorScheme: 'dark',
+    }, storage)
+
+    const damagedV2 = JSON.parse(storage.getItem(readingSettingsStorageKey) ?? '{}')
+    storage.setItem(readingSettingsStorageKey, JSON.stringify({
+      ...damagedV2,
+      contrast: 'invalid',
+    }))
+    storage.setItem(legacyReadingSettingsStorageKey, JSON.stringify({
+      version: 1,
+      presetId: 'dark',
+      tokenOverrides: {
+        '--reading-font-size': '20px',
+      },
+    }))
+
+    expect(readPersistedReadingSettings(storage)).toMatchObject({
+      version: 2,
+      themeStyle: 'brutal',
+      colorScheme: 'dark',
+      tokenOverrides: {
+        '--reading-font-size': '20px',
+      },
+    })
+  })
+
+  it('treats a rollback-era v1 deletion as an explicit reset', () => {
+    writePersistedReadingSettings({
+      version: 2,
+      themeStyle: 'default',
+      colorScheme: 'dark',
+    }, storage)
+    storage.removeItem(legacyReadingSettingsStorageKey)
+
+    expect(readPersistedReadingSettings(storage)).toBeNull()
+
+    const settings = useReadingSettings({ root, storage })
+    expect(settings.savePreset('Rollback reset preset')).not.toBeNull()
+    storage.removeItem(legacyReadingPresetsStorageKey)
+
+    expect(readPersistedReadingPresets(storage)).toEqual([])
+  })
+
+  it('does not resurrect damaged v2 snapshots after a rollback-era reset', () => {
+    writePersistedReadingSettings({
+      version: 2,
+      themeStyle: 'default',
+      colorScheme: 'dark',
+    }, storage)
+    storage.setItem(readingSettingsStorageKey, JSON.stringify({
+      version: 2,
+      themeStyle: 'invalid',
+      colorScheme: 'dark',
+      compatibilityRevision: 42,
+    }))
+    storage.removeItem(legacyReadingSettingsStorageKey)
+
+    expect(readPersistedReadingSettings(storage)).toBeNull()
+
+    const settings = useReadingSettings({ root, storage })
+    const preset = settings.savePreset('Damaged rollback preset')
+    expect(preset).not.toBeNull()
+    storage.setItem(readingPresetsStorageKey, JSON.stringify({
+      version: 2,
+      compatibilityRevision: 42,
+      presets: [{
+        ...preset!,
+        settings: {
+          ...preset!.settings,
+          themeStyle: 'invalid',
+        },
+      }],
+    }))
+    storage.removeItem(legacyReadingPresetsStorageKey)
+
+    expect(readPersistedReadingPresets(storage)).toEqual([])
+  })
+
+  it('salvages safe presets from a damaged revisionless v2 snapshot', () => {
+    const settings = useReadingSettings({ root, storage })
+    const preset = settings.savePreset('Revisionless preset')
+    expect(preset).not.toBeNull()
+
+    const payload = JSON.parse(storage.getItem(readingPresetsStorageKey) ?? '{}')
+    delete payload.compatibilityRevision
+    payload.presets[0].settings.themeStyle = 'invalid'
+    storage.setItem(readingPresetsStorageKey, JSON.stringify(payload))
+    storage.removeItem(legacyReadingPresetsStorageKey)
+
+    expect(readPersistedReadingPresets(storage)).toEqual([
+      expect.objectContaining({
+        name: 'Revisionless preset',
+        settings: expect.objectContaining({
+          themeStyle: 'brutal',
+          colorScheme: 'system',
+        }),
+      }),
+    ])
+  })
+
+  it('restores rollback preset edits and rejects semantically invalid v2 preset payloads', () => {
+    const settings = useReadingSettings({ root, storage })
+
+    settings.updateThemeStyle('default')
+    settings.updateColorScheme('dark')
+    expect(settings.savePreset('Original preset')).not.toBeNull()
+
+    storage.setItem('miru:reading-presets:v1', JSON.stringify({
+      version: 1,
+      presets: [{
+        id: 'preset-rollback',
+        name: 'Rollback edit',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-02T00:00:00.000Z',
+        settings: {
+          fontSize: '18',
+          theme: 'system',
+        },
+      }],
+    }))
+
+    expect(readPersistedReadingPresets(storage)).toEqual([
+      expect.objectContaining({
+        id: 'preset-rollback',
+        name: 'Rollback edit',
+        settings: expect.objectContaining({
+          themeStyle: 'brutal',
+          colorScheme: 'system',
+        }),
+      }),
+    ])
+
+    storage.setItem(readingPresetsStorageKey, JSON.stringify({
+      version: 2,
+      presets: [{}],
+    }))
+
+    expect(readPersistedReadingPresets(storage)).toEqual([
+      expect.objectContaining({
+        id: 'preset-rollback',
+        name: 'Rollback edit',
+      }),
+    ])
+  })
+
+  it('recovers the committed v1 preset projection when the authoritative preset write fails', () => {
+    const settings = useReadingSettings({ root, storage })
+    const original = settings.savePreset('Original preset')
+    expect(original).not.toBeNull()
+    const failingStorage = failWritesTo(storage, readingPresetsStorageKey)
+
+    expect(() => writePersistedReadingPresets([{
+      ...original!,
+      name: 'Partial rollback preset',
+      settings: {
+        ...original!.settings,
+        themeStyle: 'default',
+        colorScheme: 'system',
+      },
+    }], failingStorage)).toThrow('simulated write failure')
+
+    expect(readPersistedReadingPresets(storage)).toEqual([
+      expect.objectContaining({
+        name: 'Partial rollback preset',
+        settings: expect.objectContaining({
+          themeStyle: 'default',
+          colorScheme: 'system',
+        }),
+      }),
+    ])
+  })
+
+  it('preserves v2-only preset styles across old-writer edits and restores corrupt v2 presets', () => {
+    const settings = useReadingSettings({ root, storage })
+    settings.updateColorScheme('dark')
+    const preset = settings.savePreset('Original preset')
+    expect(preset).not.toBeNull()
+
+    const legacyPreset = {
+      ...preset!,
+      name: 'Renamed by rollback',
+      settings: {
+        ...preset!.settings,
+        fontSize: '20',
+        theme: 'dark',
+      },
+    }
+    delete (legacyPreset.settings as Partial<typeof legacyPreset.settings>).themeStyle
+    delete (legacyPreset.settings as Partial<typeof legacyPreset.settings>).colorScheme
+
+    storage.setItem(legacyReadingPresetsStorageKey, JSON.stringify({
+      version: 1,
+      presets: [legacyPreset],
+    }))
+
+    expect(readPersistedReadingPresets(storage)).toEqual([
+      expect.objectContaining({
+        name: 'Renamed by rollback',
+        settings: expect.objectContaining({
+          fontSize: '20',
+          themeStyle: 'brutal',
+          colorScheme: 'dark',
+        }),
+      }),
+    ])
+
+    const damagedPresets = JSON.parse(storage.getItem(readingPresetsStorageKey) ?? '{}')
+    storage.setItem(readingPresetsStorageKey, JSON.stringify({
+      ...damagedPresets,
+      presets: damagedPresets.presets.map((storedPreset: { settings: object }) => ({
+        ...storedPreset,
+        settings: {
+          ...storedPreset.settings,
+          fontSize: 'invalid',
+        },
+      })),
+    }))
+
+    expect(readPersistedReadingPresets(storage)[0]).toMatchObject({
+      name: 'Renamed by rollback',
+      settings: {
+        themeStyle: 'brutal',
+        colorScheme: 'dark',
+      },
+    })
+
+    storage.setItem(legacyReadingPresetsStorageKey, JSON.stringify({
+      version: 1,
+      presets: [{
+        ...legacyPreset,
+        settings: {
+          ...legacyPreset.settings,
+          theme: 'light',
+        },
+      }],
+    }))
+
+    expect(readPersistedReadingPresets(storage)[0]?.settings).toMatchObject({
+      themeStyle: 'default',
+      colorScheme: 'light',
+    })
+
+    const revision = JSON.parse(storage.getItem(readingPresetsStorageKey) ?? '{}').compatibilityRevision
+    storage.setItem(readingPresetsStorageKey, JSON.stringify({
+      version: 2,
+      compatibilityRevision: revision,
+      presets: [{
+        ...preset!,
+        settings: {
+          ...preset!.settings,
+          themeStyle: 'invalid',
+        },
+      }],
+    }))
+    storage.setItem(legacyReadingPresetsStorageKey, JSON.stringify({
+      version: 1,
+      compatibilityRevision: revision,
+      presets: [{
+        ...preset!,
+        settings: {
+          ...preset!.settings,
+          theme: 'dark',
+          themeStyle: 'brutal',
+          colorScheme: 'dark',
+        },
+      }],
+    }))
+
+    expect(readPersistedReadingPresets(storage)[0]?.settings).toMatchObject({
+      themeStyle: 'brutal',
+      colorScheme: 'dark',
+    })
+  })
+
+  it('defaults to Brutal with system color and can switch style without changing color', () => {
+    const settings = useReadingSettings({ root, storage, systemDark: false })
+
+    expect(readingThemeStyleOptions.map(option => option.id)).toEqual(['brutal', 'default'])
+    expect(readingColorSchemeOptions.map(option => option.id).slice(0, 3)).toEqual(['system', 'light', 'dark'])
+    expect(settings.state.themeStyle).toBe('brutal')
+    expect(settings.state.colorScheme).toBe('system')
+    expect(root.dataset.readingStyle).toBe('brutal')
+    expect(root.dataset.readingScheme).toBe('system')
+    expect(root.classList.contains('brutal')).toBe(true)
+    expect(root.classList.contains('dark')).toBe(false)
+    expect(settings.effectiveColorScheme.value).toBe('light')
+    expect(root.style.getPropertyValue('--reading-bg')).toBe('')
+    expect(readPersistedReadingSettings(storage)).toBeNull()
+
+    settings.syncSystemColorScheme(true)
+
+    expect(root.classList.contains('brutal')).toBe(true)
+    expect(root.classList.contains('dark')).toBe(true)
+    expect(settings.effectiveColorScheme.value).toBe('dark')
+
+    const preset = settings.savePreset('Brutal preset')
+
+    expect(readPersistedReadingPresets(storage)[0]?.settings).toMatchObject({
+      themeStyle: 'brutal',
+      colorScheme: 'system',
+    })
+
+    const restoredRoot = document.createElement('html')
+    const restored = useReadingSettings({ root: restoredRoot, storage, systemDark: true })
+    restored.applyCurrent()
+
+    expect(restored.state.themeStyle).toBe('brutal')
+    expect(restored.state.colorScheme).toBe('system')
+    expect(restoredRoot.dataset.readingStyle).toBe('brutal')
+    expect(restoredRoot.dataset.readingScheme).toBe('system')
+    expect(restoredRoot.classList.contains('brutal')).toBe(true)
+    expect(restoredRoot.classList.contains('dark')).toBe(true)
+    expect(restored.applyPreset(preset?.id ?? '')).toBe(true)
+
+    restored.updateThemeStyle('default')
+
+    expect(restoredRoot.classList.contains('brutal')).toBe(false)
+    expect(restoredRoot.classList.contains('dark')).toBe(true)
+    expect(restoredRoot.dataset.readingStyle).toBe('default')
+    expect(restoredRoot.dataset.readingScheme).toBe('system')
+    expect(readPersistedReadingSettings(storage)).toMatchObject({
+      themeStyle: 'default',
+      colorScheme: 'system',
+    })
+
+    restored.reset()
+
+    expect(restoredRoot.classList.contains('brutal')).toBe(true)
+    expect(restoredRoot.classList.contains('dark')).toBe(true)
+    expect(restoredRoot.dataset.readingStyle).toBe('brutal')
+    expect(restoredRoot.dataset.readingScheme).toBe('system')
+    expect(readPersistedReadingSettings(storage)).toBeNull()
   })
 
   it('persists outline position without writing typography or theme overrides', () => {
@@ -108,23 +672,30 @@ describe('reading customization settings', () => {
     const persisted = readPersistedReadingSettings(storage)
 
     expect(persisted?.outlinePosition).toBe('left')
-    expect(persisted?.presetId).toBe('system')
+    expect(persisted).toMatchObject({
+      themeStyle: 'brutal',
+      colorScheme: 'system',
+    })
     expect(persisted?.tokenOverrides).toBeUndefined()
   })
 
-  it('persists system contrast without writing fixed theme colors', () => {
+  it('persists Brutal contrast without writing fixed theme colors', () => {
     const settings = useReadingSettings({ root, storage })
 
     settings.updateContrast('soft')
 
     expect(settings.state.contrast).toBe('soft')
-    expect(root.dataset.readingTheme).toBeUndefined()
+    expect(root.dataset.readingStyle).toBe('brutal')
+    expect(root.dataset.readingScheme).toBe('system')
     expect(root.dataset.readingContrast).toBe('soft')
     expect(root.style.cssText).toBe('')
 
     const persisted = readPersistedReadingSettings(storage)
 
-    expect(persisted?.presetId).toBe('system')
+    expect(persisted).toMatchObject({
+      themeStyle: 'brutal',
+      colorScheme: 'system',
+    })
     expect(persisted?.contrast).toBe('soft')
     expect(persisted?.tokenOverrides).toBeUndefined()
   })
@@ -132,21 +703,25 @@ describe('reading customization settings', () => {
   it('persists a custom theme and can auto-fix it to AA contrast', () => {
     const settings = useReadingSettings({ root, storage })
 
-    settings.updateTheme('custom')
+    settings.updateColorScheme('custom')
     settings.updateCustomTheme({
       bg: '#ffffff',
       fg: '#bbbbbb',
       accent: '#cccccc',
     })
 
-    expect(root.dataset.readingTheme).toBe('custom')
+    expect(root.dataset.readingStyle).toBe('brutal')
+    expect(root.dataset.readingScheme).toBe('custom')
     expect(root.style.getPropertyValue('--reading-bg')).toBe('#ffffff')
     expect(root.style.getPropertyValue('--reading-fg')).toBe('#bbbbbb')
     expect(root.style.getPropertyValue('--reading-accent')).toBe('#cccccc')
 
     const persisted = readPersistedReadingSettings(storage)
 
-    expect(persisted?.presetId).toBe('custom')
+    expect(persisted).toMatchObject({
+      themeStyle: 'brutal',
+      colorScheme: 'custom',
+    })
     expect(persisted?.customTheme).toEqual({
       bg: '#ffffff',
       fg: '#bbbbbb',
@@ -167,7 +742,45 @@ describe('reading customization settings', () => {
 
     expect(contrastRatio(fixedTokens['--reading-fg-muted'], fixedTokens['--reading-bg'])).toBeGreaterThanOrEqual(4.5)
     expect(contrastRatio(fixedTokens['--reading-link'], fixedTokens['--reading-bg'])).toBeGreaterThanOrEqual(4.5)
+    expect(contrastRatio(fixedTokens['--reading-accent-contrast'], fixedTokens['--reading-accent'])).toBeGreaterThanOrEqual(4.5)
+    expect(contrastRatio(fixedTokens['--reading-focus'], fixedTokens['--reading-bg'])).toBeGreaterThanOrEqual(3)
     expect(contrastRatio(fixedTokens['--reading-code-fg'], fixedTokens['--reading-code-bg'])).toBeGreaterThanOrEqual(4.5)
+  })
+
+  it('chooses the reachable AA endpoint for mid-gray custom colors', () => {
+    const fixed = fixCustomThemeToAA({
+      bg: '#777777',
+      fg: '#777777',
+      accent: '#777777',
+    })
+
+    expect(contrastRatio(fixed.fg, fixed.bg)).toBeGreaterThanOrEqual(4.5)
+    expect(contrastRatio(fixed.accent, fixed.bg)).toBeGreaterThanOrEqual(4.5)
+    expect(fixed.fg).not.toBe('#ffffff')
+    expect(fixed.accent).not.toBe('#ffffff')
+  })
+
+  it('derives the semantic color scheme from a custom reading background', () => {
+    const settings = useReadingSettings({ root, storage, systemDark: false })
+
+    settings.updateColorScheme('custom')
+    settings.updateCustomTheme({
+      bg: '#000000',
+      fg: '#ffffff',
+      accent: '#ffffff',
+    })
+
+    expect(settings.effectiveColorScheme.value).toBe('dark')
+    expect(root.classList.contains('dark')).toBe(true)
+
+    settings.updateCustomTheme({
+      bg: '#ffffff',
+      fg: '#111111',
+      accent: '#66569d',
+    })
+
+    expect(settings.effectiveColorScheme.value).toBe('light')
+    expect(root.classList.contains('dark')).toBe(false)
   })
 
   it('saves, applies, renames, and deletes named reading presets', () => {
@@ -175,7 +788,7 @@ describe('reading customization settings', () => {
 
     settings.updateFontSize('22')
     settings.updateLetterSpacing('loose')
-    settings.updateTheme('custom')
+    settings.updateColorScheme('custom')
     settings.updateCustomTheme({
       bg: '#ffffff',
       fg: '#111111',
@@ -195,7 +808,8 @@ describe('reading customization settings', () => {
     expect(settings.applyPreset(preset?.id ?? '')).toBe(true)
     expect(root.style.getPropertyValue('--reading-font-size')).toBe('22px')
     expect(root.style.getPropertyValue('--reading-letter-spacing')).toBe('0.03em')
-    expect(root.dataset.readingTheme).toBe('custom')
+    expect(root.dataset.readingStyle).toBe('brutal')
+    expect(root.dataset.readingScheme).toBe('custom')
     expect(root.style.getPropertyValue('--reading-bg')).toBe('#ffffff')
     expect(settings.activePresetName.value).toBe('Focus preset')
 
@@ -206,15 +820,69 @@ describe('reading customization settings', () => {
     expect(readPersistedReadingPresets(storage)).toHaveLength(0)
   })
 
-  it('reads legacy fontBody settings as the matching font option', () => {
+  it('migrates a legacy system theme to Brutal while preserving fontBody', () => {
     storage.setItem('miru:reading-settings:v1', JSON.stringify({
       version: 1,
+      presetId: 'system',
       fontBody: '-apple-system, "Segoe UI", "PingFang SC", "Noto Sans CJK SC", sans-serif',
     }))
 
     const settings = useReadingSettings({ root, storage })
 
     expect(settings.state.fontFamily).toBe('system-sans')
+    expect(settings.state.themeStyle).toBe('brutal')
+    expect(settings.state.colorScheme).toBe('system')
+  })
+
+  it('keeps legacy system settings and named presets on the same Brutal mapping', () => {
+    storage.setItem('miru:reading-settings:v1', JSON.stringify({
+      version: 1,
+      presetId: 'system',
+      tokenOverrides: {
+        '--reading-font-size': '20px',
+      },
+    }))
+    storage.setItem('miru:reading-presets:v1', JSON.stringify({
+      version: 1,
+      presets: [{
+        id: 'preset-legacy-system',
+        name: 'Legacy system',
+        createdAt: '2025-01-01T00:00:00.000Z',
+        updatedAt: '2025-01-01T00:00:00.000Z',
+        settings: {
+          fontSize: '20',
+          theme: 'system',
+        },
+      }],
+    }))
+
+    const settings = useReadingSettings({ root, storage, systemDark: false })
+
+    expect(settings.state.themeStyle).toBe('brutal')
+    expect(settings.state.colorScheme).toBe('system')
+    expect(settings.activePresetName.value).toBe('Legacy system')
+    expect(settings.applyPreset('preset-legacy-system')).toBe(true)
+    expect(settings.state.themeStyle).toBe('brutal')
+    expect(settings.activePresetName.value).toBe('Legacy system')
+  })
+
+  it('migrates a legacy pinned color into independent Default style and color state', () => {
+    storage.setItem('miru:reading-settings:v1', JSON.stringify({
+      version: 1,
+      presetId: 'dark',
+    }))
+
+    const settings = useReadingSettings({ root, storage, systemDark: false })
+
+    expect(settings.state.themeStyle).toBe('default')
+    expect(settings.state.colorScheme).toBe('dark')
+    expect(root.classList.contains('brutal')).toBe(false)
+    expect(root.classList.contains('dark')).toBe(true)
+    expect(readPersistedReadingSettings(storage)).toMatchObject({
+      version: 2,
+      themeStyle: 'default',
+      colorScheme: 'dark',
+    })
   })
 
   it('offers curated optional font options and restores them from token overrides', () => {
@@ -278,7 +946,8 @@ describe('reading customization settings', () => {
 
     expect(root.style.getPropertyValue('--reading-font-size')).toBe('')
     expect(root.style.getPropertyValue('--reading-bg')).toBe('')
-    expect(root.dataset.readingTheme).toBeUndefined()
+    expect(root.dataset.readingStyle).toBe('brutal')
+    expect(root.dataset.readingScheme).toBe('system')
     expect(root.dataset.readingContrast).toBeUndefined()
     expect(settings.state.outlinePosition).toBe('right')
 
@@ -287,6 +956,14 @@ describe('reading customization settings', () => {
     expect(persisted?.remoteImageMode).toBe('block')
     expect(persisted?.tokenOverrides).toBeUndefined()
     expect(persisted?.outlinePosition).toBeUndefined()
+    expect(JSON.parse(storage.getItem('miru:reading-settings:v2') ?? '{}')).toMatchObject({
+      version: 2,
+      remoteImageMode: 'block',
+    })
+    expect(JSON.parse(storage.getItem('miru:reading-settings:v1') ?? '{}')).toMatchObject({
+      version: 1,
+      remoteImageMode: 'block',
+    })
   })
 
   it('ignores malformed persisted settings safely', () => {
@@ -295,29 +972,58 @@ describe('reading customization settings', () => {
     const settings = useReadingSettings({ root, storage })
 
     expect(settings.state.fontSize).toBe('18')
-    expect(settings.state.theme).toBe('system')
+    expect(settings.state.themeStyle).toBe('brutal')
+    expect(settings.state.colorScheme).toBe('system')
     expect(settings.state.contrast).toBe('standard')
     expect(settings.state.outlinePosition).toBe('right')
   })
 
-  it('keeps every contrast option at AA for body text', () => {
-    const themes = {
-      light: lightThemeTokenOverrides,
-      dark: darkThemeTokenOverrides,
-      sepia: sepiaThemeTokenOverrides,
-    } as const
+  it('drops persisted token values that can load external resources', () => {
+    storage.setItem('miru:reading-settings:v2', JSON.stringify({
+      version: 2,
+      themeStyle: 'brutal',
+      colorScheme: 'sepia',
+      tokenOverrides: {
+        '--reading-bg': 'url(https://attacker.invalid/pixel)',
+        '--reading-font-size': 'url(https://attacker.invalid/font)',
+        '--reading-unknown': 'red',
+      },
+    }))
 
-    for (const [theme, tokens] of Object.entries(themes)) {
-      for (const contrast of ['soft', 'standard', 'strong'] as const) {
-        const overrides = contrastTokenOverridesByThemeAndChoice[theme as keyof typeof themes][contrast]
-        const fg = overrides['--reading-fg'] ?? tokens['--reading-fg']
-        const bg = tokens['--reading-bg']
+    const persisted = readPersistedReadingSettings(storage)
+    const settings = useReadingSettings({ root, storage })
 
-        expect(
-          contrastRatio(fg, bg),
-          `${theme} ${contrast} body contrast`,
-        ).toBeGreaterThanOrEqual(4.5)
-      }
+    expect(persisted?.tokenOverrides).toBeUndefined()
+    expect(settings.state.colorScheme).toBe('sepia')
+    expect(root.style.getPropertyValue('--reading-bg')).toBe('#efe1bd')
+  })
+
+  it('delegates light and dark palettes to Theme tokens and keeps Sepia contrasts at AA', () => {
+    const settings = useReadingSettings({ root, storage, systemDark: true })
+
+    settings.updateColorScheme('light')
+
+    expect(root.classList.contains('dark')).toBe(false)
+    expect(settings.effectiveColorScheme.value).toBe('light')
+    expect(root.style.getPropertyValue('--reading-bg')).toBe('')
+    expect(root.style.getPropertyValue('--reading-link-hover')).toBe('')
+
+    settings.updateColorScheme('dark')
+
+    expect(root.classList.contains('dark')).toBe(true)
+    expect(settings.effectiveColorScheme.value).toBe('dark')
+    expect(root.style.getPropertyValue('--reading-bg')).toBe('')
+    expect(root.style.getPropertyValue('--reading-link-hover')).toBe('')
+
+    for (const contrast of ['soft', 'standard', 'strong'] as const) {
+      const overrides = sepiaContrastTokenOverrides.sepia[contrast]
+      const fg = overrides['--reading-fg'] ?? sepiaThemeTokenOverrides['--reading-fg']
+      const bg = sepiaThemeTokenOverrides['--reading-bg']
+
+      expect(
+        contrastRatio(fg, bg),
+        `sepia ${contrast} body contrast`,
+      ).toBeGreaterThanOrEqual(4.5)
     }
   })
 })

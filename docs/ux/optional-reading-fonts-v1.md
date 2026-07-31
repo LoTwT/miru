@@ -21,7 +21,7 @@ SIL Open Font License text in `public/fonts/optional/LICENSES.txt`.
 
 ## Loading Contract
 
-- Default Newsreader / Space Mono loading remains unchanged.
+- Default Newsreader plus Theme-provided Bricolage Grotesque / Space Mono loading remains curated and excludes Theme's Literata files.
 - Optional fonts live under `public/fonts/optional/`.
 - Selecting an optional font calls the local font registry and loads only that font's files with the `FontFace` API.
 - Optional font files are intentionally excluded from Workbox precache, so they are not downloaded on first visit or offline install unless selected.

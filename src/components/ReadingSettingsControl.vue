@@ -3,11 +3,10 @@ import { computed, nextTick, onMounted, onUnmounted, shallowRef, useTemplateRef,
 
 import {
   confirmedOptionalFontStorageKey,
-  contrastRatio,
   getCustomThemeChecks,
   getReadingFontFamilyOption,
   hasReadableCustomTheme,
-  normalizeHexColor,
+  readingColorSchemeOptions,
   readingContrastOptions,
   readingFontFamilyOptions,
   readingFontSizeOptions,
@@ -17,9 +16,10 @@ import {
   readingOutlinePositionOptions,
   readingPageMarginOptions,
   readingParagraphGapOptions,
-  readingThemeOptions,
+  readingThemeStyleOptions,
 } from '@/features/settings/readingSettingsOptions'
 import type {
+  ReadingColorSchemeId,
   ReadingContrastId,
   ReadingCustomThemeState,
   ReadingFontFamilyId,
@@ -31,7 +31,7 @@ import type {
   ReadingPageMarginId,
   ReadingParagraphGapId,
   ReadingSettingOption,
-  ReadingThemeChoice,
+  ReadingThemeStyleId,
 } from '@/features/settings/readingSettingsOptions'
 import type { ReadingPreset } from '@/features/settings/readingPresets'
 import type { LocalFontOption } from '@/features/settings/localFonts'
@@ -57,7 +57,8 @@ const emit = defineEmits<{
   updateParagraphGap: [value: ReadingParagraphGapId]
   updatePageMargin: [value: ReadingPageMarginId]
   updateFontFamily: [value: ReadingFontFamilyId]
-  updateTheme: [value: ReadingThemeChoice]
+  updateThemeStyle: [value: ReadingThemeStyleId]
+  updateColorScheme: [value: ReadingColorSchemeId]
   updateCustomTheme: [value: Partial<ReadingCustomThemeState>]
   autoFixCustomTheme: []
   savePreset: [name: string]
@@ -91,7 +92,7 @@ const localFontInputRef = useTemplateRef<HTMLInputElement>('localFontInput')
 const showOutlinePositionControl = computed(() => props.showOutlinePositionControl && isDesktopOutlineViewport.value)
 const settingsPanelTitle = computed(() => {
   if (activePanel.value === 'custom-theme') {
-    return '自定义主题'
+    return '自定义配色'
   }
 
   if (activePanel.value === 'fonts') {
@@ -153,15 +154,6 @@ const customThemeWarningText = computed(() => {
   return hasCustomThemeBodyContrastIssue.value
     ? '正文对比不足，当前配色几乎无法阅读。'
     : '强调色对比不足，链接和重点可能不清晰。'
-})
-const customThemeWarningStyle = computed(() => {
-  const bg = normalizeHexColor(props.settings.customTheme.bg) ?? '#ffffff'
-  const darkWarningInk = '#17130f'
-  const lightWarningInk = '#fff7f0'
-
-  return {
-    color: contrastRatio(darkWarningInk, bg) >= 4.5 ? darkWarningInk : lightWarningInk,
-  }
 })
 const fontSizeSliderValue = computed(() => {
   const index = readingFontSizeOptions.findIndex(option => option.id === props.settings.fontSize)
@@ -338,11 +330,12 @@ function rememberConfirmedOptionalFont(id: ReadingFontFamilyId): void {
 }
 
 function describePreset(preset: ReadingPreset): string {
-  const themeLabel = readingThemeOptions.find(option => option.id === preset.settings.theme)?.label ?? '主题'
+  const themeStyleLabel = readingThemeStyleOptions.find(option => option.id === preset.settings.themeStyle)?.label ?? '风格'
+  const colorSchemeLabel = readingColorSchemeOptions.find(option => option.id === preset.settings.colorScheme)?.label ?? '配色'
   const fontLabel = fontFamilyOptions.value.find(option => option.id === preset.settings.fontFamily)?.label ?? '默认字体'
   const fontSize = readingFontSizeOptions.find(option => option.id === preset.settings.fontSize)?.tokenValue ?? '18px'
 
-  return `${fontLabel} · ${fontSize} · ${themeLabel}`
+  return `${fontLabel} · ${fontSize} · ${themeStyleLabel} / ${colorSchemeLabel}`
 }
 
 function hasPresetName(name: string, ignoredPresetId?: string): boolean {
@@ -466,8 +459,12 @@ async function confirmPendingDownloadFont(): Promise<void> {
   emit('updateFontFamily', fontId)
 }
 
-function selectTheme(value: ReadingThemeChoice): void {
-  emit('updateTheme', value)
+function selectThemeStyle(value: ReadingThemeStyleId): void {
+  emit('updateThemeStyle', value)
+}
+
+function selectColorScheme(value: ReadingColorSchemeId): void {
+  emit('updateColorScheme', value)
 }
 
 function updateCustomThemeColor(key: keyof ReadingCustomThemeState, event: Event): void {
@@ -878,24 +875,49 @@ function syncOutlineViewport(): void {
           </h3>
 
           <fieldset class="reading-settings__field">
-            <legend class="reading-settings__legend">主题</legend>
+            <legend class="reading-settings__legend">风格</legend>
             <div
-              class="reading-settings__segments reading-settings__segments--theme"
+              class="reading-settings__segments reading-settings__segments--theme-style"
               role="radiogroup"
-              aria-label="主题"
-              @keydown="onRadioKeydown($event, readingThemeOptions, props.settings.theme, selectTheme)"
+              aria-label="主题风格"
+              @keydown="onRadioKeydown($event, readingThemeStyleOptions, props.settings.themeStyle, selectThemeStyle)"
             >
               <button
-                v-for="option in readingThemeOptions"
+                v-for="option in readingThemeStyleOptions"
                 :key="option.id"
                 class="reading-settings__segment"
                 type="button"
                 role="radio"
-                :aria-checked="props.settings.theme === option.id"
+                :aria-checked="props.settings.themeStyle === option.id"
                 :aria-label="option.ariaLabel"
                 :data-option-id="option.id"
                 data-settings-item
-                @click="selectTheme(option.id)"
+                @click="selectThemeStyle(option.id)"
+              >
+                {{ option.label }}
+              </button>
+            </div>
+          </fieldset>
+
+          <fieldset class="reading-settings__field">
+            <legend class="reading-settings__legend">配色</legend>
+            <div
+              class="reading-settings__segments reading-settings__segments--color-scheme"
+              role="radiogroup"
+              aria-label="配色"
+              @keydown="onRadioKeydown($event, readingColorSchemeOptions, props.settings.colorScheme, selectColorScheme)"
+            >
+              <button
+                v-for="option in readingColorSchemeOptions"
+                :key="option.id"
+                class="reading-settings__segment"
+                type="button"
+                role="radio"
+                :aria-checked="props.settings.colorScheme === option.id"
+                :aria-label="option.ariaLabel"
+                :data-option-id="option.id"
+                data-settings-item
+                @click="selectColorScheme(option.id)"
               >
                 {{ option.label }}
               </button>
@@ -903,7 +925,7 @@ function syncOutlineViewport(): void {
           </fieldset>
 
           <button
-            v-if="props.settings.theme === 'custom'"
+            v-if="props.settings.colorScheme === 'custom'"
             class="reading-settings__drilldown reading-settings__drilldown--custom-theme"
             type="button"
             data-settings-item
@@ -911,7 +933,7 @@ function syncOutlineViewport(): void {
             @click="openPanel('custom-theme')"
           >
             <span>
-              <strong>编辑自定义主题</strong>
+              <strong>编辑自定义配色</strong>
               <span :class="{ 'reading-settings__status--warning': !isCustomThemeReadable }">
                 {{ isCustomThemeReadable ? 'AA 可读' : '需要调整对比' }}
               </span>
@@ -987,7 +1009,7 @@ function syncOutlineViewport(): void {
                 class="reading-settings__color-input"
                 type="color"
                 :value="props.settings.customTheme.bg"
-                aria-label="自定义主题 背景"
+                aria-label="自定义配色 背景"
                 data-settings-item
                 @input="updateCustomThemeColor('bg', $event)"
               >
@@ -1001,7 +1023,7 @@ function syncOutlineViewport(): void {
                 class="reading-settings__color-input"
                 type="color"
                 :value="props.settings.customTheme.fg"
-                aria-label="自定义主题 正文"
+                aria-label="自定义配色 正文"
                 data-settings-item
                 @input="updateCustomThemeColor('fg', $event)"
               >
@@ -1015,14 +1037,14 @@ function syncOutlineViewport(): void {
                 class="reading-settings__color-input"
                 type="color"
                 :value="props.settings.customTheme.accent"
-                aria-label="自定义主题 强调"
+                aria-label="自定义配色 强调"
                 data-settings-item
                 @input="updateCustomThemeColor('accent', $event)"
               >
             </label>
           </div>
 
-          <div class="reading-settings__contrast-list" aria-label="自定义主题 AA 校验">
+          <div class="reading-settings__contrast-list" aria-label="自定义配色 AA 校验">
             <div
               v-for="check in customThemeChecks"
               :key="check.id"
@@ -1040,7 +1062,6 @@ function syncOutlineViewport(): void {
             class="reading-settings__warning"
             :data-severity="customThemeWarningSeverity"
             role="status"
-            :style="customThemeWarningStyle"
           >
             {{ customThemeWarningText }}
           </p>
@@ -1188,7 +1209,7 @@ function syncOutlineViewport(): void {
               已有同名预设，不会覆盖。
             </p>
             <p v-else class="reading-settings__subpanel-note">
-              保存当前字体、版面、主题、对比和大纲位置。
+              保存当前字体、版面、风格、配色、对比和大纲位置。
             </p>
           </div>
         </section>
@@ -1319,6 +1340,8 @@ function syncOutlineViewport(): void {
 
 <style scoped>
 .reading-settings {
+  position: relative;
+  z-index: var(--z-raised);
   inline-size: min(24rem, calc(100vw - 2rem));
 }
 
@@ -1326,12 +1349,12 @@ function syncOutlineViewport(): void {
   max-block-size: min(82vh, 44rem);
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 0.8rem;
-  border: 1px solid var(--reading-rule);
-  border-radius: 18px;
-  background: color-mix(in srgb, var(--reading-bg) 94%, transparent);
-  box-shadow: 0 18px 44px rgb(0 0 0 / 16%);
-  backdrop-filter: blur(16px);
+  padding: var(--spacing-3);
+  border: var(--border-width-surface) solid var(--border-default);
+  border-radius: var(--radius-card);
+  background: var(--surface-panel);
+  box-shadow: var(--shadow-panel);
+  transition: var(--transition-surface);
 }
 
 .reading-settings__handle {
@@ -1358,44 +1381,40 @@ function syncOutlineViewport(): void {
 }
 
 .reading-settings__title {
-  color: var(--reading-fg);
-  font-family: var(--reading-font-heading);
-  font-size: 1.05rem;
-  line-height: 1.2;
+  color: var(--text-primary);
+  font-family: var(--font-display);
+  font-size: var(--text-md);
+  line-height: var(--leading-tight);
 }
 
 .reading-settings__caption {
   margin-block-start: 0.2rem;
-  color: var(--reading-fg-muted);
-  font-size: 0.82rem;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
 }
 
 .reading-settings__back,
 .reading-settings__close {
   display: grid;
   place-items: center;
-  inline-size: 44px;
-  block-size: 44px;
-  border: 1px solid var(--reading-rule);
-  border-radius: 50%;
-  background: var(--reading-bg);
-  color: var(--reading-fg-muted);
+  inline-size: var(--touch-target-min);
+  block-size: var(--touch-target-min);
+  border: var(--border-width-control) solid var(--border-default);
+  border-radius: var(--radius-control);
+  background: var(--surface-elevated);
+  color: var(--text-secondary);
   cursor: pointer;
   font: inherit;
 }
 
-.reading-settings__back {
-  border-radius: 14px;
-}
-
 .reading-settings__content {
   display: grid;
-  gap: 0.85rem;
+  gap: var(--spacing-3-5);
 }
 
 .reading-settings__group {
-  padding-block-start: 0.72rem;
-  border-block-start: 1px solid color-mix(in srgb, var(--reading-rule) 72%, transparent);
+  padding-block-start: var(--spacing-3);
+  border-block-start: var(--border-width-thin) solid var(--border-subtle);
 }
 
 .reading-settings__group:first-child {
@@ -1405,11 +1424,11 @@ function syncOutlineViewport(): void {
 
 .reading-settings__group-title {
   margin: 0 0 0.58rem;
-  color: var(--reading-fg-muted);
-  font-family: var(--reading-font-code);
-  font-size: 0.72rem;
-  font-weight: 700;
-  line-height: 1.2;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--leading-tight);
 }
 
 .reading-settings__field {
@@ -1433,8 +1452,8 @@ function syncOutlineViewport(): void {
 
 .reading-settings__legend {
   margin-block-end: 0.35rem;
-  color: var(--reading-fg-muted);
-  font-size: 0.78rem;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
 }
 
 .reading-settings__range-header {
@@ -1451,48 +1470,48 @@ function syncOutlineViewport(): void {
 
 .reading-settings__range-note,
 .reading-settings__range-value {
-  color: var(--reading-fg-muted);
-  font-size: 0.78rem;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
 }
 
 .reading-settings__range-value {
-  color: var(--reading-accent);
-  font-weight: 700;
+  color: var(--text-accent);
+  font-weight: var(--font-weight-bold);
 }
 
 .reading-settings__range {
   --font-size-progress: 42.857%;
   display: block;
   inline-size: 100%;
-  block-size: 44px;
+  block-size: var(--touch-target-min);
   margin: 0;
   appearance: none;
   background: transparent;
-  color: var(--reading-accent);
+  color: var(--text-accent);
   cursor: pointer;
 }
 
 .reading-settings__range::-webkit-slider-runnable-track {
   block-size: 4px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background:
     linear-gradient(
       to right,
-      var(--reading-accent) 0 var(--font-size-progress),
-      color-mix(in srgb, var(--reading-rule) 78%, var(--reading-bg)) var(--font-size-progress) 100%
+      var(--accent-primary) 0 var(--font-size-progress),
+      var(--border-subtle) var(--font-size-progress) 100%
     );
 }
 
 .reading-settings__range::-moz-range-track {
   block-size: 4px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--reading-rule) 78%, var(--reading-bg));
+  border-radius: var(--radius-full);
+  background: var(--border-subtle);
 }
 
 .reading-settings__range::-moz-range-progress {
   block-size: 4px;
-  border-radius: 999px;
-  background: var(--reading-accent);
+  border-radius: var(--radius-full);
+  background: var(--accent-primary);
 }
 
 .reading-settings__range::-webkit-slider-thumb {
@@ -1500,25 +1519,25 @@ function syncOutlineViewport(): void {
   inline-size: 30px;
   block-size: 30px;
   margin-block-start: -13px;
-  border: 3px solid var(--reading-accent);
-  border-radius: 50%;
-  background: var(--reading-bg);
-  box-shadow: 0 4px 12px rgb(0 0 0 / 18%);
+  border: var(--border-width-heavy) solid var(--accent-primary);
+  border-radius: var(--radius-control);
+  background: var(--surface-panel);
+  box-shadow: var(--shadow-sm);
 }
 
 .reading-settings__range::-moz-range-thumb {
   inline-size: 30px;
   block-size: 30px;
-  border: 3px solid var(--reading-accent);
-  border-radius: 50%;
-  background: var(--reading-bg);
-  box-shadow: 0 4px 12px rgb(0 0 0 / 18%);
+  border: var(--border-width-heavy) solid var(--accent-primary);
+  border-radius: var(--radius-control);
+  background: var(--surface-panel);
+  box-shadow: var(--shadow-sm);
 }
 
 .reading-settings__range:focus-visible {
-  outline: 2px solid var(--reading-focus);
-  outline-offset: 4px;
-  box-shadow: var(--reading-focus-shadow);
+  outline: var(--border-width-thick) solid var(--focus-ring-color);
+  outline-offset: var(--spacing-1);
+  box-shadow: var(--focus-ring-shadow);
 }
 
 .reading-settings__range-ticks {
@@ -1532,8 +1551,8 @@ function syncOutlineViewport(): void {
 .reading-settings__range-ticks > span {
   inline-size: 2px;
   block-size: 10px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--reading-fg-muted) 38%, transparent);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--text-muted) 38%, transparent);
 }
 
 .reading-settings__segments {
@@ -1542,8 +1561,12 @@ function syncOutlineViewport(): void {
   gap: 0.35rem;
 }
 
-.reading-settings__segments--theme {
-  --segment-count: 5;
+.reading-settings__segments--color-scheme {
+  --segment-count: 3;
+}
+
+.reading-settings__segments--theme-style {
+  --segment-count: 2;
 }
 
 .reading-settings__segments--font-family {
@@ -1574,11 +1597,11 @@ function syncOutlineViewport(): void {
 .reading-settings__preset-item,
 .reading-settings__reset,
 .reading-settings__done {
-  min-block-size: 44px;
-  border: 1px solid var(--reading-rule);
-  border-radius: 12px;
-  background: var(--reading-bg);
-  color: var(--reading-fg);
+  min-block-size: var(--touch-target-min);
+  border: var(--border-width-control) solid var(--border-default);
+  border-radius: var(--radius-control);
+  background: var(--surface-elevated);
+  color: var(--text-primary);
   cursor: pointer;
   font: inherit;
 }
@@ -1592,8 +1615,8 @@ function syncOutlineViewport(): void {
 }
 
 .reading-settings__segment[data-pending-download="true"] {
-  border-color: var(--reading-accent);
-  box-shadow: inset 0 0 0 1px var(--reading-accent);
+  border-color: var(--accent-primary);
+  box-shadow: inset 0 0 0 var(--border-width-thin) var(--accent-primary);
 }
 
 .reading-settings__segment-label {
@@ -1601,8 +1624,8 @@ function syncOutlineViewport(): void {
 }
 
 .reading-settings__segment-badge {
-  color: var(--reading-fg-muted);
-  font-family: var(--reading-font-code);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
   font-size: 0.68rem;
   font-weight: 700;
   line-height: 1.15;
@@ -1613,21 +1636,21 @@ function syncOutlineViewport(): void {
   gap: 0.55rem;
   margin-block-start: 0.5rem;
   padding: 0.62rem;
-  border: 1px solid color-mix(in srgb, var(--reading-accent) 62%, var(--reading-rule));
-  border-radius: 14px;
-  background: color-mix(in srgb, var(--reading-accent) 8%, var(--reading-bg));
+  border: var(--border-width-surface) solid var(--status-warning-border);
+  border-radius: var(--radius-card);
+  background: var(--status-warning-bg);
 }
 
 .reading-settings__download-confirm > span:first-child {
   display: grid;
   gap: 0.2rem;
-  color: var(--reading-fg);
+  color: var(--status-warning-fg);
   font-size: 0.82rem;
   line-height: 1.45;
 }
 
 .reading-settings__download-confirm > span:first-child > span {
-  color: var(--reading-fg-muted);
+  color: var(--status-warning-fg);
 }
 
 .reading-settings__download-actions {
@@ -1637,11 +1660,11 @@ function syncOutlineViewport(): void {
 }
 
 .reading-settings__download-action {
-  min-block-size: 44px;
-  border: 1px solid var(--reading-rule);
-  border-radius: 12px;
-  background: var(--reading-bg);
-  color: var(--reading-accent);
+  min-block-size: var(--touch-target-min);
+  border: var(--border-width-control) solid var(--border-default);
+  border-radius: var(--radius-control);
+  background: var(--surface-elevated);
+  color: var(--text-accent);
   cursor: pointer;
   font: inherit;
   font-size: 0.82rem;
@@ -1649,7 +1672,7 @@ function syncOutlineViewport(): void {
 }
 
 .reading-settings__download-action--muted {
-  color: var(--reading-fg-muted);
+  color: var(--text-secondary);
 }
 
 .reading-settings__download-action:disabled {
@@ -1658,12 +1681,17 @@ function syncOutlineViewport(): void {
 }
 
 .reading-settings__download-message {
-  color: var(--reading-fg-muted);
+  color: var(--text-secondary);
   font-size: 0.78rem;
 }
 
 .reading-settings__download-message[data-kind="error"] {
-  color: var(--reading-accent);
+  width: fit-content;
+  padding: var(--spacing-1) var(--spacing-1-5);
+  border: var(--border-width-thin) solid var(--status-danger-border);
+  border-radius: var(--radius-control);
+  background: var(--status-danger-bg);
+  color: var(--status-danger-fg);
   font-weight: 700;
 }
 
@@ -1673,13 +1701,13 @@ function syncOutlineViewport(): void {
   justify-content: space-between;
   gap: 1rem;
   margin-block-end: 0.45rem;
-  color: var(--reading-fg);
+  color: var(--text-primary);
   font-size: 0.9rem;
 }
 
 .reading-settings__summary-label,
 .reading-settings__subpanel-note {
-  color: var(--reading-fg-muted);
+  color: var(--text-secondary);
   font-size: 0.82rem;
 }
 
@@ -1704,7 +1732,7 @@ function syncOutlineViewport(): void {
 }
 
 .reading-settings__drilldown > span:first-child > span {
-  color: var(--reading-fg-muted);
+  color: var(--text-secondary);
   font-size: 0.78rem;
 }
 
@@ -1714,7 +1742,7 @@ function syncOutlineViewport(): void {
 }
 
 .reading-settings__preset-item > span:first-child > span {
-  color: var(--reading-fg-muted);
+  color: var(--text-secondary);
   font-size: 0.78rem;
 }
 
@@ -1725,7 +1753,7 @@ function syncOutlineViewport(): void {
 }
 
 .reading-settings__preset-input-label {
-  color: var(--reading-fg-muted);
+  color: var(--text-secondary);
   font-size: 0.78rem;
 }
 
@@ -1741,22 +1769,22 @@ function syncOutlineViewport(): void {
 }
 
 .reading-settings__preset-input {
-  min-block-size: 44px;
+  min-block-size: var(--touch-target-min);
   min-inline-size: 0;
-  border: 1px solid var(--reading-rule);
-  border-radius: 12px;
-  background: var(--reading-bg);
-  color: var(--reading-fg);
+  border: var(--border-width-control) solid var(--border-default);
+  border-radius: var(--radius-control);
+  background: var(--surface-elevated);
+  color: var(--text-primary);
   font: inherit;
   padding-inline: 0.7rem;
 }
 
 .reading-settings__preset-action {
-  min-block-size: 44px;
-  border: 1px solid var(--reading-rule);
-  border-radius: 12px;
-  background: var(--reading-bg);
-  color: var(--reading-fg);
+  min-block-size: var(--touch-target-min);
+  border: var(--border-width-control) solid var(--border-default);
+  border-radius: var(--radius-control);
+  background: var(--surface-elevated);
+  color: var(--text-primary);
   cursor: pointer;
   font: inherit;
   font-size: 0.82rem;
@@ -1766,29 +1794,31 @@ function syncOutlineViewport(): void {
 
 .reading-settings__preset-action:disabled {
   cursor: not-allowed;
-  opacity: 0.45;
+  opacity: var(--opacity-disabled);
 }
 
 .reading-settings__preset-action--muted {
-  color: var(--reading-fg-muted);
+  color: var(--text-secondary);
 }
 
 .reading-settings__preset-action--danger {
-  color: var(--reading-accent);
+  border-color: var(--status-danger-border);
+  background: var(--status-danger-bg);
+  color: var(--status-danger-fg);
 }
 
 .reading-settings__saved-preset {
   display: grid;
   gap: 0.55rem;
   padding: 0.62rem;
-  border: 1px solid var(--reading-rule);
-  border-radius: 14px;
-  background: color-mix(in srgb, var(--reading-bg) 96%, var(--reading-fg));
+  border: var(--border-width-surface) solid var(--border-subtle);
+  border-radius: var(--radius-card);
+  background: var(--surface-subtle);
 }
 
 .reading-settings__saved-preset[data-pending-delete="true"] {
-  border-color: var(--reading-accent);
-  box-shadow: inset 0 0 0 1px var(--reading-accent);
+  border-color: var(--accent-primary);
+  box-shadow: inset 0 0 0 var(--border-width-thin) var(--accent-primary);
 }
 
 .reading-settings__saved-preset-summary {
@@ -1797,7 +1827,7 @@ function syncOutlineViewport(): void {
 }
 
 .reading-settings__saved-preset-summary > span {
-  color: var(--reading-fg-muted);
+  color: var(--text-secondary);
   font-size: 0.78rem;
 }
 
@@ -1812,21 +1842,35 @@ function syncOutlineViewport(): void {
 }
 
 .reading-settings__font-message[data-kind="info"] {
-  color: var(--reading-fg-muted);
+  color: var(--text-secondary);
 }
 
 .reading-settings__font-message[data-kind="warning"] {
-  color: var(--reading-accent);
+  width: fit-content;
+  padding: var(--spacing-1) var(--spacing-1-5);
+  border: var(--border-width-thin) solid var(--status-warning-border);
+  border-radius: var(--radius-control);
+  background: var(--status-warning-bg);
+  color: var(--status-warning-fg);
   font-weight: 700;
 }
 
 .reading-settings__font-message[data-kind="error"] {
-  color: var(--reading-accent);
+  width: fit-content;
+  padding: var(--spacing-1) var(--spacing-1-5);
+  border: var(--border-width-thin) solid var(--status-danger-border);
+  border-radius: var(--radius-control);
+  background: var(--status-danger-bg);
+  color: var(--status-danger-fg);
   font-weight: 800;
 }
 
 .reading-settings__status--warning {
-  color: var(--reading-accent) !important;
+  padding: 0.08rem var(--spacing-1);
+  border: var(--border-width-thin) solid var(--status-warning-border);
+  border-radius: var(--radius-control);
+  background: var(--status-warning-bg);
+  color: var(--status-warning-fg) !important;
   font-weight: 700;
 }
 
@@ -1842,11 +1886,11 @@ function syncOutlineViewport(): void {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 0.75rem;
   align-items: center;
-  min-block-size: 44px;
+  min-block-size: var(--touch-target-min);
   padding: 0.45rem 0.6rem;
-  border: 1px solid var(--reading-rule);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--reading-bg) 96%, var(--reading-fg));
+  border: var(--border-width-surface) solid var(--border-subtle);
+  border-radius: var(--radius-card);
+  background: var(--surface-subtle);
 }
 
 .reading-settings__color-row > span {
@@ -1855,18 +1899,18 @@ function syncOutlineViewport(): void {
 }
 
 .reading-settings__color-row > span > span {
-  color: var(--reading-fg-muted);
-  font-family: var(--reading-font-code);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
   font-size: 0.76rem;
 }
 
 .reading-settings__color-input {
-  inline-size: 44px;
-  block-size: 44px;
+  inline-size: var(--touch-target-min);
+  block-size: var(--touch-target-min);
   padding: 2px;
-  border: 1px solid var(--reading-rule);
-  border-radius: 12px;
-  background: var(--reading-bg);
+  border: var(--border-width-control) solid var(--border-default);
+  border-radius: var(--radius-control);
+  background: var(--surface-elevated);
   cursor: pointer;
 }
 
@@ -1877,42 +1921,46 @@ function syncOutlineViewport(): void {
 .reading-settings__contrast-row {
   grid-template-columns: minmax(0, 1fr) auto auto;
   min-block-size: 36px;
-  color: var(--reading-fg-muted);
+  color: var(--text-secondary);
   font-size: 0.82rem;
 }
 
 .reading-settings__contrast-row[data-pass="true"] {
-  color: var(--reading-fg);
+  color: var(--text-primary);
 }
 
 .reading-settings__contrast-row[data-pass="false"] {
-  border-color: var(--reading-accent);
-  color: var(--reading-accent);
+  border-color: var(--status-danger-border);
+  background: var(--status-danger-bg);
+  color: var(--status-danger-fg);
   font-weight: 700;
 }
 
 .reading-settings__warning {
   margin: 0.75rem 0;
-  border: 1px solid currentColor;
-  border-radius: 0.75rem;
-  background: color-mix(in srgb, currentColor 8%, transparent);
+  border: var(--border-width-surface) solid var(--status-warning-border);
+  border-radius: var(--radius-card);
+  background: var(--status-warning-bg);
+  color: var(--status-warning-fg);
   padding: 0.65rem 0.75rem;
   font-size: 0.82rem;
   font-weight: 700;
 }
 
 .reading-settings__warning[data-severity="critical"] {
-  background: color-mix(in srgb, currentColor 13%, transparent);
-  box-shadow: inset 0 0 0 1px currentColor;
+  border-color: var(--status-danger-border);
+  background: var(--status-danger-bg);
+  color: var(--status-danger-fg);
+  box-shadow: inset 0 0 0 var(--border-width-thin) var(--status-danger-border);
   font-size: 0.86rem;
 }
 
 .reading-settings__segment[aria-checked="true"] {
-  border-color: var(--reading-accent);
-  background: color-mix(in srgb, var(--reading-accent) 13%, var(--reading-bg));
-  color: var(--reading-fg);
+  border-color: var(--accent-primary);
+  background: var(--accent-soft);
+  color: var(--text-primary);
   font-weight: 700;
-  box-shadow: inset 0 0 0 1px var(--reading-accent);
+  box-shadow: inset 0 0 0 var(--border-width-thin) var(--accent-primary);
 }
 
 .reading-settings__segment:hover,
@@ -1929,7 +1977,7 @@ function syncOutlineViewport(): void {
 .reading-settings__reset:focus-visible,
 .reading-settings__done:hover,
 .reading-settings__done:focus-visible {
-  border-color: var(--reading-accent);
+  border-color: var(--accent-primary);
 }
 
 .reading-settings__actions {
@@ -1940,26 +1988,25 @@ function syncOutlineViewport(): void {
   gap: 0.75rem;
   margin: 1rem -0.8rem -0.8rem;
   padding: 0.75rem 0.8rem 0.8rem;
-  border-block-start: 1px solid var(--reading-rule);
-  background: color-mix(in srgb, var(--reading-bg) 97%, transparent);
-  backdrop-filter: blur(12px);
+  border-block-start: var(--border-width-thin) solid var(--border-subtle);
+  background: var(--surface-panel);
 }
 
 .reading-settings__reset {
-  color: var(--reading-fg-muted);
+  color: var(--text-secondary);
 }
 
 .reading-settings__done {
   min-inline-size: 5.2rem;
-  border-color: var(--reading-accent);
-  background: var(--reading-accent);
-  color: var(--reading-bg);
+  border-color: var(--accent-primary);
+  background: var(--accent-primary);
+  color: var(--accent-contrast);
   font-weight: 700;
 }
 
 .reading-settings__reset:disabled {
   cursor: default;
-  opacity: 0.55;
+  opacity: var(--opacity-disabled);
 }
 
 @media (max-width: 640px) {
@@ -1974,7 +2021,7 @@ function syncOutlineViewport(): void {
     padding: 0.72rem 1rem max(1rem, calc(env(safe-area-inset-bottom) + 1rem));
     border-inline: 0;
     border-block-end: 0;
-    border-radius: 18px 18px 0 0;
+    border-radius: var(--radius-card) var(--radius-card) 0 0;
   }
 
   .reading-settings__handle {
@@ -1982,8 +2029,8 @@ function syncOutlineViewport(): void {
     inline-size: 2.7rem;
     block-size: 0.28rem;
     margin: 0 auto 0.7rem;
-    border-radius: 999px;
-    background: var(--reading-rule);
+    border-radius: var(--radius-full);
+    background: var(--border-default);
   }
 
   .reading-settings__actions {

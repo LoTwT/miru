@@ -9,19 +9,22 @@ A browser-local, reading-first markdown viewer.
 
 miru renders markdown into a calm, typeset reading surface. Paste text, drop a `.md` file, open a file, or fetch a URL — and read. No split editor, no tabs, no chrome competing with the words. Everything runs in your browser; nothing is sent to a server.
 
-## V0 scope (summary)
+## Current scope
 
 - **Input** (4 entries): paste text · drag-drop `.md` · open-file picker · URL fetch (browser-local, CORS-only, no proxy)
 - **Single rendered view** — reading-first, no split edit/preview
 - **First paint** auto-loads a sample doc (self-dogfood: the empty state *is* a live demo)
 - **CommonMark + GFM** (tables / task lists / strikethrough / autolink)
 - **Code blocks**: Shiki syntax highlighting
-- **Typography**: serif body (Newsreader), ~65ch measure, 1.7 line-height, auto dark/light
+- **Typography**: Newsreader by default, adjustable size/measure/rhythm, optional curated or local fonts
+- **Themes**: Brutal by default, switchable to the package's Default family; style and light/dark/system scheme are independent, with Sepia and custom reading palettes
+- **Reading tools**: local library, outline navigation, progress restore, bookmarks, in-document search, and local PDF viewing
+- **Install/offline**: installable PWA shell; user documents remain local and are not added to the shared precache
 - **a11y**: keyboard nav · WCAG AA contrast · screen-reader friendly · reduced-motion
-- **Privacy**: 100% browser-local — no analytics, telemetry, fingerprinting, proxy, or logging. Remote images in your documents auto-load with `referrer` stripped (content, not tracking); a "block remote images" toggle is reserved for V1.
-- **Customization**: V0 ships one tuned theme + the full token/runtime/persistence architecture so V1 adds in-app customization UI without re-architecting. V0 power-user path = CSS override / config / URL params.
+- **Privacy**: 100% browser-local — no analytics, telemetry, fingerprinting, proxy, or logging. Remote document images load with the referrer stripped; strict image modes are supported by the renderer and persisted settings.
+- **Customization**: in-app typography, theme, contrast, custom colors, named presets, local fonts, and outline placement; preferences/presets use localStorage and uploaded font files stay in local IndexedDB
 
-Deferred to V1+: in-app customization UI, presets, edit mode, multi-tab, collaboration, PWA/offline, KaTeX/mermaid. See specs for the full list.
+Still out of scope: edit mode, multi-tab editing, collaboration/cloud sync, KaTeX, and Mermaid. See the specs for the historical scope and later interaction decisions.
 
 ## Specs
 
@@ -29,10 +32,10 @@ Deferred to V1+: in-app customization UI, presets, edit mode, multi-tab, collabo
 - UX design: [`docs/ux/design-v0.3.md`](docs/ux/design-v0.3.md)
 - Cloudflare deploy runbook: [`docs/ops/cloudflare-pages-deploy.md`](docs/ops/cloudflare-pages-deploy.md)
 
-## Tech (V0)
+## Tech
 
-TypeScript · Vite · markdown-it · Shiki · DOMPurify · Fontsource (Newsreader) · Vitest + Playwright · static SPA deploy. Reading tokens (`--reading-*`) are sourced from LoTwT/design-system (V0.1).
+TypeScript · Vue · Vite · markdown-it · Shiki · DOMPurify · `@ayingott/theme@0.2.0` · Fontsource (Newsreader) · Vitest + Playwright · static PWA deploy. App chrome and reading defaults consume the theme package's public semantic tokens, with Miru-specific `--reading-*` values used only for explicit reading overrides.
 
 ## Status
 
-V0 scaffold and typography pass are on `main`. Remaining V0 work: floating affordance review, release-readiness evidence, R-PERF-1 mobile reading validation, and Cloudflare Workers Static Assets deployment wiring.
+The reader, customization UI, local library, PDF path, and PWA shell are implemented. See the deploy runbook for production verification and release evidence.

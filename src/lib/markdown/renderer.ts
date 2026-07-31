@@ -1,4 +1,5 @@
 import MarkdownIt from 'markdown-it'
+import type { Env, Token } from 'markdown-it'
 import anchor from 'markdown-it-anchor'
 import taskLists from 'markdown-it-task-lists'
 import { createJavaScriptRegexEngine } from 'shiki/engine/javascript'
@@ -10,7 +11,6 @@ import { toTrustedHtml } from '@/lib/security/sanitize'
 import { isRemoteImageUrl, isSafeImageUrl, isSafeLinkUrl } from '@/lib/security/urlPolicy'
 import type { RemoteImageMode, TrustedHtml } from '@/types/reader'
 import type { LanguageRegistration } from 'shiki/core'
-import type Token from 'markdown-it/lib/token.mjs'
 
 interface RenderMarkdownOptions {
   colorScheme?: 'light' | 'dark'
@@ -55,10 +55,12 @@ md.validateLink = (url) => isSafeLinkUrl(url) || isSafeImageUrl(url)
 
 const defaultLinkOpen = md.renderer.rules.link_open
 md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
-  const href = tokens[idx]?.attrGet('href')
+  const href = normalizeAttributeValue(tokens[idx]?.attrGet('href'))
 
   if (!href || !isSafeLinkUrl(href)) {
-    env.miruBlockedLinkCloseCount = (env.miruBlockedLinkCloseCount ?? 0) + 1
+    if (env) {
+      env.miruBlockedLinkCloseCount = getBlockedLinkCloseCount(env) + 1
+    }
     return ''
   }
 
@@ -72,8 +74,12 @@ md.renderer.rules.link_open = (tokens, idx, options, env, self) => {
 
 const defaultLinkClose = md.renderer.rules.link_close
 md.renderer.rules.link_close = (tokens, idx, options, env, self) => {
-  if (env.miruBlockedLinkCloseCount > 0) {
-    env.miruBlockedLinkCloseCount -= 1
+  const blockedLinkCloseCount = getBlockedLinkCloseCount(env)
+
+  if (blockedLinkCloseCount > 0) {
+    if (env) {
+      env.miruBlockedLinkCloseCount = blockedLinkCloseCount - 1
+    }
     return ''
   }
 
@@ -82,7 +88,7 @@ md.renderer.rules.link_close = (tokens, idx, options, env, self) => {
 
 md.renderer.rules.image = (tokens, idx) => {
   const token = tokens[idx]
-  const src = token?.attrGet('src') ?? ''
+  const src = normalizeAttributeValue(token?.attrGet('src')) ?? ''
   const alt = token?.content ?? ''
   const mode = (token?.meta?.remoteImageMode ?? 'auto') as RemoteImageMode
 
@@ -158,6 +164,19 @@ function normalizeLanguage(info: string): string {
   }
 
   return 'text'
+}
+
+function normalizeAttributeValue(value: string | number | null | undefined): string | undefined {
+  if (typeof value === 'string') {
+    return value
+  }
+
+  return typeof value === 'number' ? String(value) : undefined
+}
+
+function getBlockedLinkCloseCount(env: Env | undefined): number {
+  const count = env?.miruBlockedLinkCloseCount
+  return typeof count === 'number' ? count : 0
 }
 
 async function ensureLanguage(highlighter: Highlighter, language: string): Promise<void> {

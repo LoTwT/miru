@@ -50,7 +50,7 @@ function scrollToTop(): void {
 <template>
   <button
     v-if="isVisible"
-    class="back-to-top"
+    class="back-to-top pressable focus-ring touch-target"
     type="button"
     aria-label="回到顶部"
     data-testid="back-to-top"
@@ -65,36 +65,27 @@ function scrollToTop(): void {
   position: fixed;
   right: max(1rem, calc(env(safe-area-inset-right) + 0.9rem));
   bottom: max(1rem, calc(env(safe-area-inset-bottom) + 0.9rem));
-  z-index: 24;
+  z-index: var(--z-sticky);
   display: grid;
   place-items: center;
-  inline-size: 44px;
-  block-size: 44px;
-  border: 1px solid color-mix(in srgb, var(--reading-rule) 82%, transparent);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--reading-bg) 90%, transparent);
-  box-shadow: 0 16px 40px rgb(0 0 0 / 14%);
-  color: var(--reading-fg-muted);
+  inline-size: var(--touch-target-min);
+  block-size: var(--touch-target-min);
+  border: var(--border-width-control) solid var(--border-default);
+  border-radius: var(--radius-control);
+  background: var(--surface-panel);
+  color: var(--text-secondary);
   cursor: pointer;
-  backdrop-filter: blur(14px);
-  transition:
-    border-color 150ms ease,
-    color 150ms ease,
-    transform 150ms ease,
-    opacity 150ms ease;
 }
 
 .back-to-top:hover,
 .back-to-top:focus-visible {
-  border-color: color-mix(in srgb, var(--reading-accent) 44%, var(--reading-rule));
-  color: var(--reading-accent);
-  transform: translateY(-1px);
+  border-color: var(--accent-primary);
+  color: var(--text-accent);
 }
 
 .back-to-top:focus-visible {
-  outline: 3px solid var(--reading-focus);
-  outline-offset: 3px;
-  box-shadow: var(--reading-focus-shadow);
+  outline-color: var(--focus-ring-color);
+  box-shadow: var(--focus-ring-shadow);
 }
 
 .back-to-top span {
@@ -103,14 +94,4 @@ function scrollToTop(): void {
   line-height: 1;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .back-to-top {
-    transition: none;
-  }
-
-  .back-to-top:hover,
-  .back-to-top:focus-visible {
-    transform: none;
-  }
-}
 </style>

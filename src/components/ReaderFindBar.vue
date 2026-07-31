@@ -162,18 +162,17 @@ function onKeydown(event: KeyboardEvent): void {
   position: fixed;
   inset-block-start: max(4.9rem, calc(env(safe-area-inset-top) + 4.9rem));
   inset-inline-end: max(1rem, var(--reading-page-margin));
-  z-index: 75;
+  z-index: var(--z-tooltip);
   display: grid;
   grid-template-columns: minmax(10rem, 18rem) auto auto;
-  gap: 0.45rem;
+  gap: var(--spacing-2);
   align-items: center;
   max-inline-size: calc(100vw - 2rem);
-  padding: 0.42rem;
-  border: 1px solid color-mix(in srgb, var(--reading-rule) 76%, transparent);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--reading-bg) 94%, transparent);
-  box-shadow: 0 14px 34px rgb(0 0 0 / 12%);
-  backdrop-filter: blur(14px);
+  padding: var(--spacing-2);
+  border: var(--border-width-surface) solid var(--border-default);
+  border-radius: var(--radius-card);
+  background: var(--surface-panel);
+  box-shadow: var(--shadow-panel);
 }
 
 .reader-find__label {
@@ -192,30 +191,30 @@ function onKeydown(event: KeyboardEvent): void {
   min-block-size: 36px;
   min-inline-size: 0;
   border: 0;
-  border-radius: 999px;
-  padding: 0 0.85rem;
-  color: var(--reading-fg);
-  background: color-mix(in srgb, var(--reading-code-bg) 52%, var(--reading-bg));
+  border-radius: var(--radius-control);
+  padding: 0 var(--spacing-3);
+  color: var(--text-primary);
+  background: var(--surface-subtle);
   font: inherit;
 }
 
 .reader-find__input:focus-visible,
 .reader-find__button:focus-visible {
-  outline: 2px solid var(--reading-focus);
-  outline-offset: 3px;
-  box-shadow: var(--reading-focus-shadow);
+  outline: var(--border-width-thick) solid var(--focus-ring-color);
+  outline-offset: var(--spacing-1);
+  box-shadow: var(--focus-ring-shadow);
 }
 
 .reader-find__counter {
   min-inline-size: 3.8rem;
-  color: var(--reading-fg-muted);
+  color: var(--text-secondary);
   font-size: 0.82rem;
   text-align: center;
   white-space: nowrap;
 }
 
 .reader-find__counter--empty {
-  color: var(--reading-accent);
+  color: var(--text-accent);
 }
 
 .reader-find__actions {
@@ -228,10 +227,10 @@ function onKeydown(event: KeyboardEvent): void {
   place-items: center;
   min-inline-size: 36px;
   min-block-size: 36px;
-  border: 1px solid color-mix(in srgb, var(--reading-rule) 76%, transparent);
-  border-radius: 999px;
-  color: var(--reading-fg);
-  background: color-mix(in srgb, var(--reading-bg) 90%, var(--reading-fg) 10%);
+  border: var(--border-width-control) solid var(--border-default);
+  border-radius: var(--radius-control);
+  color: var(--text-primary);
+  background: var(--surface-elevated);
   font: inherit;
   cursor: pointer;
 }
@@ -242,15 +241,15 @@ function onKeydown(event: KeyboardEvent): void {
 }
 
 .reader-find__button:not(:disabled):hover {
-  border-color: var(--reading-accent);
-  color: var(--reading-accent);
+  border-color: var(--accent-primary);
+  color: var(--text-accent);
 }
 
 @media (max-width: 640px) {
   .reader-find {
     inset-inline: 0.75rem;
     grid-template-columns: minmax(0, 1fr) minmax(2.6rem, auto) auto;
-    border-radius: 16px;
+    border-radius: var(--radius-card);
   }
 
   .reader-find__counter {
