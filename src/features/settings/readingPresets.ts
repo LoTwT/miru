@@ -1,6 +1,15 @@
 import {
+  createReadingCompatibilityRevision,
+  migrateLegacyReadingTheme,
+  selectCompatibilitySnapshot,
+} from '@/lib/theme/readingThemeContract'
+import type { CompatibilityReadResult } from '@/lib/theme/readingThemeContract'
+
+import {
   defaultReadingSettings,
+  isReadingColorScheme,
   isReadingFontFamilyId,
+  isReadingThemeStyle,
   readingContrastOptions,
   readingFontSizeOptions,
   readingLetterSpacingOptions,
@@ -11,6 +20,7 @@ import {
   readingParagraphGapOptions,
 } from './readingSettingsOptions'
 import type {
+  ReadingColorSchemeId,
   ReadingContrastId,
   ReadingCustomThemeState,
   ReadingFontFamilyId,
@@ -21,7 +31,7 @@ import type {
   ReadingOutlinePositionId,
   ReadingPageMarginId,
   ReadingParagraphGapId,
-  ReadingThemeChoice,
+  ReadingThemeStyleId,
 } from './readingSettingsOptions'
 
 export interface ReadingPresetSnapshot {
@@ -32,7 +42,8 @@ export interface ReadingPresetSnapshot {
   paragraphGap: ReadingParagraphGapId
   pageMargin: ReadingPageMarginId
   fontFamily: ReadingFontFamilyId
-  theme: ReadingThemeChoice
+  themeStyle: ReadingThemeStyleId
+  colorScheme: ReadingColorSchemeId
   contrast: ReadingContrastId
   outlinePosition: ReadingOutlinePositionId
   customTheme: ReadingCustomThemeState
@@ -46,47 +57,172 @@ export interface ReadingPreset {
   settings: ReadingPresetSnapshot
 }
 
-interface PersistedReadingPresets {
-  version: 1
-  presets: ReadingPreset[]
+interface StoredReadingPresets {
+  version?: unknown
+  presets?: unknown
+  compatibilityRevision?: unknown
 }
 
-const readingPresetsStorageKey = 'miru:reading-presets:v1'
+interface SanitizedReadingPresets {
+  presets: ReadingPreset[]
+  compatibilityRevision?: unknown
+  independentThemePresetIds: string[]
+}
+
+export const readingPresetsStorageKey = 'miru:reading-presets:v2'
+export const legacyReadingPresetsStorageKey = 'miru:reading-presets:v1'
 const maxPresetNameLength = 32
 
 export function readPersistedReadingPresets(storage: Storage = localStorage): ReadingPreset[] {
-  const raw = storage.getItem(readingPresetsStorageKey)
+  const primary = readStoredReadingPresets(storage, readingPresetsStorageKey, 2)
+  const legacy = readStoredReadingPresets(storage, legacyReadingPresetsStorageKey, 1)
 
-  if (!raw) {
-    return []
+  return selectCompatibilitySnapshot(primary, legacy, reconcileLegacyReadingPresets)?.presets ?? []
+}
+
+function readStoredReadingPresets(
+  storage: Storage,
+  storageKey: string,
+  expectedVersion: 1 | 2,
+): CompatibilityReadResult<SanitizedReadingPresets> {
+  let raw: string | null
+
+  try {
+    raw = storage.getItem(storageKey)
+  }
+  catch {
+    return { status: 'invalid' }
+  }
+
+  if (raw === null) {
+    return { status: 'missing' }
   }
 
   try {
-    const parsed = JSON.parse(raw) as Partial<PersistedReadingPresets>
+    const parsed = JSON.parse(raw) as StoredReadingPresets
 
-    if (parsed.version !== 1 || !Array.isArray(parsed.presets)) {
-      return []
+    if (
+      !parsed
+      || typeof parsed !== 'object'
+      || Array.isArray(parsed)
+      || parsed.version !== expectedVersion
+      || !Array.isArray(parsed.presets)
+    ) {
+      return { status: 'invalid' }
     }
 
-    return parsed.presets
+    const presets = parsed.presets
       .map(sanitizePreset)
       .filter((preset): preset is ReadingPreset => Boolean(preset))
+
+    if (parsed.presets.length > 0 && presets.length === 0) {
+      return { status: 'invalid' }
+    }
+
+    const candidate: SanitizedReadingPresets = {
+      presets,
+      independentThemePresetIds: parsed.presets
+        .filter(hasIndependentThemeAxes)
+        .map((preset) => {
+          return typeof preset === 'object' && preset && 'id' in preset && typeof preset.id === 'string'
+            ? preset.id
+            : ''
+        })
+        .filter(Boolean),
+      ...(Object.prototype.hasOwnProperty.call(parsed, 'compatibilityRevision')
+        ? { compatibilityRevision: parsed.compatibilityRevision }
+        : {}),
+    }
+
+    const hasValidV2Envelope = (
+      parsed.compatibilityRevision === undefined
+      || (
+        typeof parsed.compatibilityRevision === 'string'
+        && parsed.compatibilityRevision.length > 0
+      )
+    ) && parsed.presets.every(isValidV2Preset)
+
+    return expectedVersion === 2 && !hasValidV2Envelope
+      ? { status: 'invalid', candidate }
+      : { status: 'valid', candidate }
   }
   catch {
-    return []
+    return { status: 'invalid' }
   }
 }
 
 export function writePersistedReadingPresets(presets: readonly ReadingPreset[], storage: Storage = localStorage): void {
   if (presets.length === 0) {
+    storage.removeItem(legacyReadingPresetsStorageKey)
     storage.removeItem(readingPresetsStorageKey)
     return
   }
 
-  storage.setItem(readingPresetsStorageKey, JSON.stringify({
+  const compatibilityRevision = createReadingCompatibilityRevision()
+
+  storage.setItem(legacyReadingPresetsStorageKey, JSON.stringify({
     version: 1,
-    presets,
+    presets: presets.map(createLegacyReadingPreset),
+    compatibilityRevision,
   }))
+  storage.setItem(readingPresetsStorageKey, JSON.stringify({
+    version: 2,
+    presets,
+    compatibilityRevision,
+  }))
+}
+
+function createLegacyReadingPreset(preset: ReadingPreset): Omit<ReadingPreset, 'settings'> & {
+  settings: ReadingPresetSnapshot & {
+    theme: ReadingColorSchemeId
+  }
+} {
+  return {
+    ...preset,
+    settings: {
+      ...preset.settings,
+      theme: preset.settings.colorScheme,
+      customTheme: { ...preset.settings.customTheme },
+    },
+  }
+}
+
+function reconcileLegacyReadingPresets(
+  primary: SanitizedReadingPresets,
+  legacy: SanitizedReadingPresets,
+): SanitizedReadingPresets {
+  if (typeof legacy.compatibilityRevision === 'string' && legacy.compatibilityRevision.length > 0) {
+    return legacy
+  }
+
+  const primaryById = new Map(primary.presets.map(preset => [preset.id, preset]))
+  const primaryIndependentThemePresetIds = new Set(primary.independentThemePresetIds)
+  const independentThemePresetIds = new Set(legacy.independentThemePresetIds)
+
+  return {
+    ...legacy,
+    presets: legacy.presets.map((legacyPreset) => {
+      const primaryPreset = primaryById.get(legacyPreset.id)
+
+      if (
+        !primaryPreset
+        || !primaryIndependentThemePresetIds.has(legacyPreset.id)
+        || independentThemePresetIds.has(legacyPreset.id)
+        || legacyPreset.settings.colorScheme !== primaryPreset.settings.colorScheme
+      ) {
+        return legacyPreset
+      }
+
+      return {
+        ...legacyPreset,
+        settings: {
+          ...legacyPreset.settings,
+          themeStyle: primaryPreset.settings.themeStyle,
+          colorScheme: primaryPreset.settings.colorScheme,
+        },
+      }
+    }),
+  }
 }
 
 export function normalizePresetName(name: string): string {
@@ -110,7 +246,8 @@ export function createSnapshotFromSettings(settings: ReadingPresetSnapshot): Rea
     paragraphGap: settings.paragraphGap,
     pageMargin: settings.pageMargin,
     fontFamily: settings.fontFamily,
-    theme: settings.theme,
+    themeStyle: settings.themeStyle,
+    colorScheme: settings.colorScheme,
     contrast: settings.contrast,
     outlinePosition: settings.outlinePosition,
     customTheme: { ...settings.customTheme },
@@ -128,7 +265,8 @@ export function arePresetSnapshotsEqual(
     && snapshot.paragraphGap === otherSnapshot.paragraphGap
     && snapshot.pageMargin === otherSnapshot.pageMargin
     && snapshot.fontFamily === otherSnapshot.fontFamily
-    && snapshot.theme === otherSnapshot.theme
+    && snapshot.themeStyle === otherSnapshot.themeStyle
+    && snapshot.colorScheme === otherSnapshot.colorScheme
     && snapshot.contrast === otherSnapshot.contrast
     && snapshot.outlinePosition === otherSnapshot.outlinePosition
     && snapshot.customTheme.bg === otherSnapshot.customTheme.bg
@@ -158,12 +296,57 @@ function sanitizePreset(value: unknown): ReadingPreset | null {
   }
 }
 
+function isValidV2Preset(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false
+  }
+
+  const preset = value as Partial<ReadingPreset>
+  const settings = preset.settings
+
+  return typeof preset.id === 'string'
+    && preset.id.length > 0
+    && typeof preset.name === 'string'
+    && normalizePresetName(preset.name).length > 0
+    && typeof preset.createdAt === 'string'
+    && typeof preset.updatedAt === 'string'
+    && Boolean(settings)
+    && typeof settings === 'object'
+    && matchOption(readingFontSizeOptions, settings.fontSize) !== undefined
+    && matchOption(readingMeasureOptions, settings.measure) !== undefined
+    && matchOption(readingLineHeightOptions, settings.lineHeight) !== undefined
+    && matchOption(readingLetterSpacingOptions, settings.letterSpacing) !== undefined
+    && matchOption(readingParagraphGapOptions, settings.paragraphGap) !== undefined
+    && matchOption(readingPageMarginOptions, settings.pageMargin) !== undefined
+    && isReadingFontFamilyId(settings.fontFamily)
+    && isReadingThemeStyle(settings.themeStyle)
+    && isReadingColorScheme(settings.colorScheme)
+    && matchOption(readingContrastOptions, settings.contrast) !== undefined
+    && matchOption(readingOutlinePositionOptions, settings.outlinePosition) !== undefined
+    && sanitizeCustomTheme(settings.customTheme) !== null
+}
+
+function hasIndependentThemeAxes(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false
+  }
+
+  const preset = value as { settings?: unknown }
+  if (!preset.settings || typeof preset.settings !== 'object' || Array.isArray(preset.settings)) {
+    return false
+  }
+
+  const settings = preset.settings as { themeStyle?: unknown, colorScheme?: unknown }
+  return isReadingThemeStyle(settings.themeStyle) && isReadingColorScheme(settings.colorScheme)
+}
+
 function sanitizeSnapshot(value: unknown): ReadingPresetSnapshot | null {
   if (!value || typeof value !== 'object') {
     return null
   }
 
-  const snapshot = value as Partial<ReadingPresetSnapshot>
+  const snapshot = value as Partial<ReadingPresetSnapshot> & { theme?: unknown }
+  const legacyTheme = migrateLegacyReadingTheme(snapshot.theme)
 
   return {
     fontSize: matchOption(readingFontSizeOptions, snapshot.fontSize) ?? defaultReadingSettings.fontSize,
@@ -173,7 +356,12 @@ function sanitizeSnapshot(value: unknown): ReadingPresetSnapshot | null {
     paragraphGap: matchOption(readingParagraphGapOptions, snapshot.paragraphGap) ?? defaultReadingSettings.paragraphGap,
     pageMargin: matchOption(readingPageMarginOptions, snapshot.pageMargin) ?? defaultReadingSettings.pageMargin,
     fontFamily: isReadingFontFamilyId(snapshot.fontFamily) ? snapshot.fontFamily : defaultReadingSettings.fontFamily,
-    theme: isReadingThemeChoice(snapshot.theme) ? snapshot.theme : defaultReadingSettings.theme,
+    themeStyle: isReadingThemeStyle(snapshot.themeStyle)
+      ? snapshot.themeStyle
+      : legacyTheme.themeStyle ?? defaultReadingSettings.themeStyle,
+    colorScheme: isReadingColorScheme(snapshot.colorScheme)
+      ? snapshot.colorScheme
+      : legacyTheme.colorScheme ?? defaultReadingSettings.colorScheme,
     contrast: matchOption(readingContrastOptions, snapshot.contrast) ?? defaultReadingSettings.contrast,
     outlinePosition: matchOption(readingOutlinePositionOptions, snapshot.outlinePosition) ?? defaultReadingSettings.outlinePosition,
     customTheme: sanitizeCustomTheme(snapshot.customTheme) ?? { ...defaultReadingSettings.customTheme },
@@ -200,10 +388,6 @@ function sanitizeCustomTheme(value: unknown): ReadingCustomThemeState | null {
   }
 
   return null
-}
-
-function isReadingThemeChoice(value: unknown): value is ReadingThemeChoice {
-  return value === 'system' || value === 'light' || value === 'dark' || value === 'sepia' || value === 'custom'
 }
 
 function isHexColor(value: unknown): value is string {

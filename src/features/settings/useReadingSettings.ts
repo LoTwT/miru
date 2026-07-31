@@ -9,15 +9,22 @@ import {
 } from '@/lib/theme/tokens'
 import type { PersistedReadingSettings, ReadingTokenName } from '@/lib/theme/tokens'
 import { loadOptionalReadingFont } from '@/lib/theme/fonts'
+import {
+  applyResolvedReadingTheme,
+  isReadingContrast,
+  resolveReadingThemeState,
+} from '@/lib/theme/readingThemeContract'
+import type { ReadingPalette } from '@/lib/theme/readingThemeContract'
 
 import {
   createLocalFontFamilyId,
   customizableReadingTokens,
   defaultReadingSettings,
-  deriveCustomThemeTokenOverrides,
   fixCustomThemeToAA,
+  isReadingColorScheme,
   isLocalFontFamilyId,
   isReadingFontFamilyId,
+  isReadingThemeStyle,
   localFontIdFromFamilyId,
   normalizeHexColor,
   readingFontFamilyOptions,
@@ -28,10 +35,9 @@ import {
   readingPageMarginOptions,
   readingOutlinePositionOptions,
   readingParagraphGapOptions,
-  resolveThemeTokenOverrides,
 } from './readingSettingsOptions'
 import type {
-  PresetReadingThemeChoice,
+  ReadingColorSchemeId,
   ReadingContrastId,
   ReadingCustomThemeState,
   ReadingFontFamilyId,
@@ -42,7 +48,7 @@ import type {
   ReadingPageMarginId,
   ReadingParagraphGapId,
   ReadingOutlinePositionId,
-  ReadingThemeChoice,
+  ReadingThemeStyleId,
 } from './readingSettingsOptions'
 import {
   arePresetSnapshotsEqual,
@@ -71,7 +77,8 @@ export interface ReadingCustomizationState {
   paragraphGap: ReadingParagraphGapId
   pageMargin: ReadingPageMarginId
   fontFamily: ReadingFontFamilyId
-  theme: ReadingThemeChoice
+  themeStyle: ReadingThemeStyleId
+  colorScheme: ReadingColorSchemeId
   contrast: ReadingContrastId
   outlinePosition: ReadingOutlinePositionId
   customTheme: ReadingCustomThemeState
@@ -86,16 +93,26 @@ export function useReadingSettings(options: {
   root?: HTMLElement
   storage?: Storage
   localFontStore?: ReturnType<typeof createLocalFontStore>
+  systemDark?: boolean
 } = {}) {
   const root = options.root ?? document.documentElement
   const storage = options.storage ?? localStorage
   const localFontStore = options.localFontStore ?? createLocalFontStore()
+  const systemDark = shallowRef(options.systemDark ?? resolveSystemDarkScheme())
   const persisted = readPersistedReadingSettings(storage)
   const remoteImageMode = persisted?.remoteImageMode
   const state = reactive<ReadingCustomizationState>(stateFromPersistedSettings(persisted))
   const presets = shallowRef<ReadingPreset[]>(readPersistedReadingPresets(storage))
   const localFonts = shallowRef<LocalFontOption[]>([])
   const localFontMessage = shallowRef<ReadingSettingsMessage | null>(null)
+  const resolvedTheme = computed(() => resolveReadingThemeState({
+    version: 2,
+    themeStyle: state.themeStyle,
+    colorScheme: state.colorScheme,
+    contrast: state.contrast,
+    customTheme: state.customTheme,
+  }, systemDark.value))
+  const effectiveColorScheme = computed<'light' | 'dark'>(() => resolvedTheme.value.effectiveColorScheme)
 
   const isDefault = computed(() =>
     state.fontSize === defaultReadingSettings.fontSize
@@ -105,7 +122,8 @@ export function useReadingSettings(options: {
     && state.paragraphGap === defaultReadingSettings.paragraphGap
     && state.pageMargin === defaultReadingSettings.pageMargin
     && state.fontFamily === defaultReadingSettings.fontFamily
-    && state.theme === defaultReadingSettings.theme
+    && state.themeStyle === defaultReadingSettings.themeStyle
+    && state.colorScheme === defaultReadingSettings.colorScheme
     && state.contrast === defaultReadingSettings.contrast
     && state.outlinePosition === defaultReadingSettings.outlinePosition
     && isSameCustomTheme(state.customTheme, defaultReadingSettings.customTheme),
@@ -145,11 +163,11 @@ export function useReadingSettings(options: {
   }
 
   function applyCurrent(): void {
-    const overrides = buildTokenOverrides(state, localFonts.value)
+    const currentTheme = resolvedTheme.value
+    const overrides = buildTokenOverrides(state, localFonts.value, currentTheme.palette)
 
     clearInlineReadingOverrides(root)
-    syncThemeAttribute(root, state.theme)
-    syncContrastAttribute(root, state.contrast)
+    applyResolvedReadingTheme(root, currentTheme, resolveThemeColorMeta(root))
 
     for (const [token, value] of Object.entries(overrides)) {
       setReadingToken(token as ReadingTokenName, value, root)
@@ -192,8 +210,13 @@ export function useReadingSettings(options: {
     commit()
   }
 
-  function updateTheme(value: ReadingThemeChoice): void {
-    state.theme = value
+  function updateThemeStyle(value: ReadingThemeStyleId): void {
+    state.themeStyle = value
+    commit()
+  }
+
+  function updateColorScheme(value: ReadingColorSchemeId): void {
+    state.colorScheme = value
     commit()
   }
 
@@ -220,6 +243,11 @@ export function useReadingSettings(options: {
     commit()
   }
 
+  function syncSystemColorScheme(isDark: boolean): void {
+    systemDark.value = isDark
+    applyResolvedReadingTheme(root, resolvedTheme.value, resolveThemeColorMeta(root))
+  }
+
   function reset(): void {
     state.fontSize = defaultReadingSettings.fontSize
     state.measure = defaultReadingSettings.measure
@@ -228,17 +256,16 @@ export function useReadingSettings(options: {
     state.paragraphGap = defaultReadingSettings.paragraphGap
     state.pageMargin = defaultReadingSettings.pageMargin
     state.fontFamily = defaultReadingSettings.fontFamily
-    state.theme = defaultReadingSettings.theme
+    state.themeStyle = defaultReadingSettings.themeStyle
+    state.colorScheme = defaultReadingSettings.colorScheme
     state.contrast = defaultReadingSettings.contrast
     state.outlinePosition = defaultReadingSettings.outlinePosition
     state.customTheme = { ...defaultReadingSettings.customTheme }
 
-    clearInlineReadingOverrides(root)
-    syncThemeAttribute(root, state.theme)
-    syncContrastAttribute(root, state.contrast)
+    applyCurrent()
 
     if (remoteImageMode) {
-      writePersistedReadingSettings({ version: 1, remoteImageMode }, storage)
+      writePersistedReadingSettings({ version: 2, remoteImageMode }, storage)
       return
     }
 
@@ -442,7 +469,7 @@ export function useReadingSettings(options: {
   }
 
   function persist(): void {
-    const tokenOverrides = buildTokenOverrides(state, localFonts.value)
+    const tokenOverrides = buildTokenOverrides(state, localFonts.value, resolvedTheme.value.palette)
     const hasTokenOverrides = Object.keys(tokenOverrides).length > 0
     const hasOutlinePositionOverride = state.outlinePosition !== defaultReadingSettings.outlinePosition
     const hasContrastOverride = state.contrast !== defaultReadingSettings.contrast
@@ -450,7 +477,8 @@ export function useReadingSettings(options: {
 
     if (
       !hasTokenOverrides
-      && state.theme === 'system'
+      && state.themeStyle === defaultReadingSettings.themeStyle
+      && state.colorScheme === defaultReadingSettings.colorScheme
       && !hasOutlinePositionOverride
       && !hasContrastOverride
       && !hasCustomThemeOverride
@@ -461,11 +489,12 @@ export function useReadingSettings(options: {
     }
 
     const settings: PersistedReadingSettings = {
-      version: 1,
-      presetId: state.theme,
+      version: 2,
+      themeStyle: state.themeStyle,
+      colorScheme: state.colorScheme,
       tokenOverrides: hasTokenOverrides ? tokenOverrides : undefined,
       fontFamily: isLocalFontFamilyId(state.fontFamily) ? state.fontFamily : undefined,
-      customTheme: hasCustomThemeOverride || state.theme === 'custom'
+      customTheme: hasCustomThemeOverride || state.colorScheme === 'custom'
         ? { ...state.customTheme }
         : undefined,
       remoteImageMode,
@@ -476,12 +505,15 @@ export function useReadingSettings(options: {
     writePersistedReadingSettings(settings, storage)
   }
 
+  applyCurrent()
+
   return {
     state: readonly(state),
     presets: readonly(presets),
     localFonts: readonly(localFonts),
     localFontMessage: readonly(localFontMessage),
     isDefault,
+    effectiveColorScheme,
     activePresetName,
     initializeLocalFonts,
     applyCurrent,
@@ -500,11 +532,13 @@ export function useReadingSettings(options: {
     updateParagraphGap,
     updatePageMargin,
     updateFontFamily,
-    updateTheme,
+    updateThemeStyle,
+    updateColorScheme,
     updateCustomTheme,
     autoFixCustomTheme,
     updateContrast,
     updateOutlinePosition,
+    syncSystemColorScheme,
   }
 }
 
@@ -541,7 +575,8 @@ function applySnapshotToState(
   state.paragraphGap = snapshot.paragraphGap
   state.pageMargin = snapshot.pageMargin
   state.fontFamily = fallbackMissingLocalFont(snapshot.fontFamily, localFonts)
-  state.theme = snapshot.theme
+  state.themeStyle = snapshot.themeStyle
+  state.colorScheme = snapshot.colorScheme
   state.contrast = snapshot.contrast
   state.outlinePosition = snapshot.outlinePosition
   state.customTheme = { ...snapshot.customTheme }
@@ -567,7 +602,12 @@ function stateFromPersistedSettings(settings: PersistedReadingSettings | null): 
       ? settings.fontFamily
       : matchTokenValue(readingFontFamilyOptions, tokenOverrides?.['--reading-font-body'] ?? settings?.fontBody)
       ?? defaultReadingSettings.fontFamily,
-    theme: isReadingThemeChoice(settings?.presetId) ? settings.presetId : defaultReadingSettings.theme,
+    themeStyle: isReadingThemeStyle(settings?.themeStyle)
+      ? settings.themeStyle
+      : defaultReadingSettings.themeStyle,
+    colorScheme: isReadingColorScheme(settings?.colorScheme)
+      ? settings.colorScheme
+      : defaultReadingSettings.colorScheme,
     contrast: isReadingContrast(settings?.contrast) ? settings.contrast : defaultReadingSettings.contrast,
     outlinePosition: matchSimpleValue(readingOutlinePositionOptions, settings?.outlinePosition)
       ?? defaultReadingSettings.outlinePosition,
@@ -592,6 +632,7 @@ function matchSimpleValue<T extends string>(
 function buildTokenOverrides(
   state: ReadingCustomizationState,
   localFonts: readonly LocalFontOption[] = [],
+  themePalette: ReadingPalette = {},
 ): Record<ReadingTokenName, string> {
   const tokenOverrides: Record<ReadingTokenName, string> = {}
 
@@ -626,13 +667,7 @@ function buildTokenOverrides(
     defaultReadingSettings.pageMargin,
   )
   addFontFamilyOverride(tokenOverrides, state.fontFamily, localFonts)
-
-  if (state.theme === 'custom') {
-    Object.assign(tokenOverrides, deriveCustomThemeTokenOverrides(state.customTheme))
-  }
-  else if (state.theme !== 'system') {
-    Object.assign(tokenOverrides, resolveThemeTokenOverrides(state.theme as PresetReadingThemeChoice, state.contrast))
-  }
+  Object.assign(tokenOverrides, themePalette)
 
   return tokenOverrides
 }
@@ -711,7 +746,7 @@ function stateCustomThemeFromPersisted(settings: PersistedReadingSettings | null
   const fg = normalizeHexColor(tokenOverrides?.['--reading-fg'])
   const accent = normalizeHexColor(tokenOverrides?.['--reading-accent'])
 
-  if (settings?.presetId === 'custom' && bg && fg && accent) {
+  if (settings?.colorScheme === 'custom' && bg && fg && accent) {
     return { bg, fg, accent }
   }
 
@@ -735,28 +770,15 @@ function isSameCustomTheme(
     && customTheme.accent === otherCustomTheme.accent
 }
 
-function isReadingThemeChoice(value: unknown): value is ReadingThemeChoice {
-  return value === 'system' || value === 'light' || value === 'dark' || value === 'sepia' || value === 'custom'
+function resolveSystemDarkScheme(): boolean {
+  return typeof window !== 'undefined'
+    && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-color-scheme: dark)').matches
 }
 
-function isReadingContrast(value: unknown): value is ReadingContrastId {
-  return value === 'soft' || value === 'standard' || value === 'strong'
-}
-
-function syncThemeAttribute(root: HTMLElement, theme: ReadingThemeChoice): void {
-  if (theme === 'system') {
-    delete root.dataset.readingTheme
-    return
-  }
-
-  root.dataset.readingTheme = theme
-}
-
-function syncContrastAttribute(root: HTMLElement, contrast: ReadingContrastId): void {
-  if (contrast === 'standard') {
-    delete root.dataset.readingContrast
-    return
-  }
-
-  root.dataset.readingContrast = contrast
+function resolveThemeColorMeta(root: HTMLElement): HTMLMetaElement | null {
+  const document = root.ownerDocument
+  return document.documentElement === root
+    ? document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')
+    : null
 }

@@ -1,5 +1,40 @@
-import { darkReadingTheme, defaultReadingTheme } from '@/lib/theme/tokens'
-import type { ReadingTokenName } from '@/lib/theme/tokens'
+import { readingTypographyTokenNames } from '@/lib/theme/tokens'
+import {
+  contrastRatio,
+  deriveCustomThemeTokenOverrides,
+  fixCustomThemeToAA,
+  isDarkReadingBackground,
+  isReadingColorScheme,
+  isReadingThemeStyle,
+  normalizeHexColor,
+  readingPaletteTokenNames,
+  readingThemeContract,
+  resolveSepiaThemeTokenOverrides,
+} from '@/lib/theme/readingThemeContract'
+import type {
+  ReadingColorSchemeId,
+  ReadingContrastId,
+  ReadingCustomThemeState,
+  ReadingThemeStyleId,
+  ReadingTokenName,
+} from '@/lib/theme/readingThemeContract'
+
+export {
+  contrastRatio,
+  deriveCustomThemeTokenOverrides,
+  fixCustomThemeToAA,
+  isDarkReadingBackground,
+  isReadingColorScheme,
+  isReadingThemeStyle,
+  normalizeHexColor,
+  resolveSepiaThemeTokenOverrides,
+} from '@/lib/theme/readingThemeContract'
+export type {
+  ReadingColorSchemeId,
+  ReadingContrastId,
+  ReadingCustomThemeState,
+  ReadingThemeStyleId,
+} from '@/lib/theme/readingThemeContract'
 
 export type ReadingFontSizeId = '15' | '16' | '17' | '18' | '19' | '20' | '22' | '24'
 export type ReadingMeasureId = '55' | '65' | '75'
@@ -10,9 +45,6 @@ export type ReadingPageMarginId = 'compact' | 'standard' | 'spacious'
 export type ReadingBuiltInFontFamilyId = 'serif' | 'literata' | 'lxgw-wenkai' | 'atkinson' | 'system-serif' | 'system-sans' | 'mono'
 export type ReadingLocalFontFamilyId = `local:${string}`
 export type ReadingFontFamilyId = ReadingBuiltInFontFamilyId | ReadingLocalFontFamilyId
-export type ReadingThemeChoice = 'system' | 'light' | 'dark' | 'sepia' | 'custom'
-export type PresetReadingThemeChoice = Exclude<ReadingThemeChoice, 'system' | 'custom'>
-export type ReadingContrastId = 'soft' | 'standard' | 'strong'
 export type ReadingOutlinePositionId = 'left' | 'right'
 
 export interface ReadingSettingOption<T extends string> {
@@ -28,12 +60,6 @@ export interface ReadingSettingOption<T extends string> {
   previewTokenValue?: string
 }
 
-export interface ReadingCustomThemeState {
-  bg: string
-  fg: string
-  accent: string
-}
-
 export interface ReadingCustomThemeCheck {
   id: keyof ReadingCustomThemeState
   label: string
@@ -41,11 +67,7 @@ export interface ReadingCustomThemeCheck {
   passes: boolean
 }
 
-export const defaultCustomTheme = {
-  bg: '#fbf8f1',
-  fg: '#24211d',
-  accent: '#9d5f34',
-} as const satisfies ReadingCustomThemeState
+export const defaultCustomTheme = readingThemeContract.defaultCustomTheme
 
 export const serifFontStack = '"Newsreader", Georgia, "Songti SC", "Noto Serif CJK SC", serif'
 export const literataFontStack = '"Literata Variable", "Newsreader", Georgia, "Songti SC", "Noto Serif CJK SC", serif'
@@ -87,13 +109,13 @@ export const readingLetterSpacingOptions = [
 
 export const readingParagraphGapOptions = [
   { id: 'compact', label: '紧', ariaLabel: '段间距 紧', tokenValue: '0.8em' },
-  { id: 'standard', label: '标准', ariaLabel: '段间距 标准', tokenValue: '1.12em' },
+  { id: 'standard', label: '标准', ariaLabel: '段间距 标准', tokenValue: '1.2em' },
   { id: 'loose', label: '松', ariaLabel: '段间距 松', tokenValue: '1.55em' },
 ] as const satisfies readonly ReadingSettingOption<ReadingParagraphGapId>[]
 
 export const readingPageMarginOptions = [
   { id: 'compact', label: '紧凑', ariaLabel: '页边距 紧凑', tokenValue: 'clamp(1rem, 3vw, 2.75rem)' },
-  { id: 'standard', label: '适中', ariaLabel: '页边距 适中', tokenValue: 'clamp(1.25rem, 4vw, 4rem)' },
+  { id: 'standard', label: '适中', ariaLabel: '页边距 适中', tokenValue: 'var(--layout-page-gutter)' },
   { id: 'spacious', label: '宽松', ariaLabel: '页边距 宽松', tokenValue: 'clamp(2rem, 7vw, 6rem)' },
 ] as const satisfies readonly ReadingSettingOption<ReadingPageMarginId>[]
 
@@ -140,12 +162,17 @@ export function requiresReadingFontDownloadConfirmation(value: ReadingFontFamily
   return Boolean(getReadingFontFamilyOption(value)?.confirmDownload)
 }
 
-export const readingThemeOptions = [
-  { id: 'system', label: '跟随系统', ariaLabel: '主题 跟随系统' },
-  { id: 'light', label: '浅', ariaLabel: '主题 浅色' },
-  { id: 'dark', label: '深', ariaLabel: '主题 深色' },
-  { id: 'sepia', label: 'Sepia', ariaLabel: '主题 Sepia' },
-  { id: 'custom', label: '自定义', ariaLabel: '主题 自定义' },
+export const readingThemeStyleOptions = [
+  { id: 'brutal', label: 'Brutal', ariaLabel: '主题风格 Brutal' },
+  { id: 'default', label: 'Default', ariaLabel: '主题风格 Default' },
+] as const
+
+export const readingColorSchemeOptions = [
+  { id: 'system', label: '自动', ariaLabel: '配色 跟随系统' },
+  { id: 'light', label: '浅', ariaLabel: '配色 浅色' },
+  { id: 'dark', label: '深', ariaLabel: '配色 深色' },
+  { id: 'sepia', label: 'Sepia', ariaLabel: '配色 Sepia' },
+  { id: 'custom', label: '自定义', ariaLabel: '配色 自定义' },
 ] as const
 
 export const readingContrastOptions = [
@@ -167,133 +194,30 @@ export const defaultReadingSettings = {
   paragraphGap: 'standard',
   pageMargin: 'standard',
   fontFamily: 'serif',
-  theme: 'system',
-  contrast: 'standard',
+  themeStyle: readingThemeContract.defaultThemeStyle,
+  colorScheme: readingThemeContract.defaultColorScheme,
+  contrast: readingThemeContract.defaultContrast,
   outlinePosition: 'right',
   customTheme: defaultCustomTheme,
 } as const
 
-export const customizableTypographyTokens = [
-  '--reading-font-size',
-  '--reading-measure',
-  '--reading-line-height',
-  '--reading-letter-spacing',
-  '--reading-paragraph-gap',
-  '--reading-page-margin',
-  '--reading-font-body',
-] as const satisfies readonly ReadingTokenName[]
+export const customizableTypographyTokens = readingTypographyTokenNames
 
-export const customizableThemeTokens = [
-  '--reading-bg',
-  '--reading-fg',
-  '--reading-fg-muted',
-  '--reading-link',
-  '--reading-link-hover',
-  '--reading-accent',
-  '--reading-rule',
-  '--reading-code-fg',
-  '--reading-code-bg',
-] as const satisfies readonly ReadingTokenName[]
+export const customizableThemeTokens = readingPaletteTokenNames
 
 export const customizableReadingTokens = [
   ...customizableTypographyTokens,
   ...customizableThemeTokens,
 ] as const satisfies readonly ReadingTokenName[]
 
-export const lightThemeTokenOverrides = pickThemeTokens(defaultReadingTheme.tokens)
-export const darkThemeTokenOverrides = pickThemeTokens(darkReadingTheme.tokens)
+export const sepiaThemeTokenOverrides = readingThemeContract.sepiaPalette
 
-export const sepiaThemeTokenOverrides = {
-  '--reading-bg': '#efe1bd',
-  '--reading-fg': '#463b29',
-  '--reading-fg-muted': '#64553e',
-  '--reading-link': '#66569d',
-  '--reading-link-hover': '#55468d',
-  '--reading-accent': '#83502d',
-  '--reading-rule': '#c4a466',
-  '--reading-code-fg': '#463b29',
-  '--reading-code-bg': '#e2cb99',
-} as const satisfies Record<(typeof customizableThemeTokens)[number], string>
-
-export const themeTokenOverridesByChoice = {
-  light: lightThemeTokenOverrides,
-  dark: darkThemeTokenOverrides,
-  sepia: sepiaThemeTokenOverrides,
-} as const
-
-export const contrastTokenOverridesByThemeAndChoice = {
-  light: {
-    soft: {
-      '--reading-fg': '#4a453d',
-      '--reading-fg-muted': '#71695f',
-    },
-    standard: {},
-    strong: {
-      '--reading-fg': '#17130f',
-      '--reading-fg-muted': '#322d26',
-      '--reading-rule': '#c7b8a0',
-    },
-  },
-  dark: {
-    soft: {
-      '--reading-fg': '#cfc5b8',
-      '--reading-fg-muted': '#9f9587',
-    },
-    standard: {},
-    strong: {
-      '--reading-fg': '#fff8ed',
-      '--reading-fg-muted': '#cdc2b3',
-    },
-  },
-  sepia: {
-    soft: {
-      '--reading-fg': '#66553c',
-      '--reading-fg-muted': '#705f45',
-    },
-    standard: {},
-    strong: {
-      '--reading-fg': '#2a2012',
-      '--reading-fg-muted': '#3e3220',
-      '--reading-rule': '#ab8b48',
-    },
-  },
-} as const satisfies Record<
-  PresetReadingThemeChoice,
-  Record<ReadingContrastId, Partial<Record<(typeof customizableThemeTokens)[number], string>>>
->
-
-export function resolveThemeTokenOverrides(
-  theme: PresetReadingThemeChoice,
-  contrast: ReadingContrastId,
-): Record<(typeof customizableThemeTokens)[number], string> {
-  return {
-    ...themeTokenOverridesByChoice[theme],
-    ...contrastTokenOverridesByThemeAndChoice[theme][contrast],
-  }
-}
-
-export function deriveCustomThemeTokenOverrides(
-  customTheme: ReadingCustomThemeState,
-): Record<(typeof customizableThemeTokens)[number], string> {
-  const bg = normalizeHexColor(customTheme.bg) ?? defaultCustomTheme.bg
-  const fg = normalizeHexColor(customTheme.fg) ?? defaultCustomTheme.fg
-  const accent = normalizeHexColor(customTheme.accent) ?? defaultCustomTheme.accent
-  const muted = ensureContrast(mixHex(fg, bg, 0.28), bg)
-  const link = accent
-  const codeBg = tintTowardTextWithContrast(bg, fg)
-
-  return {
-    '--reading-bg': bg,
-    '--reading-fg': fg,
-    '--reading-fg-muted': muted,
-    '--reading-link': link,
-    '--reading-link-hover': ensureContrast(mixHex(link, fg, 0.18), bg),
-    '--reading-accent': accent,
-    '--reading-rule': muted,
-    '--reading-code-fg': fg,
-    '--reading-code-bg': codeBg,
-  }
-}
+export const sepiaContrastTokenOverrides = {
+  sepia: readingThemeContract.sepiaContrast,
+} as const satisfies Record<'sepia', Record<
+  ReadingContrastId,
+  Partial<Record<(typeof customizableThemeTokens)[number], string>>
+>>
 
 export function getCustomThemeChecks(customTheme: ReadingCustomThemeState): ReadingCustomThemeCheck[] {
   const tokens = deriveCustomThemeTokenOverrides(customTheme)
@@ -310,37 +234,6 @@ export function getCustomThemeChecks(customTheme: ReadingCustomThemeState): Read
 
 export function hasReadableCustomTheme(customTheme: ReadingCustomThemeState): boolean {
   return getCustomThemeChecks(customTheme).every(check => check.passes)
-}
-
-export function fixCustomThemeToAA(customTheme: ReadingCustomThemeState): ReadingCustomThemeState {
-  const bg = normalizeHexColor(customTheme.bg) ?? defaultCustomTheme.bg
-
-  return {
-    bg,
-    fg: ensureContrast(customTheme.fg, bg),
-    accent: ensureContrast(customTheme.accent, bg),
-  }
-}
-
-export function normalizeHexColor(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined
-  }
-
-  const normalized = value.trim().toLowerCase()
-
-  if (/^#[\da-f]{6}$/.test(normalized)) {
-    return normalized
-  }
-
-  if (/^#[\da-f]{3}$/.test(normalized)) {
-    const red = normalized[1] ?? '0'
-    const green = normalized[2] ?? '0'
-    const blue = normalized[3] ?? '0'
-    return `#${red}${red}${green}${green}${blue}${blue}`
-  }
-
-  return undefined
 }
 
 export function createLocalFontFamilyId(id: string): ReadingLocalFontFamilyId {
@@ -365,100 +258,4 @@ export function localFontIdFromFamilyId(value: ReadingLocalFontFamilyId): string
 
 export function buildUploadedFontStack(fontFaceFamily: string): string {
   return `"${fontFaceFamily.replace(/"/g, '\\"')}", ${serifFontStack}`
-}
-
-export function contrastRatio(colorA: string, colorB: string): number {
-  const luminanceA = relativeLuminance(colorA)
-  const luminanceB = relativeLuminance(colorB)
-  const lighter = Math.max(luminanceA, luminanceB)
-  const darker = Math.min(luminanceA, luminanceB)
-
-  return (lighter + 0.05) / (darker + 0.05)
-}
-
-function pickThemeTokens(tokens: Record<ReadingTokenName, string>): Record<(typeof customizableThemeTokens)[number], string> {
-  return Object.fromEntries(customizableThemeTokens.map(token => [token, tokens[token]])) as Record<
-    (typeof customizableThemeTokens)[number],
-    string
-  >
-}
-
-function ensureContrast(color: string, bg: string, targetRatio = 4.5): string {
-  const normalizedColor = normalizeHexColor(color) ?? defaultCustomTheme.fg
-  const normalizedBg = normalizeHexColor(bg) ?? defaultCustomTheme.bg
-
-  if (contrastRatio(normalizedColor, normalizedBg) >= targetRatio) {
-    return normalizedColor
-  }
-
-  const target = relativeLuminance(normalizedBg) > 0.5 ? '#000000' : '#ffffff'
-
-  for (let step = 1; step <= 100; step += 1) {
-    const candidate = mixHex(normalizedColor, target, step / 100)
-
-    if (contrastRatio(candidate, normalizedBg) >= targetRatio) {
-      return candidate
-    }
-  }
-
-  return target
-}
-
-function tintTowardTextWithContrast(bg: string, fg: string, preferredAmount = 0.08, targetRatio = 4.5): string {
-  const normalizedBg = normalizeHexColor(bg) ?? defaultCustomTheme.bg
-  const normalizedFg = normalizeHexColor(fg) ?? defaultCustomTheme.fg
-  const preferred = mixHex(normalizedBg, normalizedFg, preferredAmount)
-
-  if (contrastRatio(normalizedFg, preferred) >= targetRatio) {
-    return preferred
-  }
-
-  for (let step = Math.floor(preferredAmount * 100) - 1; step >= 0; step -= 1) {
-    const candidate = mixHex(normalizedBg, normalizedFg, step / 100)
-
-    if (contrastRatio(normalizedFg, candidate) >= targetRatio) {
-      return candidate
-    }
-  }
-
-  return normalizedBg
-}
-
-function mixHex(colorA: string, colorB: string, amountB: number): string {
-  const [redA, greenA, blueA] = hexToRgb(colorA)
-  const [redB, greenB, blueB] = hexToRgb(colorB)
-  const amountA = 1 - amountB
-
-  return rgbToHex([
-    Math.round((redA * amountA) + (redB * amountB)),
-    Math.round((greenA * amountA) + (greenB * amountB)),
-    Math.round((blueA * amountA) + (blueB * amountB)),
-  ])
-}
-
-function relativeLuminance(hexColor: string): number {
-  const [red, green, blue] = hexToRgb(hexColor).map((channel) => {
-    const value = channel / 255
-    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
-  }) as [number, number, number]
-
-  return 0.2126 * red + 0.7152 * green + 0.0722 * blue
-}
-
-function hexToRgb(hexColor: string): [number, number, number] {
-  const normalized = normalizeHexColor(hexColor) ?? '#000000'
-
-  return [
-    Number.parseInt(normalized.slice(1, 3), 16),
-    Number.parseInt(normalized.slice(3, 5), 16),
-    Number.parseInt(normalized.slice(5, 7), 16),
-  ]
-}
-
-function rgbToHex([red, green, blue]: [number, number, number]): string {
-  return `#${toHexChannel(red)}${toHexChannel(green)}${toHexChannel(blue)}`
-}
-
-function toHexChannel(value: number): string {
-  return Math.max(0, Math.min(255, value)).toString(16).padStart(2, '0')
 }

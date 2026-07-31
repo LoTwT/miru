@@ -16,7 +16,7 @@ Status: implemented in the PWA install/offline PR.
 - `display`: `standalone`
 - `start_url`: `/`
 - `scope`: `/`
-- Static light `theme_color` / `background_color`: `#fbf8f1`
+- Static light `theme_color` / `background_color`: Brutal canvas `#fcf6ea`
 - Icons:
   - `/icons/icon-192.png`, `purpose: any`
   - `/icons/icon-512.png`, `purpose: any`
@@ -41,7 +41,7 @@ The service worker precaches only same-origin application assets:
 
 - app shell HTML
 - JS/CSS chunks
-- fonts
+- curated default fonts only (Newsreader, Bricolage Grotesque, and Space Mono); optional reading fonts stay outside precache
 - Shiki renderer chunk
 - manifest and icons
 - first-party OG image/static assets

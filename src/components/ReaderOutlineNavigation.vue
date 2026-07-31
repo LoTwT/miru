@@ -411,13 +411,27 @@ onUnmounted(() => {
 
 <style scoped>
 .reader-outline {
+  --outline-accent: var(--reading-accent);
+  --outline-fg: var(--reading-fg);
+  --outline-fg-muted: var(--reading-fg-muted);
+  --outline-focus-color: var(--reading-focus);
+  --outline-focus-shadow: var(--reading-focus-shadow);
+  --outline-rule: var(--reading-rule);
+
   position: fixed;
-  z-index: 20;
-  color: var(--reading-fg);
+  z-index: var(--z-raised);
+  color: var(--outline-fg);
   font-family: system-ui, sans-serif;
 }
 
 .reader-outline--sheet {
+  --outline-accent: var(--accent-primary);
+  --outline-fg: var(--text-primary);
+  --outline-fg-muted: var(--text-secondary);
+  --outline-focus-color: var(--focus-ring-color);
+  --outline-focus-shadow: var(--focus-ring-shadow);
+  --outline-rule: var(--border-subtle);
+
   position: static;
   z-index: auto;
 }
@@ -435,21 +449,21 @@ onUnmounted(() => {
   inline-size: 100vw;
   max-block-size: min(72vh, 34rem);
   overflow: hidden;
-  padding: 0.72rem 1rem max(1rem, calc(env(safe-area-inset-bottom) + 1rem));
-  border: 1px solid var(--reading-rule);
+  z-index: var(--z-raised);
+  padding: var(--spacing-3) var(--spacing-4) max(var(--spacing-4), calc(env(safe-area-inset-bottom) + var(--spacing-4)));
+  border: var(--border-width-surface) solid var(--border-default);
   border-inline: 0;
   border-block-end: 0;
-  border-radius: 18px 18px 0 0;
-  background: color-mix(in srgb, var(--reading-bg) 94%, transparent);
-  box-shadow: 0 18px 44px rgb(0 0 0 / 16%);
-  backdrop-filter: blur(16px);
+  border-radius: var(--radius-card) var(--radius-card) 0 0;
+  background: var(--surface-panel);
+  box-shadow: var(--shadow-panel);
 }
 
 .reader-outline__scroll {
   min-block-size: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-color: color-mix(in srgb, var(--reading-rule) 84%, transparent) transparent;
+  scrollbar-color: color-mix(in srgb, var(--outline-rule) 84%, transparent) transparent;
   scrollbar-gutter: stable;
   scrollbar-width: thin;
 }
@@ -463,13 +477,13 @@ onUnmounted(() => {
 }
 
 .reader-outline__scroll::-webkit-scrollbar-thumb {
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--reading-rule) 82%, transparent);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--outline-rule) 82%, transparent);
 }
 
 .reader-outline__scroll:hover::-webkit-scrollbar-thumb,
 .reader-outline__scroll:focus-within::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--reading-fg-muted) 36%, transparent);
+  background: color-mix(in srgb, var(--outline-fg-muted) 36%, transparent);
 }
 
 .reader-outline__scroll--sheet {
@@ -482,8 +496,8 @@ onUnmounted(() => {
   inline-size: 2.7rem;
   block-size: 0.28rem;
   margin: 0 auto 0.7rem;
-  border-radius: 999px;
-  background: var(--reading-rule);
+  border-radius: var(--radius-full);
+  background: var(--outline-rule);
 }
 
 .reader-outline__header {
@@ -501,7 +515,7 @@ onUnmounted(() => {
 }
 
 .reader-outline__title {
-  color: var(--reading-fg);
+  color: var(--outline-fg);
   font-family: var(--reading-font-heading);
   font-size: 1.05rem;
   line-height: 1.2;
@@ -509,19 +523,19 @@ onUnmounted(() => {
 
 .reader-outline__caption {
   margin-block-start: 0.2rem;
-  color: var(--reading-fg-muted);
+  color: var(--outline-fg-muted);
   font-size: 0.82rem;
 }
 
 .reader-outline__close {
   display: grid;
   place-items: center;
-  inline-size: 44px;
-  block-size: 44px;
-  border: 1px solid var(--reading-rule);
-  border-radius: 50%;
-  background: var(--reading-bg);
-  color: var(--reading-fg-muted);
+  inline-size: var(--touch-target-min);
+  block-size: var(--touch-target-min);
+  border: var(--border-width-control) solid var(--border-default);
+  border-radius: var(--radius-control);
+  background: var(--surface-elevated);
+  color: var(--text-secondary);
   cursor: pointer;
   font: inherit;
 }
@@ -535,7 +549,7 @@ onUnmounted(() => {
 
 .reader-outline__label {
   margin: 0 0 0.45rem;
-  color: var(--reading-fg-muted);
+  color: var(--outline-fg-muted);
   font-size: 0.72rem;
   letter-spacing: 0;
 }
@@ -558,8 +572,8 @@ onUnmounted(() => {
   align-items: center;
   scroll-margin-block: 40px;
   min-block-size: 36px;
-  border-radius: 10px;
-  color: var(--reading-fg-muted);
+  border-radius: var(--radius-control);
+  color: var(--outline-fg-muted);
   font-size: 0.82rem;
   line-height: 1.25;
   text-decoration: none;
@@ -571,7 +585,7 @@ onUnmounted(() => {
   inline-size: 32px;
   block-size: 32px;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: transparent;
   cursor: pointer;
 }
@@ -580,15 +594,15 @@ onUnmounted(() => {
   content: "";
   inline-size: 0.48rem;
   block-size: 0.48rem;
-  border: 1px solid color-mix(in srgb, var(--reading-fg-muted) 72%, transparent);
-  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--outline-fg-muted) 72%, transparent);
+  border-radius: var(--radius-full);
   background: transparent;
 }
 
 .reader-outline__bookmark-toggle--active::before {
-  border-color: var(--reading-accent);
-  background: var(--reading-accent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--reading-accent) 14%, transparent);
+  border-color: var(--outline-accent);
+  background: var(--outline-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--outline-accent) 14%, transparent);
 }
 
 .reader-outline__item--h2 {
@@ -609,17 +623,17 @@ onUnmounted(() => {
 .reader-outline__tick {
   inline-size: 0.18rem;
   block-size: 1.3em;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: transparent;
 }
 
 .reader-outline__item--active {
-  color: var(--reading-fg);
+  color: var(--outline-fg);
   font-weight: 650;
 }
 
 .reader-outline__item--active .reader-outline__tick {
-  background: var(--reading-accent);
+  background: var(--outline-accent);
 }
 
 .reader-outline__item:hover,
@@ -632,15 +646,16 @@ onUnmounted(() => {
 .reader-outline__bookmark-jump:focus-visible,
 .reader-outline__bookmark-remove:hover,
 .reader-outline__bookmark-remove:focus-visible {
-  color: var(--reading-fg);
+  color: var(--outline-fg);
 }
 
+.reader-outline__item:focus-visible,
 .reader-outline__bookmark-toggle:focus-visible,
 .reader-outline__bookmark-jump:focus-visible,
 .reader-outline__bookmark-remove:focus-visible {
-  outline: 2px solid var(--reading-focus);
-  outline-offset: 3px;
-  box-shadow: var(--reading-focus-shadow);
+  outline: var(--border-width-thick) solid var(--outline-focus-color);
+  outline-offset: var(--spacing-1);
+  box-shadow: var(--outline-focus-shadow);
 }
 
 .reader-outline__sheet-list .reader-outline__item {
@@ -659,7 +674,7 @@ onUnmounted(() => {
 .reader-outline__bookmarks {
   margin-block-start: 0.85rem;
   padding-block-start: 0.75rem;
-  border-block-start: 1px solid color-mix(in srgb, var(--reading-rule) 72%, transparent);
+  border-block-start: 1px solid color-mix(in srgb, var(--outline-rule) 72%, transparent);
 }
 
 .reader-outline__label--bookmarks {
@@ -687,7 +702,7 @@ onUnmounted(() => {
 .reader-outline__bookmark-remove {
   border: 0;
   background: transparent;
-  color: var(--reading-fg-muted);
+  color: var(--outline-fg-muted);
   font: inherit;
   cursor: pointer;
 }
@@ -698,7 +713,7 @@ onUnmounted(() => {
   min-block-size: 40px;
   min-inline-size: 0;
   padding: 0.35rem 0.45rem;
-  border-radius: 10px;
+  border-radius: var(--radius-control);
   text-align: left;
 }
 
@@ -710,7 +725,7 @@ onUnmounted(() => {
 }
 
 .reader-outline__bookmark-jump span {
-  color: var(--reading-fg);
+  color: var(--outline-fg);
   font-size: 0.8rem;
 }
 
@@ -723,7 +738,7 @@ onUnmounted(() => {
   place-items: center;
   inline-size: 32px;
   block-size: 32px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
 }
 
 @media (max-width: 1099px) {
@@ -742,8 +757,8 @@ onUnmounted(() => {
 
     inset-block-start: var(--reader-outline-top);
     inline-size: var(--reader-outline-rail-size);
-    opacity: 0.72;
-    transition: opacity 160ms ease;
+    opacity: var(--opacity-subtle);
+    transition: opacity var(--duration-normal) var(--ease-standard);
   }
 
   .reader-outline--right {
@@ -784,7 +799,7 @@ onUnmounted(() => {
 
   .reader-outline__label {
     margin: 0 0 0.45rem 0.9rem;
-    color: var(--reading-fg-muted);
+    color: var(--outline-fg-muted);
     font-size: 0.72rem;
     letter-spacing: 0;
   }

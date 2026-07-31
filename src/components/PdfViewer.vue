@@ -180,14 +180,12 @@ async function cleanupPdfDocument(): Promise<void> {
   clearTextLayers()
   pdfSearchTextCache.clear()
 
-  if (loadingTask) {
-    await loadingTask.destroy()
-    loadingTask = null
-  }
+  const task = loadingTask ?? pdfDocument?.loadingTask
+  loadingTask = null
+  pdfDocument = null
 
-  if (pdfDocument) {
-    await pdfDocument.destroy()
-    pdfDocument = null
+  if (task) {
+    await task.destroy()
   }
 
   pageSlots.value = []
@@ -1724,11 +1722,11 @@ onUnmounted(() => {
 .pdf-viewer__back,
 .pdf-viewer__toolbar button,
 .pdf-viewer__state button {
-  min-block-size: 44px;
-  border: 1px solid color-mix(in srgb, var(--reading-rule) 82%, transparent);
-  border-radius: 8px;
-  color: var(--reading-fg);
-  background: color-mix(in srgb, var(--reading-bg) 92%, var(--reading-fg) 8%);
+  min-block-size: var(--touch-target-min);
+  border: var(--border-width-control) solid var(--border-default);
+  border-radius: var(--radius-control);
+  color: var(--text-primary);
+  background: var(--surface-elevated);
   font: inherit;
   cursor: pointer;
 }
@@ -1743,18 +1741,18 @@ onUnmounted(() => {
 .pdf-viewer__toolbar button:focus-visible,
 .pdf-viewer__state button:hover,
 .pdf-viewer__state button:focus-visible {
-  border-color: var(--reading-accent);
-  color: var(--reading-fg);
+  border-color: var(--accent-primary);
+  color: var(--text-primary);
 }
 
 .pdf-viewer__toolbar button:disabled {
   cursor: not-allowed;
-  opacity: 0.45;
+  opacity: var(--opacity-disabled);
 }
 
 .pdf-viewer__toolbar button[aria-pressed="true"] {
-  border-color: color-mix(in srgb, var(--reading-accent) 72%, transparent);
-  background: color-mix(in srgb, var(--reading-accent) 12%, transparent);
+  border-color: var(--accent-primary);
+  background: var(--accent-soft);
 }
 
 .pdf-viewer__title-block {
@@ -1773,9 +1771,9 @@ onUnmounted(() => {
 .pdf-viewer__chip {
   min-inline-size: 2.35rem;
   padding: 0.2rem 0.45rem;
-  border: 1px solid color-mix(in srgb, var(--reading-accent) 54%, transparent);
-  border-radius: 6px;
-  color: var(--reading-accent);
+  border: var(--border-width-control) solid color-mix(in srgb, var(--reading-accent) 54%, transparent);
+  border-radius: var(--radius-control);
+  color: var(--reading-accent-text);
   font-size: 0.72rem;
   font-weight: 700;
   text-align: center;
@@ -1792,20 +1790,20 @@ onUnmounted(() => {
 
 .pdf-viewer__toolbar {
   position: sticky;
-  top: max(5.25rem, calc(env(safe-area-inset-top) + 5.25rem));
-  z-index: 10;
+  top: max(5.5rem, calc(env(safe-area-inset-top) + 5.5rem));
+  z-index: var(--z-sticky);
   display: flex;
   flex-wrap: wrap;
-  gap: 0.65rem;
+  gap: var(--spacing-2-5);
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 0.85rem;
-  padding: 0.55rem;
-  border: 1px solid color-mix(in srgb, var(--reading-rule) 70%, transparent);
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--reading-bg) 92%, transparent);
-  box-shadow: 0 12px 34px rgb(0 0 0 / 10%);
-  backdrop-filter: blur(14px);
+  margin-bottom: var(--spacing-3-5);
+  padding: var(--spacing-2);
+  border: var(--border-width-surface) solid var(--border-default);
+  border-radius: var(--radius-card);
+  background: var(--surface-panel);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-panel);
 }
 
 .pdf-viewer__control-group {
@@ -1823,10 +1821,10 @@ onUnmounted(() => {
 .pdf-viewer__page-jump input {
   inline-size: 4rem;
   min-block-size: 44px;
-  border: 1px solid color-mix(in srgb, var(--reading-rule) 82%, transparent);
-  border-radius: 8px;
-  color: var(--reading-fg);
-  background: var(--reading-bg);
+  border: var(--border-width-control) solid var(--border-default);
+  border-radius: var(--radius-control);
+  color: var(--text-primary);
+  background: var(--surface-subtle);
   font: inherit;
   text-align: center;
 }
@@ -1834,7 +1832,7 @@ onUnmounted(() => {
 .pdf-viewer__page-total,
 .pdf-viewer__zoom-label {
   min-inline-size: 3.8rem;
-  color: var(--reading-fg-muted);
+  color: var(--text-secondary);
   font-size: 0.9rem;
   text-align: center;
 }
@@ -1850,8 +1848,8 @@ onUnmounted(() => {
   block-size: min(68vh, 52rem);
   min-block-size: 22rem;
   padding: clamp(0.75rem, 3vw, 1.35rem);
-  border: 1px solid color-mix(in srgb, var(--reading-rule) 58%, transparent);
-  border-radius: 12px;
+  border: var(--border-width-surface) solid color-mix(in srgb, var(--reading-rule) 58%, transparent);
+  border-radius: var(--radius-card);
   background: color-mix(in srgb, var(--reading-code-bg) 54%, var(--reading-bg));
   overscroll-behavior: contain;
   overflow: auto;
@@ -1875,18 +1873,18 @@ onUnmounted(() => {
   inline-size: 44px;
   block-size: 44px;
   padding: 0;
-  border: 1px solid color-mix(in srgb, var(--reading-rule) 78%, transparent);
-  border-radius: 999px;
+  border: var(--border-width-control) solid color-mix(in srgb, var(--reading-rule) 78%, transparent);
+  border-radius: var(--radius-full);
   color: var(--reading-fg);
   background: color-mix(in srgb, var(--reading-bg) 88%, transparent);
-  box-shadow: 0 14px 32px rgb(0 0 0 / 16%);
+  box-shadow: var(--shadow-panel);
   font: inherit;
   font-size: 1.75rem;
   line-height: 1;
   cursor: pointer;
   opacity: 0.58;
   transform: translateY(-50%);
-  transition: opacity 160ms ease, border-color 160ms ease, color 160ms ease;
+  transition: var(--transition-interactive);
   backdrop-filter: blur(12px);
 }
 
@@ -1915,7 +1913,7 @@ onUnmounted(() => {
 .pdf-viewer__side-page-button:hover,
 .pdf-viewer__side-page-button:focus-visible {
   border-color: var(--reading-accent);
-  color: var(--reading-accent);
+  color: var(--reading-accent-text);
   opacity: 1;
 }
 
@@ -2040,7 +2038,7 @@ onUnmounted(() => {
 }
 
 .pdf-viewer__state--error {
-  color: var(--reading-accent);
+  color: var(--reading-accent-text);
 }
 
 .pdf-viewer__render-status {
@@ -2049,15 +2047,15 @@ onUnmounted(() => {
   justify-self: center;
   margin: 1rem 0 0;
   padding: 0.45rem 0.7rem;
-  border: 1px solid color-mix(in srgb, var(--reading-rule) 72%, transparent);
-  border-radius: 999px;
+  border: var(--border-width-control) solid color-mix(in srgb, var(--reading-rule) 72%, transparent);
+  border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--reading-bg) 92%, transparent);
   color: var(--reading-fg-muted);
   font-size: 0.86rem;
 }
 
 .pdf-viewer__render-status--error {
-  color: var(--reading-accent);
+  color: var(--reading-accent-text);
 }
 
 .pdf-viewer__sr-only {

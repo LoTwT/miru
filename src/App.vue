@@ -141,12 +141,8 @@ const hasNavigationSurface = computed(() =>
 )
 const shouldRenderOutlineRail = computed(() => hasNavigationSurface.value && appMode.value === 'reader' && !isNarrowOutlineViewport.value)
 const shouldShowOutlineCommand = computed(() => hasNavigationSurface.value && (appMode.value === 'pdf' || isNarrowOutlineViewport.value))
-const isSystemDarkTheme = shallowRef(false)
 const isReducedMotion = shallowRef(false)
-const shouldUseDarkCommandScrim = computed(() =>
-  readingSettings.state.theme === 'dark'
-  || (readingSettings.state.theme === 'system' && isSystemDarkTheme.value),
-)
+const shouldUseDarkCommandScrim = computed(() => readingSettings.effectiveColorScheme.value === 'dark')
 const shouldAnimateCommandScrim = computed(() => !isReducedMotion.value)
 const readingPresetList = computed(() => readingSettings.presets.value)
 const readingLocalFontList = computed(() => readingSettings.localFonts.value)
@@ -212,9 +208,6 @@ watch(appMode, (value, previousValue) => {
 })
 
 onMounted(async () => {
-  await loadDefaultReadingFonts()
-  await readingSettings.initializeLocalFonts()
-  await refreshLibraryEntries()
   outlineViewportMediaQuery = window.matchMedia('(max-width: 1099px)')
   syncOutlineViewport()
   outlineViewportMediaQuery.addEventListener('change', syncOutlineViewport)
@@ -228,6 +221,10 @@ onMounted(async () => {
   window.addEventListener('resize', onWindowResize, { passive: true })
   document.addEventListener('pointerdown', onDocumentPointerDown)
   document.addEventListener('keydown', onDocumentKeydown)
+
+  await loadDefaultReadingFonts()
+  await readingSettings.initializeLocalFonts()
+  await refreshLibraryEntries()
   queueMarkdownProgressUpdate()
 })
 
@@ -510,7 +507,7 @@ function syncOutlineViewport(): void {
 }
 
 function syncSystemDarkTheme(): void {
-  isSystemDarkTheme.value = systemDarkThemeMediaQuery?.matches ?? false
+  readingSettings.syncSystemColorScheme(systemDarkThemeMediaQuery?.matches ?? false)
 }
 
 function syncReducedMotion(): void {
@@ -1273,7 +1270,10 @@ function focusLibraryView(): void {
 <template>
   <main
     class="app-shell"
-    :class="{ 'app-shell--dragging': isDragging }"
+    :class="{
+      'app-shell--dragging': isDragging,
+      'app-shell--library': appMode === 'library',
+    }"
     @paste="onPaste"
     @dragover="onDragOver"
     @dragleave="onDragLeave"
@@ -1497,7 +1497,8 @@ function focusLibraryView(): void {
         @update-paragraph-gap="readingSettings.updateParagraphGap"
         @update-page-margin="readingSettings.updatePageMargin"
         @update-font-family="readingSettings.updateFontFamily"
-        @update-theme="readingSettings.updateTheme"
+        @update-theme-style="readingSettings.updateThemeStyle"
+        @update-color-scheme="readingSettings.updateColorScheme"
         @update-custom-theme="readingSettings.updateCustomTheme"
         @auto-fix-custom-theme="readingSettings.autoFixCustomTheme"
         @save-preset="readingSettings.savePreset"
@@ -1545,12 +1546,17 @@ function focusLibraryView(): void {
   outline-offset: -1rem;
 }
 
+.app-shell--library {
+  background: var(--surface-canvas);
+  color: var(--text-primary);
+}
+
 .app-shell__reading-progress {
   position: fixed;
   inset-block-start: 0;
   inset-inline: 0;
-  z-index: 80;
-  block-size: 2px;
+  z-index: var(--z-toast);
+  block-size: var(--border-width-thick);
   pointer-events: none;
 }
 
@@ -1558,8 +1564,8 @@ function focusLibraryView(): void {
   display: block;
   block-size: 100%;
   background: var(--reading-accent);
-  opacity: 0.82;
-  transition: inline-size 120ms ease-out;
+  opacity: var(--opacity-emphasis);
+  transition: inline-size var(--duration-fast) var(--ease-out-soft);
 }
 
 .app-shell__reading-progress-fill--motionless {
@@ -1568,21 +1574,21 @@ function focusLibraryView(): void {
 
 .app-shell__header {
   position: sticky;
-  top: max(0.75rem, env(safe-area-inset-top));
-  z-index: 30;
+  top: max(var(--spacing-3), env(safe-area-inset-top));
+  z-index: var(--z-header);
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 0.55rem;
-  min-block-size: 56px;
-  max-width: 78rem;
+  gap: var(--spacing-2);
+  min-block-size: var(--size-control-xl);
+  max-width: var(--container-wide);
   margin: 0 auto;
-  padding: 0.45rem;
-  border: 1px solid color-mix(in srgb, var(--reading-rule) 62%, transparent);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--reading-bg) 92%, transparent);
-  box-shadow: 0 12px 34px rgb(0 0 0 / 9%);
-  backdrop-filter: blur(16px);
+  padding: var(--spacing-2);
+  border: var(--border-width-surface) solid var(--border-default);
+  border-radius: var(--radius-card);
+  background: var(--surface-panel);
+  box-shadow: var(--shadow-panel);
+  transition: var(--transition-surface);
 }
 
 .app-shell__mark {
@@ -1590,11 +1596,11 @@ function focusLibraryView(): void {
   flex: 0 1 auto;
   align-items: center;
   min-inline-size: 0;
-  min-block-size: 44px;
-  padding: 0 0.85rem;
+  min-block-size: var(--touch-target-min);
+  padding: 0 var(--spacing-3);
   border: 0;
-  border-radius: 999px;
-  color: var(--reading-fg);
+  border-radius: var(--radius-control);
+  color: var(--text-primary);
   background: transparent;
   font-family: var(--reading-font-heading);
   font-size: 1rem;
@@ -1605,7 +1611,7 @@ function focusLibraryView(): void {
 
 .app-shell__mark-separator,
 .app-shell__document-title {
-  color: var(--reading-fg-muted);
+  color: var(--text-secondary);
   font-family: var(--reading-font-body);
   font-size: 0.86rem;
   font-weight: 500;
@@ -1629,13 +1635,13 @@ function focusLibraryView(): void {
 .app-shell__command-button {
   display: inline-grid;
   place-items: center;
-  min-inline-size: 44px;
-  min-block-size: 44px;
-  padding: 0 0.78rem;
-  border: 1px solid color-mix(in srgb, var(--reading-rule) 72%, transparent);
-  border-radius: 999px;
-  color: var(--reading-fg-muted);
-  background: color-mix(in srgb, var(--reading-bg) 92%, var(--reading-fg) 8%);
+  min-inline-size: var(--touch-target-min);
+  min-block-size: var(--touch-target-min);
+  padding: 0 var(--spacing-3);
+  border: var(--border-width-control) solid var(--border-default);
+  border-radius: var(--radius-control);
+  color: var(--text-secondary);
+  background: var(--surface-elevated);
   font: inherit;
   line-height: 1;
   cursor: pointer;
@@ -1654,7 +1660,7 @@ function focusLibraryView(): void {
   block-size: 0.84rem;
   border: 1.5px solid currentColor;
   border-left-width: 3px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
 }
 
 .app-shell__library-icon::before {
@@ -1693,19 +1699,19 @@ function focusLibraryView(): void {
 .app-shell__command-button:hover,
 .app-shell__command-button:focus-visible,
 .app-shell__command-button--active {
-  color: var(--reading-fg);
-  border-color: color-mix(in srgb, var(--reading-accent) 54%, transparent);
+  color: var(--text-primary);
+  border-color: var(--accent-primary);
 }
 
 .app-shell__command-button--active {
-  background: color-mix(in srgb, var(--reading-accent) 12%, transparent);
+  background: var(--accent-soft);
 }
 
 .app-shell__command-surface {
   position: fixed;
   top: max(4.65rem, calc(env(safe-area-inset-top) + 4.65rem));
   right: max(1rem, calc(env(safe-area-inset-right) + 1rem));
-  z-index: 40;
+  z-index: var(--z-popover);
 }
 
 .app-shell__command-scrim {

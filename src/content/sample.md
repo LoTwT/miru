@@ -21,7 +21,7 @@ miru 是一个浏览器内的 markdown 阅读器。它**不是编辑器**，也�
 
 > 内容是主角。界面只在你需要它时出现。
 
-点右上角的 `aA`，可以按自己的眼睛调**字号、行宽、行距、主题（浅 / 深 / sepia / 跟随系统）和正文字体**——设置只存在本机，刷新仍在。
+点右上角的 `aA`，可以按自己的眼睛调**字号、行宽、行距、主题风格（Brutal / Default）、配色（跟随系统 / 浅 / 深 / sepia / 自定义）和正文字体**——设置只存在本机，刷新仍在。
 
 miru 渲染标准的 [CommonMark](https://commonmark.org) 加上 [GitHub 风格扩展（GFM）](https://github.github.com/gfm/)。
 

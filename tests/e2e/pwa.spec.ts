@@ -1,6 +1,504 @@
 import { expect, type Page, test } from '@playwright/test'
 
 test.describe('PWA install and offline shell', () => {
+  test('applies the default Brutal scheme before the app module runs', async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'dark' })
+
+    let markModuleRequested!: () => void
+    let releaseModule!: () => void
+    const moduleRequested = new Promise<void>((resolve) => {
+      markModuleRequested = resolve
+    })
+    const moduleGate = new Promise<void>((resolve) => {
+      releaseModule = resolve
+    })
+
+    await page.route(/\/assets\/index-[^/]+\.js$/, async (route) => {
+      markModuleRequested()
+      await moduleGate
+      await route.continue()
+    })
+
+    const navigation = page.goto('/')
+
+    try {
+      await moduleRequested
+      const bootstrap = page.locator('script[data-theme-bootstrap]')
+      await expect(bootstrap).toHaveCount(1)
+      expect(await bootstrap.getAttribute('src')).toBeNull()
+      await expect(page.locator('html')).toHaveAttribute('data-reading-style', 'brutal')
+      await expect(page.locator('html')).toHaveAttribute('data-reading-scheme', 'system')
+      await expect(page.locator('html')).toHaveClass(/\bbrutal\b/)
+      await expect(page.locator('html')).toHaveClass(/\bdark\b/)
+      await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute('content', '#161412')
+    }
+    finally {
+      releaseModule()
+    }
+
+    await navigation
+  })
+
+  test('migrates and restores a legacy dark Custom scheme before the app module runs', async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'light' })
+    await page.addInitScript(() => {
+      localStorage.setItem('miru:reading-settings:v1', JSON.stringify({
+        version: 1,
+        presetId: 'custom',
+        customTheme: {
+          bg: '#000000',
+          fg: '#ffffff',
+          accent: '#ffffff',
+        },
+      }))
+    })
+
+    let markModuleRequested!: () => void
+    let releaseModule!: () => void
+    const moduleRequested = new Promise<void>((resolve) => {
+      markModuleRequested = resolve
+    })
+    const moduleGate = new Promise<void>((resolve) => {
+      releaseModule = resolve
+    })
+
+    await page.route(/\/assets\/index-[^/]+\.js$/, async (route) => {
+      markModuleRequested()
+      await moduleGate
+      await route.continue()
+    })
+
+    const navigation = page.goto('/')
+
+    try {
+      await moduleRequested
+      await expect(page.locator('html')).toHaveAttribute('data-reading-style', 'default')
+      await expect(page.locator('html')).toHaveAttribute('data-reading-scheme', 'custom')
+      await expect(page.locator('html')).not.toHaveClass(/\bbrutal\b/)
+      await expect(page.locator('html')).toHaveClass(/\bdark\b/)
+      await expect.poll(() => page.evaluate(() => {
+        const style = getComputedStyle(document.documentElement)
+
+        return {
+          bg: style.getPropertyValue('--reading-bg').trim(),
+          fg: style.getPropertyValue('--reading-fg').trim(),
+        }
+      })).toEqual({
+        bg: '#000000',
+        fg: '#ffffff',
+      })
+    }
+    finally {
+      releaseModule()
+    }
+
+    await navigation
+  })
+
+  test('falls back to valid legacy settings when the v2 payload is corrupt before the app module runs', async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'light' })
+    await page.addInitScript(() => {
+      localStorage.setItem('miru:reading-settings:v2', '{bad json')
+      localStorage.setItem('miru:reading-settings:v1', JSON.stringify({
+        version: 1,
+        presetId: 'dark',
+      }))
+    })
+
+    let markModuleRequested!: () => void
+    let releaseModule!: () => void
+    const moduleRequested = new Promise<void>((resolve) => {
+      markModuleRequested = resolve
+    })
+    const moduleGate = new Promise<void>((resolve) => {
+      releaseModule = resolve
+    })
+
+    await page.route(/\/assets\/index-[^/]+\.js$/, async (route) => {
+      markModuleRequested()
+      await moduleGate
+      await route.continue()
+    })
+
+    const navigation = page.goto('/')
+
+    try {
+      await moduleRequested
+      await expect(page.locator('html')).toHaveAttribute('data-reading-style', 'default')
+      await expect(page.locator('html')).toHaveAttribute('data-reading-scheme', 'dark')
+      await expect(page.locator('html')).not.toHaveClass(/\bbrutal\b/)
+      await expect(page.locator('html')).toHaveClass(/\bdark\b/)
+      await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute('content', '#121019')
+    }
+    finally {
+      releaseModule()
+    }
+
+    await navigation
+  })
+
+  test('restores a same-revision v1 projection when a v2 theme field is invalid', async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'light' })
+    await page.addInitScript(() => {
+      localStorage.setItem('miru:reading-settings:v2', JSON.stringify({
+        version: 2,
+        themeStyle: 'invalid',
+        colorScheme: 'dark',
+        compatibilityRevision: 'shared-revision',
+      }))
+      localStorage.setItem('miru:reading-settings:v1', JSON.stringify({
+        version: 1,
+        presetId: 'dark',
+        themeStyle: 'default',
+        colorScheme: 'dark',
+        compatibilityRevision: 'shared-revision',
+      }))
+    })
+
+    let markModuleRequested!: () => void
+    let releaseModule!: () => void
+    const moduleRequested = new Promise<void>((resolve) => {
+      markModuleRequested = resolve
+    })
+    const moduleGate = new Promise<void>((resolve) => {
+      releaseModule = resolve
+    })
+
+    await page.route(/\/assets\/index-[^/]+\.js$/, async (route) => {
+      markModuleRequested()
+      await moduleGate
+      await route.continue()
+    })
+
+    const navigation = page.goto('/')
+
+    try {
+      await moduleRequested
+      await expect(page.locator('html')).toHaveAttribute('data-reading-style', 'default')
+      await expect(page.locator('html')).toHaveAttribute('data-reading-scheme', 'dark')
+      await expect(page.locator('html')).not.toHaveClass(/\bbrutal\b/)
+      await expect(page.locator('html')).toHaveClass(/\bdark\b/)
+      await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute('content', '#121019')
+    }
+    finally {
+      releaseModule()
+    }
+
+    await navigation
+  })
+
+  test('restores a rollback-era v1 edit instead of an older v2 snapshot before the app module runs', async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'dark' })
+    await page.addInitScript(() => {
+      localStorage.setItem('miru:reading-settings:v2', JSON.stringify({
+        version: 2,
+        themeStyle: 'brutal',
+        colorScheme: 'dark',
+        contrast: 'invalid',
+        compatibilityRevision: 'older-v2-snapshot',
+      }))
+      localStorage.setItem('miru:reading-settings:v1', JSON.stringify({
+        version: 1,
+        presetId: 'light',
+      }))
+    })
+
+    let markModuleRequested!: () => void
+    let releaseModule!: () => void
+    const moduleRequested = new Promise<void>((resolve) => {
+      markModuleRequested = resolve
+    })
+    const moduleGate = new Promise<void>((resolve) => {
+      releaseModule = resolve
+    })
+
+    await page.route(/\/assets\/index-[^/]+\.js$/, async (route) => {
+      markModuleRequested()
+      await moduleGate
+      await route.continue()
+    })
+
+    const navigation = page.goto('/')
+
+    try {
+      await moduleRequested
+      await expect(page.locator('html')).toHaveAttribute('data-reading-style', 'default')
+      await expect(page.locator('html')).toHaveAttribute('data-reading-scheme', 'light')
+      await expect(page.locator('html')).not.toHaveClass(/\bbrutal\b/)
+      await expect(page.locator('html')).not.toHaveClass(/\bdark\b/)
+      await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute('content', '#faf8f4')
+    }
+    finally {
+      releaseModule()
+    }
+
+    await navigation
+  })
+
+  test('preserves the v2-only style when a rollback-era writer changes typography', async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'light' })
+    await page.addInitScript(() => {
+      localStorage.setItem('miru:reading-settings:v2', JSON.stringify({
+        version: 2,
+        themeStyle: 'brutal',
+        colorScheme: 'dark',
+        contrast: 'invalid',
+        compatibilityRevision: 'older-v2-snapshot',
+      }))
+      localStorage.setItem('miru:reading-settings:v1', JSON.stringify({
+        version: 1,
+        presetId: 'dark',
+        tokenOverrides: {
+          '--reading-font-size': '20px',
+        },
+      }))
+    })
+
+    let markModuleRequested!: () => void
+    let releaseModule!: () => void
+    const moduleRequested = new Promise<void>((resolve) => {
+      markModuleRequested = resolve
+    })
+    const moduleGate = new Promise<void>((resolve) => {
+      releaseModule = resolve
+    })
+
+    await page.route(/\/assets\/index-[^/]+\.js$/, async (route) => {
+      markModuleRequested()
+      await moduleGate
+      await route.continue()
+    })
+
+    const navigation = page.goto('/')
+
+    try {
+      await moduleRequested
+      await expect(page.locator('html')).toHaveAttribute('data-reading-style', 'brutal')
+      await expect(page.locator('html')).toHaveAttribute('data-reading-scheme', 'dark')
+      await expect(page.locator('html')).toHaveClass(/\bbrutal\b/)
+      await expect(page.locator('html')).toHaveClass(/\bdark\b/)
+      await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute('content', '#161412')
+    }
+    finally {
+      releaseModule()
+    }
+
+    await navigation
+  })
+
+  test('restores the complete Sepia contrast palette before the app module runs', async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'dark' })
+    await page.addInitScript(() => {
+      localStorage.setItem('miru:reading-settings:v2', JSON.stringify({
+        version: 2,
+        themeStyle: 'brutal',
+        colorScheme: 'sepia',
+        contrast: 'strong',
+      }))
+    })
+
+    let markModuleRequested!: () => void
+    let releaseModule!: () => void
+    const moduleRequested = new Promise<void>((resolve) => {
+      markModuleRequested = resolve
+    })
+    const moduleGate = new Promise<void>((resolve) => {
+      releaseModule = resolve
+    })
+
+    await page.route(/\/assets\/index-[^/]+\.js$/, async (route) => {
+      markModuleRequested()
+      await moduleGate
+      await route.continue()
+    })
+
+    const navigation = page.goto('/')
+
+    try {
+      await moduleRequested
+      await expect(page.locator('html')).toHaveAttribute('data-reading-style', 'brutal')
+      await expect(page.locator('html')).toHaveAttribute('data-reading-scheme', 'sepia')
+      await expect(page.locator('html')).toHaveAttribute('data-reading-contrast', 'strong')
+      await expect(page.locator('html')).toHaveClass(/\bbrutal\b/)
+      await expect(page.locator('html')).not.toHaveClass(/\bdark\b/)
+      await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute('content', '#efe1bd')
+      await expect.poll(() => page.evaluate(() => {
+        const style = getComputedStyle(document.documentElement)
+
+        return {
+          bg: style.getPropertyValue('--reading-bg').trim(),
+          fg: style.getPropertyValue('--reading-fg').trim(),
+          muted: style.getPropertyValue('--reading-fg-muted').trim(),
+          rule: style.getPropertyValue('--reading-rule').trim(),
+        }
+      })).toEqual({
+        bg: '#efe1bd',
+        fg: '#2a2012',
+        muted: '#3e3220',
+        rule: '#ab8b48',
+      })
+    }
+    finally {
+      releaseModule()
+    }
+
+    await navigation
+  })
+
+  test('sanitizes an incomplete Custom palette before the app module runs', async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'light' })
+    await page.addInitScript(() => {
+      localStorage.setItem('miru:reading-settings:v2', JSON.stringify({
+        version: 2,
+        themeStyle: 'brutal',
+        colorScheme: 'custom',
+        customTheme: {
+          bg: '#000000',
+          fg: 'invalid',
+          accent: '#ffffff',
+        },
+      }))
+    })
+
+    let markModuleRequested!: () => void
+    let releaseModule!: () => void
+    const moduleRequested = new Promise<void>((resolve) => {
+      markModuleRequested = resolve
+    })
+    const moduleGate = new Promise<void>((resolve) => {
+      releaseModule = resolve
+    })
+
+    await page.route(/\/assets\/index-[^/]+\.js$/, async (route) => {
+      markModuleRequested()
+      await moduleGate
+      await route.continue()
+    })
+
+    const navigation = page.goto('/')
+
+    try {
+      await moduleRequested
+      await expect(page.locator('html')).toHaveAttribute('data-reading-style', 'brutal')
+      await expect(page.locator('html')).toHaveAttribute('data-reading-scheme', 'custom')
+      await expect(page.locator('html')).toHaveClass(/\bbrutal\b/)
+      await expect(page.locator('html')).not.toHaveClass(/\bdark\b/)
+      await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute('content', '#faf8f4')
+      await expect.poll(() => page.evaluate(() => {
+        const style = getComputedStyle(document.documentElement)
+
+        return {
+          bg: style.getPropertyValue('--reading-bg').trim(),
+          fg: style.getPropertyValue('--reading-fg').trim(),
+          accent: style.getPropertyValue('--reading-accent').trim(),
+        }
+      })).toEqual({
+        bg: '#faf8f4',
+        fg: '#191713',
+        accent: '#66569d',
+      })
+    }
+    finally {
+      releaseModule()
+    }
+
+    await navigation
+  })
+
+  test('restores a pinned Default dark scheme and its browser theme color before the app module runs', async ({ page }) => {
+    await page.emulateMedia({ colorScheme: 'light' })
+    await page.addInitScript(() => {
+      localStorage.setItem('miru:reading-settings:v2', JSON.stringify({
+        version: 2,
+        themeStyle: 'default',
+        colorScheme: 'dark',
+      }))
+    })
+
+    let markModuleRequested!: () => void
+    let releaseModule!: () => void
+    const moduleRequested = new Promise<void>((resolve) => {
+      markModuleRequested = resolve
+    })
+    const moduleGate = new Promise<void>((resolve) => {
+      releaseModule = resolve
+    })
+
+    await page.route(/\/assets\/index-[^/]+\.js$/, async (route) => {
+      markModuleRequested()
+      await moduleGate
+      await route.continue()
+    })
+
+    const navigation = page.goto('/')
+
+    try {
+      await moduleRequested
+      await expect(page.locator('html')).toHaveAttribute('data-reading-style', 'default')
+      await expect(page.locator('html')).toHaveAttribute('data-reading-scheme', 'dark')
+      await expect(page.locator('html')).not.toHaveClass(/\bbrutal\b/)
+      await expect(page.locator('html')).toHaveClass(/\bdark\b/)
+      await expect(page.locator('meta[name="theme-color"]')).toHaveAttribute('content', '#121019')
+    }
+    finally {
+      releaseModule()
+    }
+
+    await navigation
+  })
+
+  test('does not replay persisted CSS values that can load external resources', async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem('miru:reading-settings:v2', JSON.stringify({
+        version: 2,
+        themeStyle: 'brutal',
+        colorScheme: 'sepia',
+        tokenOverrides: {
+          '--reading-bg': 'url(https://attacker.invalid/pixel)',
+        },
+      }))
+    })
+
+    const attackerRequests: string[] = []
+    page.on('request', (request) => {
+      if (request.url().startsWith('https://attacker.invalid/')) {
+        attackerRequests.push(request.url())
+      }
+    })
+    await page.route('https://attacker.invalid/**', route => route.abort())
+
+    let markModuleRequested!: () => void
+    let releaseModule!: () => void
+    const moduleRequested = new Promise<void>((resolve) => {
+      markModuleRequested = resolve
+    })
+    const moduleGate = new Promise<void>((resolve) => {
+      releaseModule = resolve
+    })
+
+    await page.route(/\/assets\/index-[^/]+\.js$/, async (route) => {
+      markModuleRequested()
+      await moduleGate
+      await route.continue()
+    })
+
+    const navigation = page.goto('/')
+
+    try {
+      await moduleRequested
+      await expect.poll(() => page.evaluate(() => {
+        return document.documentElement.style.getPropertyValue('--reading-bg').trim()
+      })).toBe('#efe1bd')
+      expect(attackerRequests).toEqual([])
+    }
+    finally {
+      releaseModule()
+    }
+
+    await navigation
+    expect(attackerRequests).toEqual([])
+  })
+
   test('exposes the expected manifest and install metadata', async ({ page }) => {
     await page.goto('/')
 
@@ -19,8 +517,8 @@ test.describe('PWA install and offline shell', () => {
       start_url: '/',
       scope: '/',
       display: 'standalone',
-      background_color: '#fbf8f1',
-      theme_color: '#fbf8f1',
+      background_color: '#fcf6ea',
+      theme_color: '#fcf6ea',
     })
     expect(manifest.icons).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -55,6 +553,12 @@ test.describe('PWA install and offline shell', () => {
     await page.reload({ waitUntil: 'load' })
     await waitForServiceWorkerController(page)
 
+    await page.addInitScript(() => {
+      Object.defineProperty(window.navigator, 'onLine', {
+        configurable: true,
+        get: () => false,
+      })
+    })
     await context.setOffline(true)
     await page.reload({ waitUntil: 'domcontentloaded' })
 
@@ -89,6 +593,9 @@ test.describe('PWA install and offline shell', () => {
     expect(cachedUrls.length).toBeGreaterThan(0)
     expect(cachedUrls.every(url => new URL(url).origin === pageOrigin)).toBe(true)
     expect(cachedPaths.some(pathname => pathname === '/' || pathname === '/index.html')).toBe(true)
+    expect(cachedPaths.some(pathname => /\/assets\/bricolage-grotesque-[^/]+\.woff2$/.test(pathname))).toBe(true)
+    expect(cachedPaths.some(pathname => /\/assets\/space-mono-[^/]+\.woff2$/.test(pathname))).toBe(true)
+    expect(cachedPaths.some(pathname => /\/assets\/literata-[^/]+\.woff2$/.test(pathname))).toBe(false)
     expect(cachedUrls.some(url => url.includes('example.com'))).toBe(false)
     expect(cachedUrls.some(url => url.includes('Offline%20file'))).toBe(false)
   })

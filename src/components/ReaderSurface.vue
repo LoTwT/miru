@@ -594,7 +594,7 @@ function normalizeText(value: string): string {
 
 .reader-footer__link:hover,
 .reader-footer__link:focus-visible {
-  color: var(--reading-accent);
+  color: var(--reading-accent-text);
 }
 
 .reader-footer__link:focus-visible {
