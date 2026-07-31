@@ -9,7 +9,7 @@ miru is a static Vite SPA with no backend, Pages Functions, Worker script, or se
 | Field | Value |
 | --- | --- |
 | Production branch | `main` |
-| Node.js | `^22.22.2`, `^24.15.0`, or `>=26.0.0` (`package.json#engines`) |
+| Node.js | `24.18.0` (`.node-version`; supported range in `package.json#engines`) |
 | Package manager | `pnpm@10.25.0` (`package.json#packageManager`) |
 | Install command | `pnpm install --frozen-lockfile` |
 | Build command | `pnpm run build` |
@@ -64,7 +64,7 @@ Use this path once lo-user connects the Cloudflare project to GitHub.
 
 1. In Cloudflare, create/connect a Workers project for `LoTwT/miru`.
 2. Keep `wrangler.jsonc` as the source of truth.
-3. Ensure the build environment uses Node 24.15+ and pnpm 10.25.0 if the dashboard asks for runtime versions.
+3. Keep the checked-in `.node-version` at a supported Node release. Cloudflare detects this file and currently uses Node 24.18.0; pnpm remains pinned by `package.json#packageManager`.
 4. Configure deploy to run:
 
    ```sh
