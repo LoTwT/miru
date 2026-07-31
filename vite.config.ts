@@ -54,7 +54,12 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{html,js,mjs,css,woff2,png}'],
-        globIgnores: ['fonts/optional/**', '**/assets/pdf*.js', '**/assets/pdf*.mjs'],
+        globIgnores: [
+          'fonts/optional/**',
+          '**/assets/pdf-*.js',
+          '**/assets/pdf.worker-*.js',
+          '**/assets/pdf.worker-*.mjs',
+        ],
         navigateFallback: '/index.html',
         cleanupOutdatedCaches: true,
         clientsClaim: false,

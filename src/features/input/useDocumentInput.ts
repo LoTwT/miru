@@ -1,4 +1,4 @@
-import { readonly, shallowRef } from 'vue'
+import { getCurrentScope, onScopeDispose, readonly, shallowRef } from 'vue'
 
 import {
   ensureReadableUrlContentType,
@@ -15,13 +15,38 @@ interface UseDocumentInputOptions {
   onPdf?: (file: File) => void | Promise<void>
 }
 
+export const MAX_MARKDOWN_INPUT_BYTES = 5 * 1024 * 1024
+export const MAX_PDF_INPUT_BYTES = 100 * 1024 * 1024
+
+class InputSizeLimitError extends Error {
+  constructor() {
+    super('Input exceeds the configured size limit')
+    this.name = 'InputSizeLimitError'
+  }
+}
+
 export function useDocumentInput(options: UseDocumentInputOptions) {
   const isFetchingUrl = shallowRef(false)
   const error = shallowRef<ReaderError | null>(null)
+  let activeUrlController: AbortController | null = null
+  let inputSequence = 0
+
+  if (getCurrentScope()) {
+    onScopeDispose(() => {
+      inputSequence += 1
+      cancelActiveUrlFetch()
+    })
+  }
 
   async function loadFromClipboard(): Promise<void> {
+    const sequence = beginInputOperation()
+
     try {
       const text = await navigator.clipboard.readText()
+      if (sequence !== inputSequence) {
+        return
+      }
+
       if (!text.trim()) {
         setError('剪贴板为空', '复制一段 markdown 后再试。')
         return
@@ -33,9 +58,18 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
         return
       }
 
-      loadFromText(text, 'paste', 'Pasted markdown', { kind: 'paste' })
+      if (exceedsTextByteLimit(text, MAX_MARKDOWN_INPUT_BYTES)) {
+        setMarkdownSizeError()
+        return
+      }
+
+      commitDocument(text, 'paste', 'Pasted markdown', { kind: 'paste' })
     }
     catch {
+      if (sequence !== inputSequence) {
+        return
+      }
+
       setError('无法读取剪贴板', '可以直接按 Cmd+V / Ctrl+V 粘贴，或拖入 .md 文件。')
     }
   }
@@ -46,14 +80,41 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
     label = 'Markdown',
     librarySource?: LibrarySource,
   ): void {
+    beginInputOperation()
+
+    if (exceedsTextByteLimit(markdown, MAX_MARKDOWN_INPUT_BYTES)) {
+      setMarkdownSizeError()
+      return
+    }
+
+    commitDocument(markdown, source, label, librarySource)
+  }
+
+  function commitDocument(
+    markdown: string,
+    source: ReaderDocument['source'],
+    label: string,
+    librarySource?: LibrarySource,
+  ): void {
     error.value = null
     options.onDocument({ source, label, markdown, librarySource })
   }
 
   async function loadFromFile(file: File): Promise<void> {
+    const sequence = beginInputOperation()
+
     if (isPdfFile(file)) {
       if (!options.onPdf) {
         setError('PDF 还不能打开', '这个版本只能读取 .md、.markdown 或纯文本。')
+        return
+      }
+
+      if (file.size > MAX_PDF_INPUT_BYTES) {
+        setError('PDF 太大，无法打开', 'PDF 上限为 100 MB。请压缩或拆分文件后再试。')
+        return
+      }
+
+      if (sequence !== inputSequence) {
         return
       }
 
@@ -67,8 +128,22 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
       return
     }
 
+    if (file.size > MAX_MARKDOWN_INPUT_BYTES) {
+      setMarkdownSizeError()
+      return
+    }
+
     const text = await file.text()
-    loadFromText(text, 'file', file.name, {
+    if (sequence !== inputSequence) {
+      return
+    }
+
+    if (exceedsTextByteLimit(text, MAX_MARKDOWN_INPUT_BYTES)) {
+      setMarkdownSizeError()
+      return
+    }
+
+    commitDocument(text, 'file', file.name, {
       kind: 'file',
       fileName: file.name,
       mimeType: file.type || 'text/plain',
@@ -76,6 +151,8 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
   }
 
   async function loadFromUrl(url: string): Promise<void> {
+    const sequence = beginInputOperation()
+
     const normalized = normalizeMarkdownUrl(url)
 
     if (!normalized) {
@@ -83,6 +160,8 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
       return
     }
 
+    const controller = new AbortController()
+    activeUrlController = controller
     isFetchingUrl.value = true
     error.value = null
 
@@ -92,6 +171,7 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
         mode: 'cors',
         credentials: 'omit',
         referrerPolicy: 'no-referrer',
+        signal: controller.signal,
       })
 
       if (!response.ok) {
@@ -99,9 +179,15 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
       }
 
       ensureReadableUrlContentType(response.headers.get('content-type'))
+      ensureContentLengthWithinLimit(response, MAX_MARKDOWN_INPUT_BYTES)
 
-      const text = await response.text()
-      loadFromText(text, 'url', normalized.inputUrl, {
+      const text = await readBoundedResponseText(response, MAX_MARKDOWN_INPUT_BYTES)
+
+      if (controller.signal.aborted || sequence !== inputSequence) {
+        return
+      }
+
+      commitDocument(text, 'url', normalized.inputUrl, {
         kind: 'url',
         inputUrl: normalized.inputUrl,
         requestUrl: normalized.requestUrl,
@@ -109,7 +195,14 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
       })
     }
     catch (reason) {
-      if (reason instanceof UnsupportedUrlContentTypeError) {
+      if (controller.signal.aborted || sequence !== inputSequence) {
+        return
+      }
+
+      if (reason instanceof InputSizeLimitError) {
+        setError('链接内容太大', 'miru 最多读取 5 MB 的 markdown。请换较小的文件，或下载后拆分再打开。')
+      }
+      else if (reason instanceof UnsupportedUrlContentTypeError) {
         setError('无法作为 markdown 拉取', '这个链接像网页或文件。试试它的 raw / 源文件链接，或直接粘贴 markdown。')
       }
       else if (reason instanceof UrlFetchHttpError) {
@@ -128,8 +221,28 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
       }
     }
     finally {
-      isFetchingUrl.value = false
+      if (activeUrlController === controller) {
+        activeUrlController = null
+        isFetchingUrl.value = false
+      }
     }
+  }
+
+  function cancelActiveUrlFetch(): void {
+    const controller = activeUrlController
+    activeUrlController = null
+    isFetchingUrl.value = false
+    controller?.abort()
+  }
+
+  function beginInputOperation(): number {
+    inputSequence += 1
+    cancelActiveUrlFetch()
+    return inputSequence
+  }
+
+  function setMarkdownSizeError(): void {
+    setError('内容太大，无法打开', 'Markdown 上限为 5 MB。请缩短内容，或拆成多个文档。')
   }
 
   function setError(title: string, detail: string): void {
@@ -143,6 +256,61 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
     loadFromFile,
     loadFromText,
     loadFromUrl,
+  }
+}
+
+function exceedsTextByteLimit(text: string, maximumBytes: number): boolean {
+  if (text.length > maximumBytes) {
+    return true
+  }
+
+  return new TextEncoder().encode(text).byteLength > maximumBytes
+}
+
+function ensureContentLengthWithinLimit(response: Response, maximumBytes: number): void {
+  const contentLength = response.headers.get('content-length')
+  if (contentLength === null) {
+    return
+  }
+
+  const parsedLength = Number(contentLength)
+  if (Number.isFinite(parsedLength) && parsedLength > maximumBytes) {
+    void response.body?.cancel().catch(() => undefined)
+    throw new InputSizeLimitError()
+  }
+}
+
+async function readBoundedResponseText(response: Response, maximumBytes: number): Promise<string> {
+  if (!response.body) {
+    return ''
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  const chunks: string[] = []
+  let receivedBytes = 0
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) {
+        break
+      }
+
+      receivedBytes += value.byteLength
+      if (receivedBytes > maximumBytes) {
+        await reader.cancel().catch(() => undefined)
+        throw new InputSizeLimitError()
+      }
+
+      chunks.push(decoder.decode(value, { stream: true }))
+    }
+
+    chunks.push(decoder.decode())
+    return chunks.join('')
+  }
+  finally {
+    reader.releaseLock()
   }
 }
 

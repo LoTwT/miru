@@ -2,6 +2,12 @@
 import { computed, nextTick, onMounted, onUnmounted, shallowRef, useTemplateRef, watch } from 'vue'
 
 import type { LibraryEntry, PdfReadingPosition } from '@/features/library/types'
+import {
+  getBufferedPdfPages,
+  getDominantPdfPage,
+  getPdfPageMeasurementOrder,
+} from '@/features/reader/pdfContinuousScroll'
+import type { PdfPageMeasurement } from '@/features/reader/pdfContinuousScroll'
 import type { PDFDocumentLoadingTask, PDFDocumentProxy, PDFPageProxy, RenderTask } from 'pdfjs-dist'
 
 type PdfScaleMode = PdfReadingPosition['scaleMode']
@@ -22,11 +28,10 @@ interface PdfSearchSpanRange {
   start: number
 }
 
-interface PdfSearchPageText {
+interface PdfSearchPageIndex {
   normalizedText: string
   pageNumber: number
   spans: PdfSearchSpan[]
-  textContent: PdfTextContent
 }
 
 interface PdfSearchMatch {
@@ -60,6 +65,8 @@ const emit = defineEmits<{
 const minScale = 0.35
 const maxScale = 2.75
 const zoomStep = 0.15
+const pdfTextContentCacheLimit = 8
+const scrollMeasurementBatchSize = 8
 
 const rootRef = useTemplateRef<HTMLElement>('root')
 const stageFrameRef = useTemplateRef<HTMLElement>('stageFrame')
@@ -97,8 +104,9 @@ const scrollCanvasElements = new Map<number, HTMLCanvasElement>()
 const scrollTextLayerElements = new Map<number, HTMLDivElement>()
 const scrollRenderTasks = new Map<number, RenderTask>()
 const scrollRenderSequences = new Map<number, number>()
-const intersectingScrollPages = new Set<number>()
-const pdfSearchTextCache = new Map<number, Promise<PdfSearchPageText>>()
+const visibleScrollPageAreas = new Map<number, number>()
+const pdfSearchIndexCache = new Map<number, Promise<PdfSearchPageIndex>>()
+const pdfTextContentCache = new Map<number, Promise<PdfTextContent>>()
 const scrollTextLayers = new Map<number, PdfTextLayer>()
 let pagedTextLayer: PdfTextLayer | null = null
 let searchSequence = 0
@@ -174,11 +182,13 @@ async function loadPdfJs() {
 }
 
 async function cleanupPdfDocument(): Promise<void> {
+  scrollMeasureSequence += 1
   await cancelRenderTask()
   await cancelScrollRenderTasks()
   clearSearch({ emitState: false })
   clearTextLayers()
-  pdfSearchTextCache.clear()
+  pdfSearchIndexCache.clear()
+  pdfTextContentCache.clear()
 
   const task = loadingTask ?? pdfDocument?.loadingTask
   loadingTask = null
@@ -192,7 +202,7 @@ async function cleanupPdfDocument(): Promise<void> {
   bufferedScrollPages.value = new Set()
   scrollPageObserver?.disconnect()
   scrollPageObserver = null
-  intersectingScrollPages.clear()
+  visibleScrollPageAreas.clear()
   scrollPageElements.clear()
   scrollCanvasElements.clear()
   scrollTextLayerElements.clear()
@@ -266,6 +276,7 @@ function clearTextLayerContent(container: HTMLDivElement | null | undefined): vo
 }
 
 function clearSearch(options: { emitState?: boolean } = {}): void {
+  searchSequence += 1
   searchMatches.value = []
   activeSearchIndex.value = -1
   searchStatus.value = 'idle'
@@ -339,25 +350,24 @@ async function runPdfSearch(query = props.searchQuery): Promise<void> {
   }
 }
 
-async function getCachedPageText(pageNumberToRead: number): Promise<PdfSearchPageText> {
-  const cached = pdfSearchTextCache.get(pageNumberToRead)
+async function getCachedPageText(pageNumberToRead: number): Promise<PdfSearchPageIndex> {
+  const cached = pdfSearchIndexCache.get(pageNumberToRead)
   if (cached) {
     return cached
   }
 
-  const promise = extractPageText(pageNumberToRead)
-  pdfSearchTextCache.set(pageNumberToRead, promise)
+  const promise = extractPageText(pageNumberToRead).catch((reason) => {
+    if (pdfSearchIndexCache.get(pageNumberToRead) === promise) {
+      pdfSearchIndexCache.delete(pageNumberToRead)
+    }
+    throw reason
+  })
+  pdfSearchIndexCache.set(pageNumberToRead, promise)
   return promise
 }
 
-async function extractPageText(pageNumberToRead: number): Promise<PdfSearchPageText> {
-  const pdf = pdfDocument
-  if (!pdf) {
-    throw new Error('PDF document is not ready')
-  }
-
-  const page = await pdf.getPage(pageNumberToRead)
-  const textContent = await page.getTextContent()
+async function extractPageText(pageNumberToRead: number): Promise<PdfSearchPageIndex> {
+  const textContent = await getCachedTextContent(pageNumberToRead)
   const spans: PdfSearchSpan[] = []
   let text = ''
 
@@ -384,7 +394,41 @@ async function extractPageText(pageNumberToRead: number): Promise<PdfSearchPageT
     normalizedText: text.toLocaleLowerCase(),
     pageNumber: pageNumberToRead,
     spans,
-    textContent,
+  }
+}
+
+async function getCachedTextContent(pageNumberToRead: number): Promise<PdfTextContent> {
+  const cached = pdfTextContentCache.get(pageNumberToRead)
+  if (cached) {
+    pdfTextContentCache.delete(pageNumberToRead)
+    pdfTextContentCache.set(pageNumberToRead, cached)
+    return cached
+  }
+
+  const pdf = pdfDocument
+  if (!pdf) {
+    throw new Error('PDF document is not ready')
+  }
+
+  const promise = pdf.getPage(pageNumberToRead).then(page => page.getTextContent())
+  pdfTextContentCache.set(pageNumberToRead, promise)
+
+  while (pdfTextContentCache.size > pdfTextContentCacheLimit) {
+    const oldestPage = pdfTextContentCache.keys().next().value
+    if (oldestPage === undefined) {
+      break
+    }
+    pdfTextContentCache.delete(oldestPage)
+  }
+
+  try {
+    return await promise
+  }
+  catch (reason) {
+    if (pdfTextContentCache.get(pageNumberToRead) === promise) {
+      pdfTextContentCache.delete(pageNumberToRead)
+    }
+    throw reason
   }
 }
 
@@ -392,7 +436,7 @@ function isTextContentItem(item: PdfTextContent['items'][number]): item is Extra
   return 'str' in item && typeof item.str === 'string'
 }
 
-function findMatchesOnPage(pageText: PdfSearchPageText, queryLower: string): PdfSearchMatch[] {
+function findMatchesOnPage(pageText: PdfSearchPageIndex, queryLower: string): PdfSearchMatch[] {
   const matches: PdfSearchMatch[] = []
   let index = pageText.normalizedText.indexOf(queryLower)
 
@@ -773,7 +817,7 @@ async function renderTextLayer(options: {
   viewport: PdfPageViewport
 }): Promise<PdfTextLayer> {
   const pdfjs = await loadPdfJs()
-  const pageText = await getCachedPageText(options.pageNumber)
+  const textContent = await getCachedTextContent(options.pageNumber)
   options.container.replaceChildren()
   options.container.style.inlineSize = `${options.viewport.width}px`
   options.container.style.blockSize = `${options.viewport.height}px`
@@ -784,7 +828,7 @@ async function renderTextLayer(options: {
 
   const layer = new pdfjs.TextLayer({
     container: options.container,
-    textContentSource: pageText.textContent,
+    textContentSource: textContent,
     viewport: options.viewport,
   })
   await layer.render()
@@ -941,6 +985,7 @@ async function renderActiveView(options: { anchorPage: number }): Promise<void> 
     return
   }
 
+  scrollMeasureSequence += 1
   await cancelScrollRenderTasks()
   bufferedScrollPages.value = new Set()
   await renderCurrentPage()
@@ -965,29 +1010,17 @@ async function prepareScrollMode(anchorPage: number): Promise<void> {
 
     const scale = calculateScale(firstPage)
     renderedScale.value = scale
-    const slots: PdfPageSlot[] = []
+    const firstViewport = firstPage.getViewport({ scale })
+    const estimatedWidth = Math.round(firstViewport.width)
+    const estimatedHeight = Math.round(firstViewport.height)
 
-    for (let pageIndex = 1; pageIndex <= pdf.numPages; pageIndex += 1) {
-      const page = pageIndex === 1 ? firstPage : await pdf.getPage(pageIndex)
-      if (sequence !== scrollMeasureSequence) {
-        return
-      }
-
-      const viewport = page.getViewport({ scale })
-      slots.push({
-        pageNumber: pageIndex,
-        width: Math.round(viewport.width),
-        height: Math.round(viewport.height),
-        renderState: 'idle',
-        errorMessage: '',
-      })
-    }
-
-    if (sequence !== scrollMeasureSequence) {
-      return
-    }
-
-    pageSlots.value = slots
+    pageSlots.value = Array.from({ length: pdf.numPages }, (_, index): PdfPageSlot => ({
+      pageNumber: index + 1,
+      width: estimatedWidth,
+      height: estimatedHeight,
+      renderState: 'idle',
+      errorMessage: '',
+    }))
     scrollModeStatus.value = 'idle'
     pageNumber.value = clampPageNumber(anchorPage)
 
@@ -996,6 +1029,7 @@ async function prepareScrollMode(anchorPage: number): Promise<void> {
     scrollToPage(pageNumber.value, 'auto')
     updateBufferedScrollPages()
     queueSideControlPositionUpdate()
+    void refineScrollPageMeasurements(pdf, scale, sequence, pageNumber.value)
   }
   catch (reason) {
     if (isPdfCancellation(reason)) {
@@ -1005,6 +1039,86 @@ async function prepareScrollMode(anchorPage: number): Promise<void> {
     scrollModeStatus.value = 'error'
     errorMessage.value = '连续滚动模式暂时无法准备页面。可以切回翻页模式或重新打开 PDF。'
   }
+}
+
+async function refineScrollPageMeasurements(
+  pdf: PDFDocumentProxy,
+  scale: number,
+  sequence: number,
+  anchorPage: number,
+): Promise<void> {
+  const pages = getPdfPageMeasurementOrder(pdf.numPages, anchorPage)
+
+  for (let offset = 0; offset < pages.length; offset += scrollMeasurementBatchSize) {
+    const batch = pages.slice(offset, offset + scrollMeasurementBatchSize)
+    const measurements = (await Promise.all(batch.map(async (pageNumberToMeasure) => {
+      try {
+        const page = await pdf.getPage(pageNumberToMeasure)
+        const viewport = page.getViewport({ scale })
+        return {
+          pageNumber: pageNumberToMeasure,
+          width: Math.round(viewport.width),
+          height: Math.round(viewport.height),
+        } satisfies PdfPageMeasurement
+      }
+      catch {
+        return null
+      }
+    }))).filter((measurement): measurement is PdfPageMeasurement => measurement !== null)
+
+    if (sequence !== scrollMeasureSequence || pdf !== pdfDocument) {
+      return
+    }
+
+    await applyScrollPageMeasurements(
+      measurements,
+      getDominantVisiblePage() ?? pageNumber.value,
+      sequence,
+    )
+
+    if (offset + scrollMeasurementBatchSize < pages.length) {
+      await new Promise<void>(resolve => window.requestAnimationFrame(() => resolve()))
+    }
+  }
+}
+
+async function applyScrollPageMeasurements(
+  measurements: PdfPageMeasurement[],
+  anchorPage: number,
+  sequence: number,
+): Promise<void> {
+  if (measurements.length === 0) {
+    return
+  }
+
+  const stage = pageStageRef.value
+  const anchorElement = scrollPageElements.get(anchorPage)
+  const anchorTopBeforeUpdate = stage && anchorElement
+    ? anchorElement.getBoundingClientRect().top
+    : null
+  const measurementsByPage = new Map(measurements.map(measurement => [measurement.pageNumber, measurement]))
+
+  pageSlots.value = pageSlots.value.map((slot) => {
+    const measurement = measurementsByPage.get(slot.pageNumber)
+    return measurement
+      ? { ...slot, height: measurement.height, width: measurement.width }
+      : slot
+  })
+
+  await nextTick()
+  if (sequence !== scrollMeasureSequence || anchorTopBeforeUpdate === null || !stage) {
+    return
+  }
+
+  const anchorTopAfterUpdate = scrollPageElements.get(anchorPage)?.getBoundingClientRect().top
+  if (anchorTopAfterUpdate !== undefined) {
+    stage.scrollTop += anchorTopAfterUpdate - anchorTopBeforeUpdate
+  }
+
+  refreshVisibleScrollPageAreas()
+  updateBufferedScrollPages()
+  emitProgress()
+  queueSideControlPositionUpdate()
 }
 
 function setScrollPageElement(page: number, element: unknown): void {
@@ -1020,7 +1134,7 @@ function setScrollPageElement(page: number, element: unknown): void {
     return
   }
 
-  intersectingScrollPages.delete(page)
+  visibleScrollPageAreas.delete(page)
   scrollPageElements.delete(page)
 }
 
@@ -1060,6 +1174,7 @@ function handleStageScroll(): void {
     return
   }
 
+  refreshVisibleScrollPageAreas()
   updateBufferedScrollPages()
   emitProgress()
   queueSideControlPositionUpdate()
@@ -1074,6 +1189,31 @@ function handleStageScroll(): void {
   }, 100)
 }
 
+function refreshVisibleScrollPageAreas(): void {
+  const stage = pageStageRef.value
+  if (!stage) {
+    return
+  }
+
+  const stageRect = stage.getBoundingClientRect()
+  for (const page of [...visibleScrollPageAreas.keys()]) {
+    const rect = scrollPageElements.get(page)?.getBoundingClientRect()
+    if (!rect) {
+      visibleScrollPageAreas.delete(page)
+      continue
+    }
+
+    const visibleWidth = Math.min(rect.right, stageRect.right) - Math.max(rect.left, stageRect.left)
+    const visibleHeight = Math.min(rect.bottom, stageRect.bottom) - Math.max(rect.top, stageRect.top)
+    if (visibleWidth <= 0 || visibleHeight <= 0) {
+      visibleScrollPageAreas.delete(page)
+      continue
+    }
+
+    visibleScrollPageAreas.set(page, visibleWidth * visibleHeight)
+  }
+}
+
 function setupScrollPageObserver(): void {
   const stage = pageStageRef.value
   if (!stage) {
@@ -1081,7 +1221,7 @@ function setupScrollPageObserver(): void {
   }
 
   scrollPageObserver?.disconnect()
-  intersectingScrollPages.clear()
+  visibleScrollPageAreas.clear()
   scrollPageObserver = new IntersectionObserver((entries) => {
     for (const entry of entries) {
       const page = Number((entry.target as HTMLElement).dataset.pageNumber)
@@ -1090,39 +1230,32 @@ function setupScrollPageObserver(): void {
       }
 
       if (entry.isIntersecting) {
-        intersectingScrollPages.add(page)
+        const visibleArea = entry.intersectionRect.width * entry.intersectionRect.height
+        visibleScrollPageAreas.set(page, Math.max(1, visibleArea))
       }
       else {
-        intersectingScrollPages.delete(page)
+        visibleScrollPageAreas.delete(page)
       }
     }
 
     updateBufferedScrollPages()
-  }, { root: stage, threshold: 0 })
+  }, { root: stage, threshold: [0, 0.25, 0.5, 0.75, 1] })
 
   for (const element of scrollPageElements.values()) {
     scrollPageObserver.observe(element)
   }
 }
 
-function updateBufferedScrollPages(): void {
+function updateBufferedScrollPages(additionalAnchors: Iterable<number> = []): void {
   if (viewMode.value !== 'scroll' || pageSlots.value.length === 0) {
     return
   }
 
-  const visiblePages = getVisibleScrollPages()
-  const dominantPage = getDominantVisiblePage()
-  const observerPages = [...intersectingScrollPages].sort((left, right) => left - right)
-  const measuredPages = [...new Set([...visiblePages, ...observerPages])].sort((left, right) => left - right)
-  const anchorPages = measuredPages.length > 0 ? measuredPages : [dominantPage ?? pageNumber.value]
-  const nextPages = new Set<number>()
-
-  for (const page of anchorPages) {
-    const center = clampPageNumber(page)
-    for (let offset = -2; offset <= 2; offset += 1) {
-      nextPages.add(clampPageNumber(center + offset))
-    }
-  }
+  const nextPages = getBufferedPdfPages({
+    anchorPages: [...visibleScrollPageAreas.keys(), ...additionalAnchors],
+    fallbackPage: getDominantVisiblePage() ?? pageNumber.value,
+    totalPages: totalPages.value,
+  })
 
   for (const page of [...bufferedScrollPages.value]) {
     if (!nextPages.has(page)) {
@@ -1192,51 +1325,8 @@ function getRectCenter(rect: DOMRect): number {
   return rect.top + rect.height / 2
 }
 
-function getVisibleScrollPages(): number[] {
-  const stage = pageStageRef.value
-  if (!stage) {
-    return []
-  }
-
-  const stageRect = stage.getBoundingClientRect()
-  const pages: number[] = []
-
-  for (const [page, element] of scrollPageElements) {
-    const rect = element.getBoundingClientRect()
-    const overlap = Math.min(rect.bottom, stageRect.bottom) - Math.max(rect.top, stageRect.top)
-    if (overlap > 0) {
-      pages.push(page)
-    }
-  }
-
-  return pages.sort((left, right) => left - right)
-}
-
 function getDominantVisiblePage(): number | null {
-  const stage = pageStageRef.value
-  if (!stage) {
-    return null
-  }
-
-  const stageRect = stage.getBoundingClientRect()
-  let bestPage: number | null = null
-  let bestVisibleArea = -1
-
-  for (const [page, element] of scrollPageElements) {
-    const rect = element.getBoundingClientRect()
-    const visibleBlock = Math.min(rect.bottom, stageRect.bottom) - Math.max(rect.top, stageRect.top)
-    if (visibleBlock <= 0) {
-      continue
-    }
-
-    const visibleArea = visibleBlock * Math.max(1, Math.min(rect.width, stageRect.width))
-    if (visibleArea > bestVisibleArea) {
-      bestVisibleArea = visibleArea
-      bestPage = page
-    }
-  }
-
-  return bestPage
+  return getDominantPdfPage(visibleScrollPageAreas)
 }
 
 async function renderScrollPage(page: number): Promise<void> {
@@ -1379,7 +1469,7 @@ function scrollToPage(page: number, behavior: ScrollBehavior = getPreferredScrol
     const elementRect = element.getBoundingClientRect()
     const nextTop = stage.scrollTop + elementRect.top - stageRect.top
     stage.scrollTo({ top: Math.max(0, nextTop), behavior })
-    updateBufferedScrollPages()
+    updateBufferedScrollPages([nextPage])
     queueSideControlPositionUpdate()
     emitPosition()
   })
@@ -1944,6 +2034,7 @@ onUnmounted(() => {
 .pdf-viewer__scroll-page-slot {
   position: relative;
   display: grid;
+  content-visibility: auto;
   place-items: center;
   max-inline-size: none;
   border-radius: 2px;

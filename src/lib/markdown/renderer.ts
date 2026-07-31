@@ -13,7 +13,6 @@ import type { RemoteImageMode, TrustedHtml } from '@/types/reader'
 import type { LanguageRegistration } from 'shiki/core'
 
 interface RenderMarkdownOptions {
-  colorScheme?: 'light' | 'dark'
   remoteImageMode?: RemoteImageMode
 }
 
@@ -112,7 +111,6 @@ md.renderer.rules.image = (tokens, idx) => {
 }
 
 export async function renderMarkdown(markdown: string, options: RenderMarkdownOptions = {}): Promise<TrustedHtml> {
-  const colorScheme = options.colorScheme ?? 'light'
   const remoteImageMode = options.remoteImageMode ?? 'auto'
   const highlighter = await highlighterPromise
   const tokens = md.parse(markdown, {})

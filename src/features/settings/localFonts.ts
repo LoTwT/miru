@@ -1,4 +1,11 @@
-import { deleteDB, openDB, type DBSchema, type IDBPDatabase } from 'idb'
+import {
+  deleteDB,
+  openDB,
+  unwrap,
+  type DBSchema,
+  type IDBPDatabase,
+  type IDBPTransaction,
+} from 'idb'
 
 import {
   buildUploadedFontStack,
@@ -7,7 +14,7 @@ import {
 import type { ReadingLocalFontFamilyId } from './readingSettingsOptions'
 
 export const localFontsDatabaseName = 'miru:local-fonts:v1'
-export const localFontsDatabaseVersion = 1
+export const localFontsDatabaseVersion = 2
 export const localFontSoftWarningBytes = 8 * 1024 * 1024
 export const localFontHardLimitBytes = 25 * 1024 * 1024
 
@@ -29,7 +36,7 @@ const supportedFontMimeTypes = new Set([
 ])
 const maxLocalFontNameLength = 32
 
-export interface LocalFontRecord {
+export interface LocalFontMetadata {
   id: string
   name: string
   fileName: string
@@ -37,8 +44,22 @@ export interface LocalFontRecord {
   byteSize: number
   createdAt: string
   updatedAt: string
+  schemaVersion: 2
+}
+
+export interface LocalFontRecord extends LocalFontMetadata {
+  blob: Blob
+}
+
+interface LegacyLocalFontRecord extends Omit<LocalFontMetadata, 'schemaVersion'> {
   blob: Blob
   schemaVersion: 1
+}
+
+interface LocalFontBody {
+  id: string
+  blob: Blob
+  schemaVersion: 2
 }
 
 export interface LocalFontOption {
@@ -57,11 +78,15 @@ export interface LocalFontOption {
 interface LocalFontsDatabase extends DBSchema {
   fonts: {
     key: string
-    value: LocalFontRecord
+    value: LocalFontMetadata
     indexes: {
       name: string
       createdAt: string
     }
+  }
+  fontBodies: {
+    key: string
+    value: LocalFontBody
   }
 }
 
@@ -90,20 +115,50 @@ export function createLocalFontStore(options: LocalFontStoreOptions = {}) {
 
   function getDb(): Promise<IDBPDatabase<LocalFontsDatabase>> {
     dbPromise ??= openDB<LocalFontsDatabase>(dbName, localFontsDatabaseVersion, {
-      upgrade(db) {
-        const fonts = db.createObjectStore('fonts', { keyPath: 'id' })
-        fonts.createIndex('name', 'name')
-        fonts.createIndex('createdAt', 'createdAt')
+      upgrade(db, oldVersion, _newVersion, transaction) {
+        if (oldVersion < 1) {
+          const fonts = db.createObjectStore('fonts', { keyPath: 'id' })
+          fonts.createIndex('name', 'name')
+          fonts.createIndex('createdAt', 'createdAt')
+        }
+
+        if (oldVersion < 2) {
+          if (!db.objectStoreNames.contains('fontBodies')) {
+            db.createObjectStore('fontBodies', { keyPath: 'id' })
+          }
+
+          if (oldVersion === 1) {
+            migrateLegacyFontRecords(transaction)
+          }
+        }
       },
     })
 
     return dbPromise
   }
 
-  async function listFonts(): Promise<LocalFontRecord[]> {
+  async function listFonts(): Promise<LocalFontMetadata[]> {
     const db = await getDb()
     const fonts = await db.getAll('fonts')
     return fonts.sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+  }
+
+  async function getFont(id: string): Promise<LocalFontRecord | null> {
+    const db = await getDb()
+    const transaction = db.transaction(['fonts', 'fontBodies'])
+    const [metadata, body] = await Promise.all([
+      transaction.objectStore('fonts').get(id),
+      transaction.objectStore('fontBodies').get(id),
+    ])
+
+    if (!metadata || !body) {
+      return null
+    }
+
+    return {
+      ...metadata,
+      blob: body.blob,
+    }
   }
 
   async function addFont(input: {
@@ -113,7 +168,7 @@ export function createLocalFontStore(options: LocalFontStoreOptions = {}) {
     name: string
   }): Promise<LocalFontRecord> {
     const timestamp = now()
-    const record: LocalFontRecord = {
+    const metadata: LocalFontMetadata = {
       id: createId(),
       name: normalizeLocalFontName(input.name),
       fileName: input.fileName,
@@ -121,15 +176,24 @@ export function createLocalFontStore(options: LocalFontStoreOptions = {}) {
       byteSize: input.file.size,
       createdAt: timestamp,
       updatedAt: timestamp,
+      schemaVersion: 2,
+    }
+    const body: LocalFontBody = {
+      id: metadata.id,
       blob: input.file,
-      schemaVersion: 1,
+      schemaVersion: 2,
     }
     const db = await getDb()
-    await db.add('fonts', record)
-    return record
+    const transaction = db.transaction(['fonts', 'fontBodies'], 'readwrite')
+    await Promise.all([
+      transaction.objectStore('fonts').add(metadata),
+      transaction.objectStore('fontBodies').add(body),
+      transaction.done,
+    ])
+    return { ...metadata, blob: body.blob }
   }
 
-  async function renameFont(id: string, name: string): Promise<LocalFontRecord | null> {
+  async function renameFont(id: string, name: string): Promise<LocalFontMetadata | null> {
     const db = await getDb()
     const record = await db.get('fonts', id)
 
@@ -137,7 +201,7 @@ export function createLocalFontStore(options: LocalFontStoreOptions = {}) {
       return null
     }
 
-    const nextRecord: LocalFontRecord = {
+    const nextRecord: LocalFontMetadata = {
       ...record,
       name: normalizeLocalFontName(name),
       updatedAt: now(),
@@ -148,7 +212,12 @@ export function createLocalFontStore(options: LocalFontStoreOptions = {}) {
 
   async function deleteFont(id: string): Promise<void> {
     const db = await getDb()
-    await db.delete('fonts', id)
+    const transaction = db.transaction(['fonts', 'fontBodies'], 'readwrite')
+    await Promise.all([
+      transaction.objectStore('fonts').delete(id),
+      transaction.objectStore('fontBodies').delete(id),
+      transaction.done,
+    ])
   }
 
   async function countFonts(): Promise<number> {
@@ -167,6 +236,7 @@ export function createLocalFontStore(options: LocalFontStoreOptions = {}) {
     close,
     countFonts,
     deleteFont,
+    getFont,
     listFonts,
     renameFont,
   }
@@ -198,7 +268,7 @@ export function validateLocalFontFile(file: File): LocalFontValidationResult {
   return { ok: true }
 }
 
-export function createLocalFontOption(record: LocalFontRecord): LocalFontOption {
+export function createLocalFontOption(record: LocalFontMetadata): LocalFontOption {
   const fontFaceFamily = createLocalFontFaceFamily(record.id)
 
   return {
@@ -212,6 +282,37 @@ export function createLocalFontOption(record: LocalFontRecord): LocalFontOption 
     updatedAt: record.updatedAt,
     fontFaceFamily,
     fontStack: buildUploadedFontStack(fontFaceFamily),
+  }
+}
+
+function migrateLegacyFontRecords(
+  transaction: IDBPTransaction<LocalFontsDatabase, ('fonts' | 'fontBodies')[], 'versionchange'>,
+): void {
+  const fonts = unwrap(transaction.objectStore('fonts'))
+  const fontBodies = unwrap(transaction.objectStore('fontBodies'))
+  const cursorRequest = fonts.openCursor()
+
+  cursorRequest.onsuccess = () => {
+    const cursor = cursorRequest.result
+
+    if (!cursor) {
+      return
+    }
+
+    const legacyRecord = cursor.value as LegacyLocalFontRecord
+    const { blob, ...legacyMetadata } = legacyRecord
+    const metadata: LocalFontMetadata = {
+      ...legacyMetadata,
+      schemaVersion: 2,
+    }
+
+    fontBodies.put({
+      id: legacyRecord.id,
+      blob,
+      schemaVersion: 2,
+    })
+    cursor.update(metadata)
+    cursor.continue()
   }
 }
 

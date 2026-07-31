@@ -494,46 +494,56 @@ test('adds a local PDF and reopens it through the view-only PDF viewer', async (
 })
 
 test('supports continuous scroll mode for local PDFs with bounded rendered pages', async ({ page }) => {
+  const pageCount = 120
+  const maxRenderedPageCount = 12
   await page.goto('/')
 
   await openFileThroughFloatingMenu(page, {
     name: 'Long Paper.pdf',
     mimeType: 'application/pdf',
-    buffer: createSimplePdfBuffer(Array.from({ length: 8 }, (_, index) => `Long Paper page ${index + 1}`)),
+    buffer: createSimplePdfBuffer(Array.from({ length: pageCount }, (_, index) => {
+      if (index === 0) {
+        return 'Long Paper first-page-marker'
+      }
+      if (index === 116) {
+        return 'Long Paper distant-page-marker'
+      }
+      return `Long Paper page ${index + 1}`
+    })),
   })
 
   await expect(page.getByTestId('pdf-viewer')).toBeVisible()
-  await expect(page.getByText('1 / 8')).toBeVisible()
+  await expect(page.getByText(`1 / ${pageCount}`)).toBeVisible()
 
   await page.getByRole('button', { name: '滚动' }).click()
   await expect(page.getByRole('button', { name: '滚动' })).toHaveAttribute('aria-pressed', 'true')
   await expect(page.getByTestId('pdf-viewer-scroll-stack')).toBeVisible()
-  await expect(page.getByTestId('pdf-viewer-scroll-page')).toHaveCount(8)
+  await expect(page.getByTestId('pdf-viewer-scroll-page')).toHaveCount(pageCount)
   await expect.poll(() => page.getByTestId('pdf-viewer-scroll-canvas').count()).toBeGreaterThan(0)
-  await expect.poll(() => page.getByTestId('pdf-viewer-scroll-canvas').count()).toBeLessThan(8)
+  await expect.poll(() => page.getByTestId('pdf-viewer-scroll-canvas').count()).toBeLessThanOrEqual(maxRenderedPageCount)
 
   const stage = page.getByTestId('pdf-viewer-stage')
   await page.keyboard.press('Control+F')
-  await page.getByTestId('reader-find-input').fill('page 1')
+  await page.getByTestId('reader-find-input').fill('first-page-marker')
   await expect(page.getByTestId('reader-find-counter')).toContainText('1 / 1')
   await expect(page.getByTestId('reader-find-counter')).toContainText('第 1 页')
   await expect.poll(async () => page.locator('.pdf-viewer__search-match--active').count()).toBeGreaterThan(0)
   await expect.poll(async () => page.getByTestId('pdf-viewer-scroll-text-layer').locator('span[data-pdf-text-index]').count()).toBeGreaterThan(0)
 
-  await page.getByTestId('reader-find-input').fill('page 7')
+  await page.getByTestId('reader-find-input').fill('distant-page-marker')
   await expect(page.getByTestId('reader-find-counter')).toContainText('1 / 1')
-  await expect(page.getByTestId('reader-find-counter')).toContainText('第 7 页')
-  await expect(page.getByText('7 / 8')).toBeVisible()
+  await expect(page.getByTestId('reader-find-counter')).toContainText('第 117 页')
+  await expect(page.getByText(`117 / ${pageCount}`)).toBeVisible()
   await expect.poll(() => stage.evaluate(element => element.scrollTop)).toBeGreaterThan(0)
-  await expect.poll(() => page.getByTestId('pdf-viewer-scroll-canvas').count()).toBeLessThan(8)
+  await expect.poll(() => page.getByTestId('pdf-viewer-scroll-canvas').count()).toBeLessThanOrEqual(maxRenderedPageCount)
   await expect.poll(async () => page.locator('.pdf-viewer__search-match--active').count()).toBeGreaterThan(0)
   await page.keyboard.press('Escape')
 
-  await page.getByLabel('跳转页码').fill('6')
+  await page.getByLabel('跳转页码').fill('116')
   await page.keyboard.press('Enter')
-  await expect(page.getByText('6 / 8')).toBeVisible()
+  await expect(page.getByText(`116 / ${pageCount}`)).toBeVisible()
   await expect.poll(() => stage.evaluate(element => element.scrollTop)).toBeGreaterThan(0)
-  await expect.poll(() => page.getByTestId('pdf-viewer-scroll-canvas').count()).toBeLessThan(8)
+  await expect.poll(() => page.getByTestId('pdf-viewer-scroll-canvas').count()).toBeLessThanOrEqual(maxRenderedPageCount)
 
   await stage.evaluate((element) => {
     element.scrollTo({ top: 0, behavior: 'auto' })
@@ -555,13 +565,13 @@ test('supports continuous scroll mode for local PDFs with bounded rendered pages
   expect(firstCanvasSizeAfterReturn.inlineSize).not.toBe('')
   expect(firstCanvasSizeAfterReturn.blockSize).not.toBe('')
 
-  let expectedPage = '6 / 8'
-  await page.getByLabel('跳转页码').fill('6')
+  let expectedPage = `116 / ${pageCount}`
+  await page.getByLabel('跳转页码').fill('116')
   await page.keyboard.press('Enter')
-  await expect(page.getByText('6 / 8')).toBeVisible()
+  await expect(page.getByText(expectedPage)).toBeVisible()
   if (isWideViewport(page)) {
     await page.getByTestId('pdf-viewer-side-next').click()
-    expectedPage = '7 / 8'
+    expectedPage = `117 / ${pageCount}`
     await expect(page.getByText(expectedPage)).toBeVisible()
   }
 

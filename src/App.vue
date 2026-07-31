@@ -1,13 +1,10 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, reactive, shallowRef, useTemplateRef, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, reactive, shallowRef, useTemplateRef, watch } from 'vue'
 
 import BackToTop from '@/components/BackToTop.vue'
 import FloatingInputMenu from '@/components/FloatingInputMenu.vue'
-import LibraryView from '@/components/LibraryView.vue'
-import PdfViewer from '@/components/PdfViewer.vue'
 import ReaderFindBar from '@/components/ReaderFindBar.vue'
 import ReaderOutlineNavigation from '@/components/ReaderOutlineNavigation.vue'
-import ReadingSettingsControl from '@/components/ReadingSettingsControl.vue'
 import ReaderSurface from '@/components/ReaderSurface.vue'
 import sampleMarkdown from '@/content/sample.md?raw'
 import { getBareUrlPaste } from '@/features/input/urlInput'
@@ -31,6 +28,28 @@ import type { ReaderOutlineItem } from '@/features/reader/outlineNavigation'
 
 type AppMode = 'reader' | 'library' | 'pdf'
 type CommandSurfaceId = 'actions' | 'outline' | 'settings'
+
+interface PdfViewerHandle {
+  clearSearch: (options?: { emitState?: boolean }) => void
+  focus: () => void
+  goToPage: (page: number) => void
+  goToSearchMatch: (delta: number) => void
+}
+
+const loadLibraryView = () => import('@/components/LibraryView.vue')
+const loadPdfViewer = () => import('@/components/PdfViewer.vue')
+const loadReadingSettingsControl = () => import('@/components/ReadingSettingsControl.vue')
+const LibraryView = defineAsyncComponent({ loader: loadLibraryView, timeout: 30_000 })
+const PdfViewer = defineAsyncComponent({ loader: loadPdfViewer, timeout: 30_000 })
+const ReadingSettingsControl = defineAsyncComponent({ loader: loadReadingSettingsControl, timeout: 30_000 })
+
+function preloadLibraryView(): void {
+  void loadLibraryView().catch(() => undefined)
+}
+
+function preloadReadingSettings(): void {
+  void loadReadingSettingsControl().catch(() => undefined)
+}
 
 interface PendingUrlImport {
   document: ReaderDocument
@@ -75,7 +94,7 @@ const outlineButtonRef = useTemplateRef<HTMLButtonElement>('outlineButton')
 const settingsButtonRef = useTemplateRef<HTMLButtonElement>('settingsButton')
 const findBarRef = useTemplateRef<InstanceType<typeof ReaderFindBar>>('findBar')
 const readerRef = useTemplateRef<InstanceType<typeof ReaderSurface>>('reader')
-const pdfViewerRef = useTemplateRef<InstanceType<typeof PdfViewer>>('pdfViewer')
+const pdfViewerRef = useTemplateRef<PdfViewerHandle>('pdfViewer')
 const persistedSettings = readPersistedReadingSettings()
 const remoteImageMode = shallowRef<RemoteImageMode>(persistedSettings?.remoteImageMode ?? 'auto')
 const readingSettings = useReadingSettings()
@@ -222,9 +241,11 @@ onMounted(async () => {
   document.addEventListener('pointerdown', onDocumentPointerDown)
   document.addEventListener('keydown', onDocumentKeydown)
 
-  await loadDefaultReadingFonts()
-  await readingSettings.initializeLocalFonts()
-  await refreshLibraryEntries()
+  await Promise.all([
+    loadDefaultReadingFonts(),
+    readingSettings.initializeLocalFonts(),
+    refreshLibraryEntries(),
+  ])
   queueMarkdownProgressUpdate()
 })
 
@@ -252,6 +273,7 @@ function resetToSample(): void {
 }
 
 async function showLibrary(): Promise<void> {
+  preloadLibraryView()
   closeSurface()
   closeFindBar({ restoreFocus: false })
   const currentScrollY = getCurrentScrollY()
@@ -276,8 +298,7 @@ async function returnToActiveDocument(): Promise<void> {
 
   if (activePdfDocument.value) {
     appMode.value = 'pdf'
-    await nextTick()
-    pdfViewerRef.value?.focus()
+    await focusPdfViewerWhenReady()
     return
   }
 
@@ -303,6 +324,9 @@ function toggleSurface(surfaceId: CommandSurfaceId): void {
 }
 
 function openSurface(surfaceId: CommandSurfaceId): void {
+  if (surfaceId === 'settings') {
+    preloadReadingSettings()
+  }
   openSurfaceId.value = surfaceId
   setPageScrollLocked(shouldLockPageForSurface(surfaceId))
 }
@@ -935,8 +959,7 @@ async function openLibraryEntry(entry: LibraryEntry, options: { skipSave?: boole
     activePdfDocument.value = opened
     appMode.value = 'pdf'
     await refreshLibraryEntries()
-    await nextTick()
-    pdfViewerRef.value?.focus()
+    await focusPdfViewerWhenReady()
     return
   }
 
@@ -1265,6 +1288,26 @@ function focusLibraryView(): void {
     })
   })
 }
+
+async function focusPdfViewerWhenReady(): Promise<void> {
+  try {
+    await loadPdfViewer()
+  }
+  catch {
+    liveStatus.value = 'PDF 阅读器暂时无法加载，请重试。'
+    return
+  }
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await nextTick()
+    if (pdfViewerRef.value) {
+      pdfViewerRef.value.focus()
+      return
+    }
+
+    await new Promise<void>(resolve => window.requestAnimationFrame(() => resolve()))
+  }
+}
 </script>
 
 <template>
@@ -1340,6 +1383,8 @@ function focusLibraryView(): void {
           :aria-expanded="isSettingsSurfaceOpen"
           aria-controls="reading-settings-panel"
           data-testid="reading-settings-button"
+          @pointerenter="preloadReadingSettings"
+          @focus="preloadReadingSettings"
           @click="toggleSurface('settings')"
           @keydown.escape.prevent="closeSurface({ restoreFocus: true })"
         >

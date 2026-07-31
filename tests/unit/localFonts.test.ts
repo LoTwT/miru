@@ -2,6 +2,7 @@ import 'fake-indexeddb/auto'
 
 import { Blob as NodeBlob, File as NodeFile } from 'node:buffer'
 
+import { openDB } from 'idb'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
@@ -79,17 +80,70 @@ describe('local font store', () => {
       name: 'Quiet Serif',
       fileName: 'Quiet Serif.woff2',
       byteSize: 3,
-      schemaVersion: 1,
+      schemaVersion: 2,
     })
-    expect((await store.listFonts()).map(font => font.id)).toEqual(['font-1', 'font-2'])
+    const listed = await store.listFonts()
+
+    expect(listed.map(font => font.id)).toEqual(['font-1', 'font-2'])
+    expect(listed[0]).not.toHaveProperty('blob')
+    expect(await store.getFont(first.id)).toMatchObject({
+      id: first.id,
+      blob: expect.anything(),
+    })
 
     const renamed = await store.renameFont(second.id, '  Code Face  ')
     expect(renamed?.name).toBe('Code Face')
+    expect(renamed).not.toHaveProperty('blob')
     expect((await store.listFonts()).map(font => font.name)).toEqual(['Quiet Serif', 'Code Face'])
+    expect((await store.getFont(second.id))?.name).toBe('Code Face')
 
     await store.deleteFont(first.id)
     expect(await store.countFonts()).toBe(1)
     expect((await store.listFonts()).map(font => font.id)).toEqual(['font-2'])
+    expect(await store.getFont(first.id)).toBeNull()
+  })
+
+  it('migrates v1 blob records into v2 metadata and body stores', async () => {
+    const dbName = `miru:test-local-fonts:${crypto.randomUUID()}`
+    dbNames.add(dbName)
+    const legacyBlob = createFontBlob('legacy-font-data')
+    const legacyDb = await openDB(dbName, 1, {
+      upgrade(db) {
+        const fonts = db.createObjectStore('fonts', { keyPath: 'id' })
+        fonts.createIndex('name', 'name')
+        fonts.createIndex('createdAt', 'createdAt')
+      },
+    })
+    await legacyDb.add('fonts', {
+      id: 'font-legacy',
+      name: 'Legacy Serif',
+      fileName: 'Legacy Serif.woff2',
+      mimeType: 'font/woff2',
+      byteSize: legacyBlob.size,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      blob: legacyBlob,
+      schemaVersion: 1,
+    })
+    legacyDb.close()
+
+    const store = createLocalFontStore({ dbName })
+    stores.add(store)
+    const listed = await store.listFonts()
+    const migrated = await store.getFont('font-legacy')
+
+    expect(listed).toEqual([expect.objectContaining({
+      id: 'font-legacy',
+      name: 'Legacy Serif',
+      schemaVersion: 2,
+    })])
+    expect(listed[0]).not.toHaveProperty('blob')
+    expect(migrated).toMatchObject({
+      id: 'font-legacy',
+      schemaVersion: 2,
+      blob: expect.anything(),
+    })
+    expect(migrated?.blob.size).toBe(legacyBlob.size)
   })
 
   it('builds an uploaded font stack with the existing CJK fallback chain', async () => {

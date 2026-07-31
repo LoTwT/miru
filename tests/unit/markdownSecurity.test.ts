@@ -96,7 +96,7 @@ describe('markdown renderer security baseline', () => {
     expect(inputs[1].disabled).toBe(true)
   })
 
-  it('highlights supported fenced code blocks after lazy-loading the language grammar', async () => {
+  it('emits both syntax themes so color-scheme changes do not require rerendering', async () => {
     const html = await renderMarkdown('```ts\nconst answer: number = 42\n```')
 
     expect(html.value).toContain('class="shiki')
