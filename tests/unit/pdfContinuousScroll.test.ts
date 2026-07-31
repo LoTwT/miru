@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest'
 import {
   getBufferedPdfPages,
   getDominantPdfPage,
-  getPdfPageMeasurementOrder,
 } from '@/features/reader/pdfContinuousScroll'
 
 describe('PDF continuous-scroll planning', () => {
@@ -28,12 +27,4 @@ describe('PDF continuous-scroll planning', () => {
     expect(getDominantPdfPage([[7, 0], [8, Number.NaN]])).toBeNull()
   })
 
-  it('measures the anchor vicinity first without repeating the first page', () => {
-    const order = getPdfPageMeasurementOrder(8, 6)
-
-    expect(order.slice(0, 5)).toEqual([6, 5, 7, 4, 8])
-    expect(order).toHaveLength(7)
-    expect(new Set(order).size).toBe(7)
-    expect(order).not.toContain(1)
-  })
 })

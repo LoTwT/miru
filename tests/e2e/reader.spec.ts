@@ -450,8 +450,10 @@ test('adds a local PDF and reopens it through the view-only PDF viewer', async (
   await page.getByTestId('pdf-viewer').focus()
   await page.keyboard.press('ArrowLeft')
   await expect(page.getByText('1 / 2')).toBeVisible()
+  await expect(page.getByLabel('跳转页码')).toHaveValue('1')
   await page.keyboard.press('ArrowRight')
   await expect(page.getByText('2 / 2')).toBeVisible()
+  await expect(page.getByLabel('跳转页码')).toHaveValue('2')
   const toolbarButtonRects = await page.locator('.pdf-viewer__toolbar button').evaluateAll(buttons =>
     buttons.map(button => button.getBoundingClientRect()).map(rect => ({
       height: rect.height,
@@ -495,6 +497,7 @@ test('adds a local PDF and reopens it through the view-only PDF viewer', async (
 
 test('supports continuous scroll mode for local PDFs with bounded rendered pages', async ({ page }) => {
   const pageCount = 120
+  const maxMountedPageCount = 12
   const maxRenderedPageCount = 12
   await page.goto('/')
 
@@ -502,13 +505,18 @@ test('supports continuous scroll mode for local PDFs with bounded rendered pages
     name: 'Long Paper.pdf',
     mimeType: 'application/pdf',
     buffer: createSimplePdfBuffer(Array.from({ length: pageCount }, (_, index) => {
+      const text = index === 0
+        ? 'Long Paper first-page-marker'
+        : index === 116
+          ? 'Long Paper distant-page-marker'
+          : `Long Paper page ${index + 1}`
+
       if (index === 0) {
-        return 'Long Paper first-page-marker'
+        return { text }
       }
-      if (index === 116) {
-        return 'Long Paper distant-page-marker'
-      }
-      return `Long Paper page ${index + 1}`
+      return index === 116
+        ? { height: 612, text, width: 792 }
+        : { text }
     })),
   })
 
@@ -518,11 +526,13 @@ test('supports continuous scroll mode for local PDFs with bounded rendered pages
   await page.getByRole('button', { name: '滚动' }).click()
   await expect(page.getByRole('button', { name: '滚动' })).toHaveAttribute('aria-pressed', 'true')
   await expect(page.getByTestId('pdf-viewer-scroll-stack')).toBeVisible()
-  await expect(page.getByTestId('pdf-viewer-scroll-page')).toHaveCount(pageCount)
+  await expect.poll(() => page.getByTestId('pdf-viewer-scroll-page').count()).toBeGreaterThan(0)
+  await expect.poll(() => page.getByTestId('pdf-viewer-scroll-page').count()).toBeLessThanOrEqual(maxMountedPageCount)
   await expect.poll(() => page.getByTestId('pdf-viewer-scroll-canvas').count()).toBeGreaterThan(0)
   await expect.poll(() => page.getByTestId('pdf-viewer-scroll-canvas').count()).toBeLessThanOrEqual(maxRenderedPageCount)
 
   const stage = page.getByTestId('pdf-viewer-stage')
+  await expect.poll(() => stage.evaluate(element => element.scrollHeight / element.clientHeight)).toBeGreaterThan(50)
   await page.keyboard.press('Control+F')
   await page.getByTestId('reader-find-input').fill('first-page-marker')
   await expect(page.getByTestId('reader-find-counter')).toContainText('1 / 1')
@@ -535,8 +545,37 @@ test('supports continuous scroll mode for local PDFs with bounded rendered pages
   await expect(page.getByTestId('reader-find-counter')).toContainText('第 117 页')
   await expect(page.getByText(`117 / ${pageCount}`)).toBeVisible()
   await expect.poll(() => stage.evaluate(element => element.scrollTop)).toBeGreaterThan(0)
+  await expect(page.locator('[data-page-number="117"]')).toHaveAttribute('aria-posinset', '117')
+  await expect(page.locator('[data-page-number="117"]')).toHaveAttribute('aria-setsize', String(pageCount))
+  const distantPageSize = await page.locator('[data-page-number="117"]').evaluate((element) => {
+    const canvas = element.querySelector('canvas')
+    const pageRect = element.getBoundingClientRect()
+    const stageRect = element.closest('[data-testid="pdf-viewer-stage"]')?.getBoundingClientRect()
+    return {
+      canvasHeight: canvas?.getBoundingClientRect().height ?? 0,
+      canvasWidth: canvas?.getBoundingClientRect().width ?? 0,
+      pageLeft: pageRect.left,
+      pageRight: pageRect.right,
+      stageLeft: stageRect?.left ?? 0,
+      stageRight: stageRect?.right ?? 0,
+    }
+  })
+  expect(distantPageSize.canvasWidth).toBeGreaterThan(distantPageSize.canvasHeight)
+  expect(distantPageSize.pageLeft).toBeGreaterThanOrEqual(distantPageSize.stageLeft - 1)
+  expect(distantPageSize.pageRight).toBeLessThanOrEqual(distantPageSize.stageRight + 1)
+  const expectedZoomPercent = Math.round(Number((distantPageSize.canvasWidth / 792 + 0.15).toFixed(2)) * 100)
+  await page.getByRole('button', { name: '放大' }).click()
+  await expect(page.locator('.pdf-viewer__zoom-label')).toHaveText(`${expectedZoomPercent}%`)
+  await expect(page.locator('[data-page-number="117"]')).toBeVisible()
+  await expect.poll(async () => page.locator('.pdf-viewer__search-match--active').count()).toBeGreaterThan(0)
+  await page.getByRole('button', { name: '适宽', exact: true }).click()
+  await expect(page.getByRole('button', { name: '适宽', exact: true })).toHaveAttribute('aria-pressed', 'true')
+  await expect(page.locator('[data-page-number="117"]')).toBeVisible()
+  await expect.poll(async () => page.locator('.pdf-viewer__search-match--active').count()).toBeGreaterThan(0)
+  await expect.poll(() => page.getByTestId('pdf-viewer-scroll-page').count()).toBeLessThanOrEqual(maxMountedPageCount)
   await expect.poll(() => page.getByTestId('pdf-viewer-scroll-canvas').count()).toBeLessThanOrEqual(maxRenderedPageCount)
   await expect.poll(async () => page.locator('.pdf-viewer__search-match--active').count()).toBeGreaterThan(0)
+  expect(await readReadingProgressPercent(page)).toBeGreaterThan(80)
   await page.keyboard.press('Escape')
 
   await page.getByLabel('跳转页码').fill('116')
@@ -550,9 +589,11 @@ test('supports continuous scroll mode for local PDFs with bounded rendered pages
     element.dispatchEvent(new Event('scroll'))
   })
   await expect.poll(() => stage.evaluate(element => Math.round(element.scrollTop))).toBeLessThanOrEqual(8)
+  await expect(page.getByText(`1 / ${pageCount}`)).toBeVisible()
+  await expect(page.locator('[data-page-number="1"]')).toHaveAttribute('aria-posinset', '1')
+  expect(await readReadingProgressPercent(page)).toBeLessThan(10)
   const firstCanvasSizeAfterReturn = await page
-    .getByTestId('pdf-viewer-scroll-page')
-    .first()
+    .locator('[data-page-number="1"]')
     .locator('canvas')
     .evaluate(canvas => ({
       blockSize: (canvas as HTMLCanvasElement).style.blockSize,
@@ -3013,18 +3054,34 @@ async function openFileThroughFloatingMenu(
   await fileChooser.setFiles(file)
 }
 
-function createSimplePdfBuffer(text: string | string[]): Buffer {
-  const pageTexts = Array.isArray(text) ? text : [text]
+interface SimplePdfPageInput {
+  height?: number
+  text: string
+  width?: number
+}
+
+function createSimplePdfBuffer(text: string | Array<string | SimplePdfPageInput>): Buffer {
+  const pages = (Array.isArray(text) ? text : [text]).map((page): Required<SimplePdfPageInput> => {
+    if (typeof page === 'string') {
+      return { height: 792, text: page, width: 612 }
+    }
+
+    return {
+      height: page.height ?? 792,
+      text: page.text,
+      width: page.width ?? 612,
+    }
+  })
   const pageObjectOffset = 4
-  const contentObjectOffset = pageObjectOffset + pageTexts.length
-  const kids = pageTexts.map((_, index) => `${pageObjectOffset + index} 0 R`).join(' ')
-  const streams = pageTexts.map(value => `BT /F1 24 Tf 72 720 Td (${escapePdfText(value)}) Tj ET`)
+  const contentObjectOffset = pageObjectOffset + pages.length
+  const kids = pages.map((_, index) => `${pageObjectOffset + index} 0 R`).join(' ')
+  const streams = pages.map(page => `BT /F1 24 Tf 72 ${Math.max(72, page.height - 72)} Td (${escapePdfText(page.text)}) Tj ET`)
   const objects = [
     '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n',
-    `2 0 obj\n<< /Type /Pages /Kids [${kids}] /Count ${pageTexts.length} >>\nendobj\n`,
+    `2 0 obj\n<< /Type /Pages /Kids [${kids}] /Count ${pages.length} >>\nendobj\n`,
     '3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n',
-    ...pageTexts.map((_, index) =>
-      `${pageObjectOffset + index} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentObjectOffset + index} 0 R >>\nendobj\n`,
+    ...pages.map((page, index) =>
+      `${pageObjectOffset + index} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${page.width} ${page.height}] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentObjectOffset + index} 0 R >>\nendobj\n`,
     ),
     ...streams.map((stream, index) =>
       `${contentObjectOffset + index} 0 obj\n<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream\nendobj\n`,

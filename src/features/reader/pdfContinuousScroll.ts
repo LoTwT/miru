@@ -1,9 +1,3 @@
-export interface PdfPageMeasurement {
-  height: number
-  pageNumber: number
-  width: number
-}
-
 export function getBufferedPdfPages(options: {
   anchorPages: Iterable<number>
   fallbackPage: number
@@ -44,31 +38,6 @@ export function getDominantPdfPage(visibleAreas: Iterable<readonly [number, numb
   }
 
   return dominantPage
-}
-
-export function getPdfPageMeasurementOrder(totalPages: number, anchorPage: number): number[] {
-  const normalizedTotal = Math.max(0, Math.trunc(totalPages))
-  if (normalizedTotal <= 1) {
-    return []
-  }
-
-  const anchor = clampPage(anchorPage, normalizedTotal)
-  const pages: number[] = []
-
-  for (let offset = 0; pages.length < normalizedTotal - 1; offset += 1) {
-    const before = anchor - offset
-    const after = anchor + offset
-
-    if (before >= 1 && before !== 1) {
-      pages.push(before)
-    }
-
-    if (offset > 0 && after <= normalizedTotal && after !== 1) {
-      pages.push(after)
-    }
-  }
-
-  return pages
 }
 
 function clampPage(page: number, totalPages: number): number {
