@@ -2,6 +2,11 @@
 import { nextTick, onBeforeUnmount, onMounted, shallowRef, useTemplateRef, watch } from 'vue'
 
 import { enhanceCollapsibleHeadings } from '@/features/reader/collapsibleHeadings'
+import {
+  clearMarkdownSearchHighlights,
+  highlightMarkdownSearchMatches,
+  updateActiveMarkdownSearchMatch,
+} from '@/features/reader/markdownSearchHighlights'
 import { collectOutlineItems } from '@/features/reader/outlineNavigation'
 import type { ReaderOutlineItem } from '@/features/reader/outlineNavigation'
 import type { ReaderDocument, TrustedHtml } from '@/types/reader'
@@ -130,6 +135,7 @@ function getBookmarkSnippet(): string {
 
 function applySearchQuery(query = props.searchQuery): void {
   clearSearchHighlights()
+  activeSearchIndex.value = -1
 
   const normalizedQuery = query.trim()
   const content = contentRef.value
@@ -140,66 +146,10 @@ function applySearchQuery(query = props.searchQuery): void {
     return
   }
 
-  const matches: HTMLElement[] = []
-  const queryLower = normalizedQuery.toLocaleLowerCase()
-  const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT, {
-    acceptNode(node) {
-      const parent = node.parentElement
-      if (!parent || shouldSkipSearchNode(parent) || !node.nodeValue?.trim()) {
-        return NodeFilter.FILTER_REJECT
-      }
-
-      return node.nodeValue.toLocaleLowerCase().includes(queryLower)
-        ? NodeFilter.FILTER_ACCEPT
-        : NodeFilter.FILTER_REJECT
-    },
-  })
-  const textNodes: Text[] = []
-  let node = walker.nextNode()
-
-  while (node) {
-    textNodes.push(node as Text)
-    node = walker.nextNode()
-  }
-
-  for (const textNode of textNodes) {
-    matches.push(...highlightTextNode(textNode, normalizedQuery, queryLower))
-  }
+  const matches = highlightMarkdownSearchMatches(content, normalizedQuery)
 
   searchMatches.value = matches
   setActiveSearchMatch(matches.length > 0 ? 0 : -1, { shouldScroll: false })
-}
-
-function highlightTextNode(node: Text, query: string, queryLower: string): HTMLElement[] {
-  const text = node.nodeValue ?? ''
-  const textLower = text.toLocaleLowerCase()
-  const fragment = document.createDocumentFragment()
-  const matches: HTMLElement[] = []
-  let cursor = 0
-  let index = textLower.indexOf(queryLower)
-
-  while (index !== -1) {
-    if (index > cursor) {
-      fragment.append(document.createTextNode(text.slice(cursor, index)))
-    }
-
-    const mark = document.createElement('mark')
-    mark.className = 'reader-search-match'
-    mark.dataset.readerSearchMatch = ''
-    mark.textContent = text.slice(index, index + query.length)
-    fragment.append(mark)
-    matches.push(mark)
-
-    cursor = index + query.length
-    index = textLower.indexOf(queryLower, cursor)
-  }
-
-  if (cursor < text.length) {
-    fragment.append(document.createTextNode(text.slice(cursor)))
-  }
-
-  node.replaceWith(fragment)
-  return matches
 }
 
 function clearSearchHighlights(): void {
@@ -208,19 +158,13 @@ function clearSearchHighlights(): void {
     return
   }
 
-  for (const mark of Array.from(content.querySelectorAll<HTMLElement>('mark[data-reader-search-match]'))) {
-    const parent = mark.parentNode
-    mark.replaceWith(document.createTextNode(mark.textContent ?? ''))
-    parent?.normalize()
-  }
+  clearMarkdownSearchHighlights(content)
 }
 
 function setActiveSearchMatch(index: number, options: { shouldScroll: boolean }): void {
+  const previousIndex = activeSearchIndex.value
   activeSearchIndex.value = index
-
-  searchMatches.value.forEach((match, matchIndex) => {
-    match.classList.toggle('reader-search-match--active', matchIndex === index)
-  })
+  updateActiveMarkdownSearchMatch(searchMatches.value, previousIndex, index)
 
   if (index >= 0 && options.shouldScroll) {
     const match = searchMatches.value[index]
@@ -392,10 +336,6 @@ function prefersReducedMotion(): boolean {
 
 function isPageScrollLocked(): boolean {
   return document.body.style.position === 'fixed' && document.body.style.top.startsWith('-')
-}
-
-function shouldSkipSearchNode(element: HTMLElement): boolean {
-  return element.closest('button, script, style, svg, mark[data-reader-search-match]') !== null
 }
 
 function getVisibleHeadingText(): string {
