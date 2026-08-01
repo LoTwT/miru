@@ -577,6 +577,7 @@ test('supports continuous scroll mode for local PDFs with bounded rendered pages
   await page.getByTestId('reader-find-input').fill('first-page-marker')
   await expect(page.getByTestId('reader-find-counter')).toContainText('1 / 1')
   await expect(page.getByTestId('reader-find-counter')).toContainText('第 1 页')
+  await expect(page.getByTestId('reader-find-counter')).toContainText('已读取')
   await expect.poll(async () => page.locator('.pdf-viewer__search-match--active').count()).toBeGreaterThan(0)
   await expect.poll(async () => page.getByTestId('pdf-viewer-scroll-text-layer').locator('span[data-pdf-text-index]').count()).toBeGreaterThan(0)
 

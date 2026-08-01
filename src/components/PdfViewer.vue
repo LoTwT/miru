@@ -10,6 +10,8 @@ import {
   prioritizePdfPages,
 } from '@/features/reader/pdfContinuousScroll'
 import { getPdfCanvasMetrics, PdfPageRenderQueue } from '@/features/reader/pdfRenderBudget'
+import { createPdfSearchPageIndex, findPdfSearchMatches } from '@/features/reader/pdfSearchIndex'
+import type { PdfSearchMatch, PdfSearchPageIndex } from '@/features/reader/pdfSearchIndex'
 import type { PDFDocumentLoadingTask, PDFDocumentProxy, PDFPageProxy, RenderTask } from 'pdfjs-dist'
 
 type PdfScaleMode = PdfReadingPosition['scaleMode']
@@ -18,29 +20,6 @@ type PdfRenderState = 'idle' | 'rendering' | 'ready' | 'error'
 type PdfPageViewport = ReturnType<PDFPageProxy['getViewport']>
 type PdfTextContent = Awaited<ReturnType<PDFPageProxy['getTextContent']>>
 type PdfTextLayer = InstanceType<(typeof import('pdfjs-dist'))['TextLayer']>
-
-interface PdfSearchSpan {
-  end: number
-  start: number
-}
-
-interface PdfSearchSpanRange {
-  end: number
-  spanIndex: number
-  start: number
-}
-
-interface PdfSearchPageIndex {
-  normalizedText: string
-  pageNumber: number
-  spans: PdfSearchSpan[]
-}
-
-interface PdfSearchMatch {
-  id: string
-  pageNumber: number
-  spanRanges: PdfSearchSpanRange[]
-}
 
 interface PdfPageSlot {
   errorMessage: string
@@ -83,6 +62,9 @@ const minScale = 0.35
 const maxScale = 2.75
 const zoomStep = 0.15
 const pdfTextContentCacheLimit = 8
+const pdfSearchIndexCacheLimit = 64
+const pdfSearchPagesPerYield = 4
+const pdfSearchSliceBudgetMs = 12
 const defaultScrollPageGap = 17.6
 const scrollVirtualOverscan = 4
 
@@ -110,6 +92,7 @@ const sideControlTop = shallowRef('50%')
 const searchMatches = shallowRef<PdfSearchMatch[]>([])
 const activeSearchIndex = shallowRef(-1)
 const searchStatus = shallowRef<'idle' | 'extracting' | 'no-text'>('idle')
+const searchIndexedPages = shallowRef(0)
 
 let loadingTask: PDFDocumentLoadingTask | null = null
 let pdfDocument: PDFDocumentProxy | null = null
@@ -136,6 +119,7 @@ const scrollRenderTasks = new Map<number, RenderTask>()
 const scrollRenderSequences = new Map<number, number>()
 const visibleScrollPageAreas = new Map<number, number>()
 const pdfSearchIndexCache = new Map<number, Promise<PdfSearchPageIndex>>()
+const searchMatchesByPage = new Map<number, PdfSearchMatch[]>()
 const pdfTextContentCache = new Map<number, Promise<PdfTextContent>>()
 const scrollTextLayers = new Map<number, PdfTextLayer>()
 const pendingScrollTextLayers = new Map<number, PdfTextLayer>()
@@ -372,8 +356,10 @@ function clearTextLayerContent(container: HTMLDivElement | null | undefined): vo
 function clearSearch(options: { emitState?: boolean } = {}): void {
   searchSequence += 1
   searchMatches.value = []
+  searchMatchesByPage.clear()
   activeSearchIndex.value = -1
   searchStatus.value = 'idle'
+  searchIndexedPages.value = 0
   clearTextLayers()
 
   if (options.emitState !== false) {
@@ -384,12 +370,15 @@ function clearSearch(options: { emitState?: boolean } = {}): void {
 async function runPdfSearch(query = props.searchQuery): Promise<void> {
   const normalizedQuery = query.trim()
   const sequence = ++searchSequence
-  searchMatches.value = []
+  const matches: PdfSearchMatch[] = []
+  searchMatches.value = matches
+  searchMatchesByPage.clear()
   activeSearchIndex.value = -1
+  searchIndexedPages.value = 0
+  clearTextLayers()
 
   if (!normalizedQuery || !pdfDocument || loadState.value !== 'ready') {
     searchStatus.value = 'idle'
-    clearTextLayers()
     emitSearchState()
     return
   }
@@ -398,8 +387,9 @@ async function runPdfSearch(query = props.searchQuery): Promise<void> {
   emitSearchState()
 
   const queryLower = normalizedQuery.toLocaleLowerCase()
-  const matches: PdfSearchMatch[] = []
   let hasSearchableText = false
+  let lastPublishedMatchCount = 0
+  let sliceStartedAt = performance.now()
 
   for (let page = 1; page <= totalPages.value; page += 1) {
     const pageText = await getCachedPageText(page)
@@ -411,10 +401,27 @@ async function runPdfSearch(query = props.searchQuery): Promise<void> {
       hasSearchableText = true
     }
 
-    matches.push(...findMatchesOnPage(pageText, queryLower))
+    const pageMatches = findPdfSearchMatches(pageText, queryLower)
+    if (pageMatches.length > 0) {
+      searchMatchesByPage.set(page, pageMatches)
+      matches.push(...pageMatches)
+    }
 
-    if (page % 4 === 0) {
-      await new Promise<void>(resolve => window.requestAnimationFrame(() => resolve()))
+    searchIndexedPages.value = page
+    const elapsed = performance.now() - sliceStartedAt
+    const shouldYield = page % pdfSearchPagesPerYield === 0 || elapsed >= pdfSearchSliceBudgetMs
+    const foundFirstMatch = lastPublishedMatchCount === 0 && matches.length > 0
+    if (foundFirstMatch || shouldYield || page === totalPages.value) {
+      publishPdfSearchProgress(page, pageMatches, foundFirstMatch)
+      lastPublishedMatchCount = matches.length
+    }
+
+    if (shouldYield && page < totalPages.value) {
+      await yieldPdfSearchWork()
+      sliceStartedAt = performance.now()
+      if (sequence !== searchSequence) {
+        return
+      }
     }
   }
 
@@ -425,6 +432,7 @@ async function runPdfSearch(query = props.searchQuery): Promise<void> {
   if (!hasSearchableText) {
     searchStatus.value = 'no-text'
     searchMatches.value = []
+    searchMatchesByPage.clear()
     activeSearchIndex.value = -1
     clearTextLayers()
     emitSearchState()
@@ -432,11 +440,16 @@ async function runPdfSearch(query = props.searchQuery): Promise<void> {
   }
 
   searchStatus.value = 'idle'
-  searchMatches.value = matches
-  activeSearchIndex.value = matches.length > 0 ? 0 : -1
+  triggerRef(searchMatches)
 
   if (matches.length > 0) {
-    await revealSearchMatch(matches[0]!, { behavior: 'auto' })
+    if (activeSearchIndex.value < 0) {
+      activeSearchIndex.value = 0
+      await revealSearchMatch(matches[0]!, { behavior: 'auto' })
+    }
+    else {
+      emitSearchState()
+    }
   }
   else {
     clearTextLayers()
@@ -444,9 +457,44 @@ async function runPdfSearch(query = props.searchQuery): Promise<void> {
   }
 }
 
+function publishPdfSearchProgress(
+  indexedPage: number,
+  pageMatches: readonly PdfSearchMatch[],
+  foundFirstMatch: boolean,
+): void {
+  searchIndexedPages.value = indexedPage
+  triggerRef(searchMatches)
+
+  if (foundFirstMatch) {
+    activeSearchIndex.value = 0
+  }
+
+  if (pageMatches.length > 0) {
+    const page = pageMatches[0]!.pageNumber
+    if (viewMode.value === 'paged' && pageNumber.value === page && pagedTextLayer) {
+      applySearchHighlightsToLayer(page, pagedTextLayer)
+    }
+    const scrollLayer = scrollTextLayers.get(page)
+    if (scrollLayer) {
+      applySearchHighlightsToLayer(page, scrollLayer)
+    }
+  }
+
+  emitSearchState()
+  if (foundFirstMatch) {
+    void revealSearchMatch(searchMatches.value[0]!, { behavior: 'auto' })
+  }
+}
+
+function yieldPdfSearchWork(): Promise<void> {
+  return new Promise<void>(resolve => window.requestAnimationFrame(() => resolve()))
+}
+
 async function getCachedPageText(pageNumberToRead: number): Promise<PdfSearchPageIndex> {
   const cached = pdfSearchIndexCache.get(pageNumberToRead)
   if (cached) {
+    pdfSearchIndexCache.delete(pageNumberToRead)
+    pdfSearchIndexCache.set(pageNumberToRead, cached)
     return cached
   }
 
@@ -457,38 +505,25 @@ async function getCachedPageText(pageNumberToRead: number): Promise<PdfSearchPag
     throw reason
   })
   pdfSearchIndexCache.set(pageNumberToRead, promise)
+
+  while (pdfSearchIndexCache.size > pdfSearchIndexCacheLimit) {
+    const oldestPage = pdfSearchIndexCache.keys().next().value
+    if (oldestPage === undefined) {
+      break
+    }
+    pdfSearchIndexCache.delete(oldestPage)
+  }
+
   return promise
 }
 
 async function extractPageText(pageNumberToRead: number): Promise<PdfSearchPageIndex> {
   const textContent = await getCachedTextContent(pageNumberToRead)
-  const spans: PdfSearchSpan[] = []
-  let text = ''
-
-  for (const item of textContent.items) {
-    if (!isTextContentItem(item) || !item.str) {
-      continue
-    }
-
-    if (text.length > 0 && !text.endsWith(' ') && !text.endsWith('\n')) {
-      text += ' '
-    }
-
-    const start = text.length
-    text += item.str
-    const end = text.length
-    spans.push({ end, start })
-
-    if (item.hasEOL) {
-      text += '\n'
-    }
-  }
-
-  return {
-    normalizedText: text.toLocaleLowerCase(),
-    pageNumber: pageNumberToRead,
-    spans,
-  }
+  return createPdfSearchPageIndex(pageNumberToRead, textContent.items.flatMap(item => (
+    isTextContentItem(item) && item.str
+      ? [{ hasEOL: item.hasEOL, text: item.str }]
+      : []
+  )))
 }
 
 async function getCachedTextContent(pageNumberToRead: number): Promise<PdfTextContent> {
@@ -528,41 +563,6 @@ async function getCachedTextContent(pageNumberToRead: number): Promise<PdfTextCo
 
 function isTextContentItem(item: PdfTextContent['items'][number]): item is Extract<PdfTextContent['items'][number], { str: string }> {
   return 'str' in item && typeof item.str === 'string'
-}
-
-function findMatchesOnPage(pageText: PdfSearchPageIndex, queryLower: string): PdfSearchMatch[] {
-  const matches: PdfSearchMatch[] = []
-  let index = pageText.normalizedText.indexOf(queryLower)
-
-  while (index !== -1) {
-    const end = index + queryLower.length
-    const spanRanges = getSpanRangesForMatch(pageText.spans, index, end)
-    if (spanRanges.length > 0) {
-      matches.push({
-        id: `${pageText.pageNumber}:${index}:${matches.length}`,
-        pageNumber: pageText.pageNumber,
-        spanRanges,
-      })
-    }
-
-    index = pageText.normalizedText.indexOf(queryLower, Math.max(end, index + 1))
-  }
-
-  return matches
-}
-
-function getSpanRangesForMatch(spans: PdfSearchSpan[], start: number, end: number): PdfSearchSpanRange[] {
-  const ranges: PdfSearchSpanRange[] = []
-  spans.forEach((span, index) => {
-    if (span.end > start && span.start < end) {
-      ranges.push({
-        end: Math.min(span.end, end) - span.start,
-        spanIndex: index,
-        start: Math.max(span.start, start) - span.start,
-      })
-    }
-  })
-  return ranges
 }
 
 function goToSearchMatch(delta: number): void {
@@ -655,7 +655,7 @@ function applySearchHighlights(): void {
 }
 
 function applySearchHighlightsToLayer(page: number, layer: PdfTextLayer): void {
-  const pageMatches = searchMatches.value.filter(match => match.pageNumber === page)
+  const pageMatches = searchMatchesByPage.get(page) ?? []
   const activeMatch = searchMatches.value[activeSearchIndex.value]
   const container = getTextLayerContainer(layer)
   if (!container) {
@@ -764,10 +764,22 @@ function emitSearchState(): void {
   }
 
   if (searchStatus.value === 'extracting') {
+    const activeMatch = searchMatches.value[activeSearchIndex.value]
+    if (activeMatch) {
+      emit('searchChange', {
+        activeIndex: activeSearchIndex.value,
+        resultContext: `第 ${activeMatch.pageNumber} 页 · 已读取 ${searchIndexedPages.value}/${totalPages.value} 页`,
+        total: searchMatches.value.length,
+      })
+      return
+    }
+
     emit('searchChange', {
       activeIndex: -1,
-      announcement: '正在读取 PDF 文本…',
-      statusText: '正在读取…',
+      announcement: searchIndexedPages.value === 0 ? '正在读取 PDF 文本…' : undefined,
+      statusText: searchIndexedPages.value === 0
+        ? '正在读取…'
+        : `正在读取 ${searchIndexedPages.value}/${totalPages.value} 页…`,
       total: 0,
     })
     return
