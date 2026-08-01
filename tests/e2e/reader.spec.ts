@@ -376,7 +376,7 @@ test('adds a local PDF and reopens it through the view-only PDF viewer', async (
   await openFileThroughFloatingMenu(page, {
     name: 'Daily Paper.pdf',
     mimeType: 'application/octet-stream',
-    buffer: createSimplePdfBuffer(['Daily Paper alpha headline', 'Daily Paper page two']),
+    buffer: createSimplePdfBuffer(['Daily Paper alpha headline Daily summary', 'Daily Paper page two']),
   })
 
   await expect(page.getByTestId('pdf-viewer')).toBeVisible()
@@ -392,9 +392,9 @@ test('adds a local PDF and reopens it through the view-only PDF viewer', async (
   await page.getByTestId('floating-affordance-menu').getByRole('button', { name: /搜索 Cmd\/Ctrl\+F/ }).click()
   await expect(page.getByTestId('reader-find-bar')).toBeVisible()
   await page.getByTestId('reader-find-input').fill('Daily')
-  await expect(page.getByTestId('reader-find-counter')).toContainText('1 / 2')
+  await expect(page.getByTestId('reader-find-counter')).toContainText('1 / 3')
   await expect(page.getByTestId('reader-find-counter')).toContainText('第 1 页')
-  await expect(page.locator('.pdf-viewer__search-match')).toHaveCount(1)
+  await expect(page.locator('.pdf-viewer__search-match')).toHaveCount(2)
   await expect.poll(async () => {
     return page.evaluate(() => {
       const marker = document.querySelector('.pdf-viewer__search-match')
@@ -405,11 +405,18 @@ test('adds a local PDF and reopens it through the view-only PDF viewer', async (
       return textRunWidth > 0 ? markerWidth / textRunWidth : 1
     })
   }).toBeLessThan(0.55)
+  const initialMarker = await page.locator('.pdf-viewer__search-match--active').elementHandle()
+  expect(initialMarker).not.toBeNull()
   await page.keyboard.press('Enter')
-  await expect(page.getByTestId('reader-find-counter')).toContainText('2 / 2')
+  await expect(page.getByTestId('reader-find-counter')).toContainText('2 / 3')
+  await expect(page.getByTestId('reader-find-counter')).toContainText('第 1 页')
+  expect(await initialMarker?.evaluate(marker => marker.isConnected)).toBe(true)
+  await page.keyboard.press('Enter')
+  await expect(page.getByTestId('reader-find-counter')).toContainText('3 / 3')
   await expect(page.getByTestId('reader-find-counter')).toContainText('第 2 页')
   await expect(page.getByTestId('pdf-viewer').getByText('2 / 2')).toBeVisible()
   await page.keyboard.press('Shift+Enter')
+  await expect(page.getByTestId('reader-find-counter')).toContainText('2 / 3')
   await expect(page.getByTestId('pdf-viewer').getByText('1 / 2')).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(page.getByTestId('reader-find-bar')).toHaveCount(0)

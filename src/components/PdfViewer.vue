@@ -10,6 +10,11 @@ import {
   prioritizePdfPages,
 } from '@/features/reader/pdfContinuousScroll'
 import { getPdfCanvasMetrics, PdfPageRenderQueue } from '@/features/reader/pdfRenderBudget'
+import {
+  activePdfSearchMatchClass,
+  pdfSearchMatchClass,
+  updateActivePdfSearchHighlight,
+} from '@/features/reader/pdfSearchHighlights'
 import { createPdfSearchPageIndex, findPdfSearchMatches } from '@/features/reader/pdfSearchIndex'
 import type { PdfSearchMatch, PdfSearchPageIndex } from '@/features/reader/pdfSearchIndex'
 import type { PDFDocumentLoadingTask, PDFDocumentProxy, PDFPageProxy, RenderTask } from 'pdfjs-dist'
@@ -405,6 +410,7 @@ async function runPdfSearch(query = props.searchQuery): Promise<void> {
     if (pageMatches.length > 0) {
       searchMatchesByPage.set(page, pageMatches)
       matches.push(...pageMatches)
+      applySearchHighlightsForRenderedPage(page)
     }
 
     searchIndexedPages.value = page
@@ -412,7 +418,7 @@ async function runPdfSearch(query = props.searchQuery): Promise<void> {
     const shouldYield = page % pdfSearchPagesPerYield === 0 || elapsed >= pdfSearchSliceBudgetMs
     const foundFirstMatch = lastPublishedMatchCount === 0 && matches.length > 0
     if (foundFirstMatch || shouldYield || page === totalPages.value) {
-      publishPdfSearchProgress(page, pageMatches, foundFirstMatch)
+      publishPdfSearchProgress(page, foundFirstMatch)
       lastPublishedMatchCount = matches.length
     }
 
@@ -459,7 +465,6 @@ async function runPdfSearch(query = props.searchQuery): Promise<void> {
 
 function publishPdfSearchProgress(
   indexedPage: number,
-  pageMatches: readonly PdfSearchMatch[],
   foundFirstMatch: boolean,
 ): void {
   searchIndexedPages.value = indexedPage
@@ -467,17 +472,6 @@ function publishPdfSearchProgress(
 
   if (foundFirstMatch) {
     activeSearchIndex.value = 0
-  }
-
-  if (pageMatches.length > 0) {
-    const page = pageMatches[0]!.pageNumber
-    if (viewMode.value === 'paged' && pageNumber.value === page && pagedTextLayer) {
-      applySearchHighlightsToLayer(page, pagedTextLayer)
-    }
-    const scrollLayer = scrollTextLayers.get(page)
-    if (scrollLayer) {
-      applySearchHighlightsToLayer(page, scrollLayer)
-    }
   }
 
   emitSearchState()
@@ -575,10 +569,11 @@ function goToSearchMatch(delta: number): void {
     ? 0
     : (activeSearchIndex.value + delta + searchMatches.value.length) % searchMatches.value.length
 
+  const previousMatch = searchMatches.value[activeSearchIndex.value]
   activeSearchIndex.value = nextIndex
-  applySearchHighlights()
-  emitSearchState()
   const match = searchMatches.value[nextIndex]
+  updateActiveSearchHighlights(previousMatch, match)
+  emitSearchState()
   if (match) {
     void revealSearchMatch(match)
   }
@@ -591,13 +586,13 @@ async function revealSearchMatch(match: PdfSearchMatch, options: { behavior?: Sc
     return
   }
 
-  if (pageNumber.value !== match.pageNumber) {
+  const hasCurrentTextLayer = pageNumber.value === match.pageNumber && pagedTextLayer !== null
+  if (!hasCurrentTextLayer) {
     pageNumber.value = match.pageNumber
+    await nextTick()
+    await renderCurrentPage()
   }
-
-  await nextTick()
-  await renderCurrentPage()
-  applySearchHighlights()
+  updateActiveSearchHighlights(undefined, match)
   scrollActiveSearchElementIntoView(behavior)
   emitSearchState()
 }
@@ -608,7 +603,7 @@ async function revealScrollSearchMatch(match: PdfSearchMatch, behavior: ScrollBe
   await scrollToPage(match.pageNumber)
   await nextTick()
   await renderScrollPage(match.pageNumber, -1)
-  applySearchHighlights()
+  updateActiveSearchHighlights(undefined, match)
 
   const target = getRenderedSearchMatchElement(match)
   const stage = pageStageRef.value
@@ -644,13 +639,43 @@ function scrollActiveSearchElementIntoView(behavior: ScrollBehavior): void {
   target.scrollIntoView({ behavior, block: 'center', inline: 'nearest' })
 }
 
-function applySearchHighlights(): void {
-  if (pagedTextLayer && viewMode.value === 'paged') {
-    applySearchHighlightsToLayer(pageNumber.value, pagedTextLayer)
+function updateActiveSearchHighlights(
+  previousMatch: PdfSearchMatch | undefined,
+  activeMatch: PdfSearchMatch | undefined,
+): void {
+  const pages = new Set([
+    previousMatch?.pageNumber,
+    activeMatch?.pageNumber,
+  ])
+
+  for (const page of pages) {
+    if (page === undefined) {
+      continue
+    }
+
+    if (pagedTextLayer && viewMode.value === 'paged' && pageNumber.value === page) {
+      const container = getTextLayerContainer(pagedTextLayer)
+      if (container) {
+        updateActivePdfSearchHighlight(container, activeMatch?.id)
+      }
+    }
+
+    const scrollLayer = scrollTextLayers.get(page)
+    const scrollContainer = scrollLayer ? getTextLayerContainer(scrollLayer) : null
+    if (scrollContainer) {
+      updateActivePdfSearchHighlight(scrollContainer, activeMatch?.id)
+    }
+  }
+}
+
+function applySearchHighlightsForRenderedPage(page: number): void {
+  if (pagedTextLayer && viewMode.value === 'paged' && pageNumber.value === page) {
+    applySearchHighlightsToLayer(page, pagedTextLayer)
   }
 
-  for (const [page, layer] of scrollTextLayers) {
-    applySearchHighlightsToLayer(page, layer)
+  const scrollLayer = scrollTextLayers.get(page)
+  if (scrollLayer) {
+    applySearchHighlightsToLayer(page, scrollLayer)
   }
 }
 
@@ -663,7 +688,7 @@ function applySearchHighlightsToLayer(page: number, layer: PdfTextLayer): void {
   }
 
   container
-    .querySelectorAll('.pdf-viewer__search-match')
+    .querySelectorAll(`.${pdfSearchMatchClass}`)
     .forEach(marker => marker.remove())
   container.removeAttribute('data-pdf-has-highlight')
 
@@ -695,9 +720,8 @@ function applySearchHighlightsToLayer(page: number, layer: PdfTextLayer): void {
         }
 
         const marker = document.createElement('span')
-        marker.className = activeMatch?.id === match.id
-          ? 'pdf-viewer__search-match pdf-viewer__search-match--active'
-          : 'pdf-viewer__search-match'
+        marker.classList.add(pdfSearchMatchClass)
+        marker.classList.toggle(activePdfSearchMatchClass, activeMatch?.id === match.id)
         marker.dataset.pdfSearchMatch = match.id
         marker.style.inlineSize = `${rect.width}px`
         marker.style.blockSize = `${rect.height}px`
@@ -710,7 +734,7 @@ function applySearchHighlightsToLayer(page: number, layer: PdfTextLayer): void {
     }
   }
 
-  if (container.querySelector('.pdf-viewer__search-match')) {
+  if (container.querySelector(`.${pdfSearchMatchClass}`)) {
     container.dataset.pdfHasHighlight = 'true'
   }
 }
@@ -740,7 +764,7 @@ function getRenderedSearchMatchElement(match: PdfSearchMatch): HTMLElement | nul
 
   const container = getTextLayerContainer(layer)
   const activeMarker = container?.querySelector<HTMLElement>(
-    `.pdf-viewer__search-match--active[data-pdf-search-match="${CSS.escape(match.id)}"]`,
+    `.${activePdfSearchMatchClass}[data-pdf-search-match="${CSS.escape(match.id)}"]`,
   )
   if (activeMarker) {
     return activeMarker
@@ -1939,7 +1963,11 @@ async function ensureScrollTextLayer(page: number): Promise<void> {
 
   const layer = scrollTextLayers.get(page)
   if (layer) {
-    applySearchHighlightsToLayer(page, layer)
+    const activeMatch = searchMatches.value[activeSearchIndex.value]
+    const container = getTextLayerContainer(layer)
+    if (container) {
+      updateActivePdfSearchHighlight(container, activeMatch?.id)
+    }
     return
   }
 
