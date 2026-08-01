@@ -2,42 +2,19 @@ import MarkdownIt from 'markdown-it'
 import type { Env, Token } from 'markdown-it'
 import anchor from 'markdown-it-anchor'
 import taskLists from 'markdown-it-task-lists'
-import { createJavaScriptRegexEngine } from 'shiki/engine/javascript'
-import { createHighlighterCore } from 'shiki/core'
-import githubDark from 'shiki/themes/github-dark.mjs'
-import githubLight from 'shiki/themes/github-light.mjs'
 
 import { toTrustedHtml } from '@/lib/security/sanitize'
 import { isRemoteImageUrl, isSafeImageUrl, isSafeLinkUrl } from '@/lib/security/urlPolicy'
 import type { RemoteImageMode, TrustedHtml } from '@/types/reader'
-import type { LanguageRegistration } from 'shiki/core'
 
 interface RenderMarkdownOptions {
   remoteImageMode?: RemoteImageMode
+  syntaxHighlighting?: boolean
 }
 
-const highlighterPromise = createHighlighterCore({
-  engine: createJavaScriptRegexEngine(),
-  themes: [githubLight, githubDark],
-  langs: [],
-})
-
-const languageLoaders = {
-  bash: () => import('shiki/langs/bash.mjs'),
-  css: () => import('shiki/langs/css.mjs'),
-  html: () => import('shiki/langs/html.mjs'),
-  javascript: () => import('shiki/langs/javascript.mjs'),
-  json: () => import('shiki/langs/json.mjs'),
-  markdown: () => import('shiki/langs/markdown.mjs'),
-  typescript: () => import('shiki/langs/typescript.mjs'),
-  vue: () => import('shiki/langs/vue.mjs'),
-} as const
-
-type SupportedLanguage = keyof typeof languageLoaders
-type Highlighter = Awaited<typeof highlighterPromise>
-
-const supportedLanguages = new Set<SupportedLanguage>(Object.keys(languageLoaders) as SupportedLanguage[])
-const loadedLanguagePromises = new Map<SupportedLanguage, Promise<void>>()
+interface MiruMarkdownEnv extends Env {
+  highlightedFences?: Map<number, string>
+}
 
 const md = MarkdownIt({
   html: false,
@@ -110,58 +87,31 @@ md.renderer.rules.image = (tokens, idx) => {
   return `<img src="${escapedSrc}" alt="${escapedAlt}" referrerpolicy="no-referrer" loading="lazy" decoding="async">`
 }
 
-export async function renderMarkdown(markdown: string, options: RenderMarkdownOptions = {}): Promise<TrustedHtml> {
-  const remoteImageMode = options.remoteImageMode ?? 'auto'
-  const highlighter = await highlighterPromise
-  const tokens = md.parse(markdown, {})
-  const highlightedFences = new Map<number, string>()
-
-  await Promise.all(tokens.map(async (token, index) => {
-    if (token.type !== 'fence') {
-      return
-    }
-
-    const language = normalizeLanguage(token.info)
-    await ensureLanguage(highlighter, language)
-
-    const html = highlighter.codeToHtml(token.content, {
-      lang: language,
-      themes: {
-        light: 'github-light',
-        dark: 'github-dark',
-      },
-      defaultColor: 'light',
-    })
-
-    highlightedFences.set(index, html)
-  }))
-
-  applyRemoteImageMode(tokens, remoteImageMode)
-
-  const defaultFence = md.renderer.rules.fence
-  md.renderer.rules.fence = (renderTokens, idx, renderOptions, env, self) => {
-    return highlightedFences.get(idx) ?? defaultFence?.(renderTokens, idx, renderOptions, env, self) ?? self.renderToken(renderTokens, idx, renderOptions)
-  }
-
-  return toTrustedHtml(md.renderer.render(tokens, md.options, {}))
+const defaultFence = md.renderer.rules.fence
+md.renderer.rules.fence = (tokens, idx, options, env, self) => {
+  const highlighted = (env as MiruMarkdownEnv).highlightedFences?.get(idx)
+  return highlighted ?? defaultFence?.(tokens, idx, options, env, self) ?? self.renderToken(tokens, idx, options)
 }
 
-function normalizeLanguage(info: string): string {
-  const language = info.trim().split(/\s+/)[0]?.toLowerCase()
+export async function renderMarkdown(markdown: string, options: RenderMarkdownOptions = {}): Promise<TrustedHtml> {
+  const remoteImageMode = options.remoteImageMode ?? 'auto'
+  const env: MiruMarkdownEnv = {}
+  const tokens = md.parse(markdown, env)
+  const codeFences = tokens.flatMap((token, index) => token.type === 'fence'
+    ? [{ code: token.content, index, info: token.info }]
+    : [])
 
-  if (!language) {
-    return 'text'
+  if (options.syntaxHighlighting !== false && codeFences.length > 0) {
+    const { highlightMarkdownCodeFences } = await import('./syntaxHighlighter')
+    env.highlightedFences = await highlightMarkdownCodeFences(codeFences)
   }
 
-  if (language === 'ts') {
-    return 'typescript'
-  }
+  applyRemoteImageMode(tokens, remoteImageMode)
+  return toTrustedHtml(md.renderer.render(tokens, md.options, env))
+}
 
-  if (supportedLanguages.has(language as SupportedLanguage)) {
-    return language as SupportedLanguage
-  }
-
-  return 'text'
+export function hasMarkdownCodeFence(markdown: string): boolean {
+  return /^(?: {0,3})(?:`{3,}|~{3,})[^\n]*$/m.test(markdown)
 }
 
 function normalizeAttributeValue(value: string | number | null | undefined): string | undefined {
@@ -175,32 +125,6 @@ function normalizeAttributeValue(value: string | number | null | undefined): str
 function getBlockedLinkCloseCount(env: Env | undefined): number {
   const count = env?.miruBlockedLinkCloseCount
   return typeof count === 'number' ? count : 0
-}
-
-async function ensureLanguage(highlighter: Highlighter, language: string): Promise<void> {
-  if (language === 'text') {
-    return
-  }
-
-  const supportedLanguage = language as SupportedLanguage
-  if (!supportedLanguages.has(supportedLanguage) || highlighter.getLoadedLanguages().includes(supportedLanguage)) {
-    return
-  }
-
-  const pending = loadedLanguagePromises.get(supportedLanguage)
-  if (pending) {
-    await pending
-    return
-  }
-
-  const nextPending = loadLanguage(highlighter, supportedLanguage)
-  loadedLanguagePromises.set(supportedLanguage, nextPending)
-  await nextPending
-}
-
-async function loadLanguage(highlighter: Highlighter, language: SupportedLanguage): Promise<void> {
-  const registration = (await languageLoaders[language]()).default as unknown as LanguageRegistration | LanguageRegistration[]
-  await highlighter.loadLanguage(...(Array.isArray(registration) ? registration : [registration]))
 }
 
 function applyRemoteImageMode(tokens: Token[], remoteImageMode: RemoteImageMode): void {

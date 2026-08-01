@@ -104,4 +104,14 @@ describe('markdown renderer security baseline', () => {
     expect(html.value).toContain('github-light')
     expect(html.value).toContain('--shiki-dark')
   })
+
+  it('can render fenced code before the optional syntax highlighter loads', async () => {
+    const html = await renderMarkdown('```ts\nconst answer: number = 42\n```', {
+      syntaxHighlighting: false,
+    })
+
+    expect(html.value).toContain('<pre><code class="language-ts">')
+    expect(html.value).toContain('const answer: number = 42')
+    expect(html.value).not.toContain('class="shiki')
+  })
 })

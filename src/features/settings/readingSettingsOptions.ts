@@ -45,6 +45,10 @@ export type ReadingPageMarginId = 'compact' | 'standard' | 'spacious'
 export type ReadingBuiltInFontFamilyId = 'serif' | 'literata' | 'lxgw-wenkai' | 'atkinson' | 'system-serif' | 'system-sans' | 'mono'
 export type ReadingLocalFontFamilyId = `local:${string}`
 export type ReadingFontFamilyId = ReadingBuiltInFontFamilyId | ReadingLocalFontFamilyId
+
+export function createLocalFontFaceFamily(id: string): string {
+  return `MiruLocalFont-${id.replace(/[^\da-z-]/gi, '-')}`
+}
 export type ReadingOutlinePositionId = 'left' | 'right'
 
 export interface ReadingSettingOption<T extends string> {

@@ -9,8 +9,10 @@ import {
 
 import {
   buildUploadedFontStack,
+  createLocalFontFaceFamily,
   createLocalFontFamilyId,
 } from './readingSettingsOptions'
+export { createLocalFontFaceFamily } from './readingSettingsOptions'
 import type { ReadingLocalFontFamilyId } from './readingSettingsOptions'
 
 export const localFontsDatabaseName = 'miru:local-fonts:v1'
@@ -336,10 +338,6 @@ export function createLocalFontId(): string {
   }
 
   return `font-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
-}
-
-export function createLocalFontFaceFamily(id: string): string {
-  return `MiruLocalFont-${id.replace(/[^\da-z-]/gi, '-')}`
 }
 
 function stripFontExtension(name: string): string {

@@ -9,7 +9,7 @@ import ReaderSurface from '@/components/ReaderSurface.vue'
 import sampleMarkdown from '@/content/sample.md?raw'
 import { getBareUrlPaste } from '@/features/input/urlInput'
 import { useDocumentInput } from '@/features/input/useDocumentInput'
-import { createLibraryStore, LibraryQuotaExceededError } from '@/features/library/libraryStore'
+import { createLazyLibraryStore, isLibraryQuotaExceededError } from '@/features/library/lazyLibraryStore'
 import {
   createReaderBookmark,
   readPersistedReaderBookmarks,
@@ -61,7 +61,7 @@ const documentState = reactive<ReaderDocument>({
   label: 'miru sample',
   markdown: sampleMarkdown,
 })
-const libraryStore = createLibraryStore()
+const libraryStore = createLazyLibraryStore()
 const appMode = shallowRef<AppMode>('reader')
 const libraryEntries = shallowRef<LibraryEntry[]>([])
 const librarySortMode = shallowRef<LibrarySortMode>('last-opened')
@@ -226,7 +226,7 @@ watch(appMode, (value, previousValue) => {
   }
 })
 
-onMounted(async () => {
+onMounted(() => {
   outlineViewportMediaQuery = window.matchMedia('(max-width: 1099px)')
   syncOutlineViewport()
   outlineViewportMediaQuery.addEventListener('change', syncOutlineViewport)
@@ -241,11 +241,10 @@ onMounted(async () => {
   document.addEventListener('pointerdown', onDocumentPointerDown)
   document.addEventListener('keydown', onDocumentKeydown)
 
-  await Promise.all([
-    loadDefaultReadingFonts(),
-    readingSettings.initializeLocalFonts(),
-    refreshLibraryEntries(),
-  ])
+  void loadDefaultReadingFonts().catch(() => undefined)
+  if (readingSettings.hasActiveLocalFont.value) {
+    void readingSettings.initializeLocalFonts().catch(() => undefined)
+  }
   queueMarkdownProgressUpdate()
 })
 
@@ -326,6 +325,7 @@ function toggleSurface(surfaceId: CommandSurfaceId): void {
 function openSurface(surfaceId: CommandSurfaceId): void {
   if (surfaceId === 'settings') {
     preloadReadingSettings()
+    void readingSettings.initializeLocalFonts().catch(() => undefined)
   }
   openSurfaceId.value = surfaceId
   setPageScrollLocked(shouldLockPageForSurface(surfaceId))
@@ -828,7 +828,7 @@ async function loadIncomingDocument(document: ReaderDocument): Promise<void> {
     await activateNewMarkdownEntry(entry, document.markdown)
   }
   catch (reason) {
-    if (reason instanceof LibraryQuotaExceededError) {
+    if (isLibraryQuotaExceededError(reason)) {
       libraryStatus.value = '本机存储空间不够, 没有加入文库。可以删除一些文档后再试。'
       inputMenuStatus.value = libraryStatus.value
     }
@@ -893,7 +893,7 @@ async function updatePendingUrlImport(): Promise<void> {
       : '内容没有变化, 已打开已有文档'
   }
   catch (reason) {
-    if (reason instanceof LibraryQuotaExceededError) {
+    if (isLibraryQuotaExceededError(reason)) {
       inputMenuStatus.value = '本机存储空间不够, 没有更新文库。可以删除一些文档后再试。'
     }
     else {
@@ -924,7 +924,7 @@ async function loadIncomingPdf(file: File): Promise<void> {
     liveStatus.value = 'PDF 已加入文库'
   }
   catch (reason) {
-    if (reason instanceof LibraryQuotaExceededError) {
+    if (isLibraryQuotaExceededError(reason)) {
       libraryStatus.value = '本机存储空间不够, PDF 没有加入文库。可以删除一些文档后再试。'
       inputMenuStatus.value = libraryStatus.value
     }

@@ -22,14 +22,32 @@ export function useRenderedMarkdown(options: UseRenderedMarkdownOptions) {
       error.value = null
 
       try {
-        const { renderMarkdown } = await import('@/lib/markdown/renderer')
+        const { hasMarkdownCodeFence, renderMarkdown } = await import('@/lib/markdown/renderer')
 
         const nextHtml = await renderMarkdown(markdown, {
           remoteImageMode,
+          syntaxHighlighting: false,
         })
 
         if (requestId === renderRequestId) {
           html.value = nextHtml
+          isRendering.value = false
+        }
+
+        if (requestId !== renderRequestId || !hasMarkdownCodeFence(markdown)) {
+          return
+        }
+
+        try {
+          const highlightedHtml = await renderMarkdown(markdown, {
+            remoteImageMode,
+          })
+          if (requestId === renderRequestId) {
+            html.value = highlightedHtml
+          }
+        }
+        catch {
+          // Plain, sanitized Markdown is already available when optional highlighting fails.
         }
       }
       catch {

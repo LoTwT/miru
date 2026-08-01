@@ -54,6 +54,46 @@ test('renders the sample document and supports paste input', async ({ page }) =>
   expect(deepHeadingSizes[1]).toBeGreaterThan(deepHeadingSizes[2] ?? 0)
 })
 
+test('renders fenced code while optional syntax highlighting is unavailable', async ({ page }) => {
+  await page.route(/\/assets\/syntaxHighlighter-[^/]+\.js$/, route => route.abort())
+  await page.goto('/')
+
+  await expect(page.getByRole('heading', { name: 'miru' })).toBeVisible()
+  await expect(page.locator('.reader-surface__content pre code').first()).toBeVisible()
+  await expect(page.locator('.reader-surface__content .shiki')).toHaveCount(0)
+})
+
+test('defers local databases until their related surfaces open', async ({ page }) => {
+  await page.addInitScript(() => {
+    const openedDatabases: string[] = []
+    const originalOpen = IDBFactory.prototype.open
+    Object.defineProperty(window, '__miruOpenedDatabases', { value: openedDatabases })
+    IDBFactory.prototype.open = function (name: string, version?: number): IDBOpenDBRequest {
+      openedDatabases.push(name)
+      return version === undefined
+        ? originalOpen.call(this, name)
+        : originalOpen.call(this, name, version)
+    }
+  })
+  const readOpenedDatabases = () => page.evaluate(() =>
+    [...(window as typeof window & { __miruOpenedDatabases: string[] }).__miruOpenedDatabases],
+  )
+
+  await page.goto('/')
+  await expect(page.getByRole('heading', { name: 'miru' })).toBeVisible()
+  await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))))
+  expect(await readOpenedDatabases()).toEqual([])
+
+  await page.getByTestId('library-open-button').click()
+  await expect(page.getByTestId('library-view')).toBeVisible()
+  await expect.poll(readOpenedDatabases).toContain('miru:library:v1')
+  expect(await readOpenedDatabases()).not.toContain('miru:local-fonts:v1')
+
+  await page.getByTestId('reading-settings-button').click()
+  await expect(page.getByText('字号').first()).toBeVisible()
+  await expect.poll(readOpenedDatabases).toContain('miru:local-fonts:v1')
+})
+
 test('renders the reader footer with privacy copy and safe links', async ({ page }) => {
   await page.goto('/')
 
