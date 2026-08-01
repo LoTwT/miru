@@ -2,6 +2,7 @@
 import { nextTick, onBeforeUnmount, onMounted, shallowRef, useTemplateRef, watch } from 'vue'
 
 import { enhanceCollapsibleHeadings } from '@/features/reader/collapsibleHeadings'
+import { enhanceMarkdownCodeBlocks } from '@/features/reader/markdownCodeHighlighting'
 import {
   clearMarkdownSearchHighlights,
   highlightMarkdownSearchMatches,
@@ -32,6 +33,7 @@ const activeSearchIndex = shallowRef(-1)
 let cleanupCollapsibleHeadings: (() => void) | undefined
 let cleanupOutlineSpy: (() => void) | undefined
 let outlineSyncFrame: number | undefined
+let contentEnhancementSequence = 0
 
 onMounted(() => {
   void enhanceCurrentContent()
@@ -46,6 +48,7 @@ watch(() => props.searchQuery, () => {
 })
 
 onBeforeUnmount(() => {
+  contentEnhancementSequence += 1
   clearSearchHighlights()
   cleanupCollapsibleHeadings?.()
   cleanupOutlineSpy?.()
@@ -60,6 +63,7 @@ defineExpose({
 })
 
 async function enhanceCurrentContent(): Promise<void> {
+  const enhancementSequence = ++contentEnhancementSequence
   clearSearchHighlights()
   cleanupCollapsibleHeadings?.()
   cleanupCollapsibleHeadings = undefined
@@ -68,13 +72,21 @@ async function enhanceCurrentContent(): Promise<void> {
 
   await nextTick()
 
-  if (contentRef.value) {
-    cleanupCollapsibleHeadings = enhanceCollapsibleHeadings(contentRef.value)
-    outlineItems.value = collectOutlineItems(contentRef.value)
+  const content = contentRef.value
+  if (content) {
+    cleanupCollapsibleHeadings = enhanceCollapsibleHeadings(content)
+    outlineItems.value = collectOutlineItems(content)
     emit('outlineChange', outlineItems.value)
     cleanupOutlineSpy = setupOutlineSpy(outlineItems.value)
     syncActiveHeading()
     applySearchQuery()
+    void enhanceMarkdownCodeBlocks(content, {
+      isCurrent: () => enhancementSequence === contentEnhancementSequence && contentRef.value === content,
+    }).then((changed) => {
+      if (changed && enhancementSequence === contentEnhancementSequence && props.searchQuery.trim()) {
+        applySearchQuery()
+      }
+    })
     return
   }
 

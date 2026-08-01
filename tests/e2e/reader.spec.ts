@@ -1363,7 +1363,9 @@ test('keeps long outline navigation scrollable without dragging reader content',
   await page.setViewportSize({ width: 1280, height: 900 })
   await page.goto('/')
   await pasteText(page, longOutlineMarkdown)
+  await expect(page.getByRole('heading', { name: 'Long outline' })).toBeVisible()
   await expect(page.getByTestId('reader-outline-rail')).toBeVisible()
+  await expect(page.getByTestId('reader-outline').getByRole('link', { name: 'Final outline stop' })).toBeVisible()
 
   const desktopScrollMetrics = await page.evaluate(() => {
     const scrollBox = document.querySelector<HTMLElement>('[data-testid="reader-outline-scroll"]')
@@ -1621,8 +1623,12 @@ test('activates the final outline item near the page bottom', async ({ page }) =
     'The last section is intentionally short.',
   ].join('\n'))
 
+  await expect(page.getByRole('heading', { name: 'Overview' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Now try' })).toBeVisible()
+
   if (isWideViewport(page)) {
     await expect(page.getByTestId('reader-outline')).toBeVisible()
+    await expect(page.getByTestId('reader-outline').getByRole('link', { name: 'Now try' })).toBeVisible()
   }
   else {
     await expect(page.getByTestId('reader-outline-button')).toBeVisible()

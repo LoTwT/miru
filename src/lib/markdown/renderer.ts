@@ -110,10 +110,6 @@ export async function renderMarkdown(markdown: string, options: RenderMarkdownOp
   return toTrustedHtml(md.renderer.render(tokens, md.options, env))
 }
 
-export function hasMarkdownCodeFence(markdown: string): boolean {
-  return /^(?: {0,3})(?:`{3,}|~{3,})[^\n]*$/m.test(markdown)
-}
-
 function normalizeAttributeValue(value: string | number | null | undefined): string | undefined {
   if (typeof value === 'string') {
     return value
