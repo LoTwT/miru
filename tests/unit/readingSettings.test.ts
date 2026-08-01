@@ -935,6 +935,33 @@ describe('reading customization settings', () => {
     expect(restored.state.fontFamily).toBe('lxgw-wenkai')
   })
 
+  it('stores an uploaded local font without cloning its file blob', async () => {
+    const { store } = createMockLocalFontStore([])
+    const addFont = vi.mocked(store.addFont)
+    addFont.mockImplementation(async input => ({
+      ...createLocalFontRecord('font-uploaded', input.name),
+      fileName: input.fileName,
+      mimeType: input.mimeType,
+      byteSize: input.file.size,
+      blob: input.file,
+    }))
+    installFontFaceMock()
+    const file = new File([new Uint8Array([0, 1, 2, 3])], 'Quiet Serif.woff2', {
+      type: 'font/woff2',
+    })
+    const settings = useReadingSettings({ root, storage, localFontStore: store })
+
+    await expect(settings.uploadLocalFont(file)).resolves.toBe(true)
+
+    expect(addFont).toHaveBeenCalledOnce()
+    expect(addFont.mock.calls[0]?.[0]).toMatchObject({
+      fileName: file.name,
+      mimeType: file.type,
+      name: 'Quiet Serif',
+    })
+    expect(addFont.mock.calls[0]?.[0].file).toBe(file)
+  })
+
   it('loads only the selected local font at startup and lazily loads another on selection', async () => {
     const first = createLocalFontRecord('font-one', 'Quiet Serif')
     const second = createLocalFontRecord('font-two', 'Reading Sans')

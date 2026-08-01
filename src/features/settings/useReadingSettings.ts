@@ -391,9 +391,8 @@ export function useReadingSettings(options: {
 
     try {
       const localFontStore = await getLocalFontStore()
-      const fileBlob = new Blob([await file.arrayBuffer()], { type: file.type })
       record = await localFontStore.addFont({
-        file: fileBlob,
+        file,
         fileName: file.name,
         mimeType: file.type,
         name,
