@@ -825,8 +825,7 @@ async function loadIncomingDocument(document: ReaderDocument): Promise<void> {
       source,
       label: document.label,
     })
-    await refreshLibraryEntries()
-    await openLibraryEntry(entry)
+    await activateNewMarkdownEntry(entry, document.markdown)
   }
   catch (reason) {
     if (reason instanceof LibraryQuotaExceededError) {
@@ -921,8 +920,7 @@ async function loadIncomingPdf(file: File): Promise<void> {
       },
     })
 
-    await refreshLibraryEntries()
-    await openLibraryEntry(entry)
+    await activateNewPdfEntry(entry, pdfBlob)
     liveStatus.value = 'PDF 已加入文库'
   }
   catch (reason) {
@@ -937,6 +935,33 @@ async function loadIncomingPdf(file: File): Promise<void> {
 
     openSurface('actions')
   }
+}
+
+async function activateNewMarkdownEntry(entry: LibraryEntry, markdown: string): Promise<void> {
+  activeLibraryEntryId.value = entry.id
+  activePdfDocument.value = null
+  documentState.source = readerSourceFromLibrarySource(entry.source)
+  documentState.label = labelForEntry(entry)
+  documentState.markdown = markdown
+  pendingRestorePosition.value = null
+  appMode.value = 'reader'
+
+  await refreshLibraryEntries()
+  await onDocumentLoaded(documentState.source)
+}
+
+async function activateNewPdfEntry(entry: LibraryEntry, blob: Blob): Promise<void> {
+  activeLibraryEntryId.value = entry.id
+  activePdfDocument.value = {
+    entry,
+    blob,
+    position: null,
+  }
+  pendingRestorePosition.value = null
+  appMode.value = 'pdf'
+
+  await refreshLibraryEntries()
+  await focusPdfViewerWhenReady()
 }
 
 async function openLibraryEntry(entry: LibraryEntry, options: { skipSave?: boolean } = {}): Promise<void> {
