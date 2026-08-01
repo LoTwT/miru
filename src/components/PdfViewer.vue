@@ -11,8 +11,8 @@ import {
 } from '@/features/reader/pdfContinuousScroll'
 import { getPdfCanvasMetrics, PdfPageRenderQueue } from '@/features/reader/pdfRenderBudget'
 import {
-  activePdfSearchMatchClass,
-  pdfSearchMatchClass,
+  findActivePdfSearchHighlight,
+  renderPdfSearchHighlights,
   updateActivePdfSearchHighlight,
 } from '@/features/reader/pdfSearchHighlights'
 import { createPdfSearchPageIndex, findPdfSearchMatches } from '@/features/reader/pdfSearchIndex'
@@ -687,56 +687,12 @@ function applySearchHighlightsToLayer(page: number, layer: PdfTextLayer): void {
     return
   }
 
-  container
-    .querySelectorAll(`.${pdfSearchMatchClass}`)
-    .forEach(marker => marker.remove())
-  container.removeAttribute('data-pdf-has-highlight')
-
-  layer.textDivs.forEach((textDiv) => {
-    delete textDiv.dataset.pdfSearchMatch
+  renderPdfSearchHighlights({
+    activeMatchId: activeMatch?.id,
+    container,
+    matches: pageMatches,
+    textDivs: layer.textDivs,
   })
-
-  const containerRect = container.getBoundingClientRect()
-  for (const match of pageMatches) {
-    for (const spanRange of match.spanRanges) {
-      const textDiv = layer.textDivs[spanRange.spanIndex]
-      if (!textDiv) {
-        continue
-      }
-
-      textDiv.dataset.pdfSearchMatch = match.id
-      const textNode = textDiv.firstChild
-      if (!(textNode instanceof Text) || spanRange.start >= spanRange.end) {
-        continue
-      }
-
-      const range = document.createRange()
-      range.setStart(textNode, Math.min(spanRange.start, textNode.length))
-      range.setEnd(textNode, Math.min(spanRange.end, textNode.length))
-
-      for (const rect of range.getClientRects()) {
-        if (rect.width <= 0 || rect.height <= 0) {
-          continue
-        }
-
-        const marker = document.createElement('span')
-        marker.classList.add(pdfSearchMatchClass)
-        marker.classList.toggle(activePdfSearchMatchClass, activeMatch?.id === match.id)
-        marker.dataset.pdfSearchMatch = match.id
-        marker.style.inlineSize = `${rect.width}px`
-        marker.style.blockSize = `${rect.height}px`
-        marker.style.insetInlineStart = `${rect.left - containerRect.left}px`
-        marker.style.insetBlockStart = `${rect.top - containerRect.top}px`
-        container.append(marker)
-      }
-
-      range.detach()
-    }
-  }
-
-  if (container.querySelector(`.${pdfSearchMatchClass}`)) {
-    container.dataset.pdfHasHighlight = 'true'
-  }
 }
 
 function getTextLayerContainer(layer: PdfTextLayer): HTMLDivElement | null {
@@ -763,9 +719,7 @@ function getRenderedSearchMatchElement(match: PdfSearchMatch): HTMLElement | nul
   }
 
   const container = getTextLayerContainer(layer)
-  const activeMarker = container?.querySelector<HTMLElement>(
-    `.${activePdfSearchMatchClass}[data-pdf-search-match="${CSS.escape(match.id)}"]`,
-  )
+  const activeMarker = container ? findActivePdfSearchHighlight(container, match.id) : null
   if (activeMarker) {
     return activeMarker
   }
