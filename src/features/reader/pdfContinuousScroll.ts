@@ -40,6 +40,32 @@ export function getDominantPdfPage(visibleAreas: Iterable<readonly [number, numb
   return dominantPage
 }
 
+export function prioritizePdfPages(options: {
+  focusPage: number
+  pages: Iterable<number>
+  visibleAreas: ReadonlyMap<number, number>
+}): number[] {
+  const focusPage = Math.trunc(options.focusPage)
+
+  return [...new Set(options.pages)]
+    .filter(page => Number.isFinite(page))
+    .sort((left, right) => {
+      const leftArea = Math.max(0, options.visibleAreas.get(left) ?? 0)
+      const rightArea = Math.max(0, options.visibleAreas.get(right) ?? 0)
+      const leftVisible = leftArea > 0
+      const rightVisible = rightArea > 0
+
+      if (leftVisible !== rightVisible) {
+        return leftVisible ? -1 : 1
+      }
+      if (leftVisible && rightVisible && leftArea !== rightArea) {
+        return rightArea - leftArea
+      }
+
+      return Math.abs(left - focusPage) - Math.abs(right - focusPage) || left - right
+    })
+}
+
 function clampPage(page: number, totalPages: number): number {
   return Math.min(totalPages, Math.max(1, Math.trunc(page)))
 }

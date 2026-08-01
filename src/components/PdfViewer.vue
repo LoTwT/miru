@@ -7,7 +7,9 @@ import type { LibraryEntry, PdfReadingPosition } from '@/features/library/types'
 import {
   getBufferedPdfPages,
   getDominantPdfPage,
+  prioritizePdfPages,
 } from '@/features/reader/pdfContinuousScroll'
+import { getPdfCanvasMetrics, PdfPageRenderQueue } from '@/features/reader/pdfRenderBudget'
 import type { PDFDocumentLoadingTask, PDFDocumentProxy, PDFPageProxy, RenderTask } from 'pdfjs-dist'
 
 type PdfScaleMode = PdfReadingPosition['scaleMode']
@@ -128,6 +130,7 @@ let isPageInputEditing = false
 const scrollPageElements = new Map<number, HTMLElement>()
 const scrollCanvasElements = new Map<number, HTMLCanvasElement>()
 const scrollTextLayerElements = new Map<number, HTMLDivElement>()
+const scrollRenderQueue = new PdfPageRenderQueue(2)
 const scrollRenderPromises = new Map<number, Promise<void>>()
 const scrollRenderTasks = new Map<number, RenderTask>()
 const scrollRenderSequences = new Map<number, number>()
@@ -305,6 +308,7 @@ async function cancelScrollRenderTasks(): Promise<void> {
   for (const page of activePages) {
     scrollRenderSequences.set(page, (scrollRenderSequences.get(page) ?? 0) + 1)
   }
+  scrollRenderQueue.cancelAllPending()
   scrollRenderTasks.clear()
   clearAllScrollTextLayers()
 
@@ -603,7 +607,7 @@ async function revealScrollSearchMatch(match: PdfSearchMatch, behavior: ScrollBe
   ensureScrollPageBuffered(match.pageNumber)
   await scrollToPage(match.pageNumber)
   await nextTick()
-  await renderScrollPage(match.pageNumber)
+  await renderScrollPage(match.pageNumber, -1)
   applySearchHighlights()
 
   const target = getRenderedSearchMatchElement(match)
@@ -790,6 +794,19 @@ function emitSearchState(): void {
   })
 }
 
+function preparePdfCanvas(canvas: HTMLCanvasElement, viewport: PdfPageViewport): number {
+  const metrics = getPdfCanvasMetrics({
+    cssHeight: viewport.height,
+    cssWidth: viewport.width,
+    devicePixelRatio: window.devicePixelRatio || 1,
+  })
+  canvas.width = metrics.width
+  canvas.height = metrics.height
+  canvas.style.inlineSize = `${viewport.width}px`
+  canvas.style.blockSize = `${viewport.height}px`
+  return metrics.scale
+}
+
 async function renderCurrentPage(): Promise<void> {
   const pdf = pdfDocument
   const canvas = canvasRef.value
@@ -811,17 +828,12 @@ async function renderCurrentPage(): Promise<void> {
     const scale = calculateScale(page)
     renderedScale.value = scale
     const viewport = page.getViewport({ scale })
-    const ratio = window.devicePixelRatio || 1
+    const ratio = preparePdfCanvas(canvas, viewport)
     const context = canvas.getContext('2d')
 
     if (!context) {
       throw new Error('Canvas context is not available')
     }
-
-    canvas.width = Math.floor(viewport.width * ratio)
-    canvas.height = Math.floor(viewport.height * ratio)
-    canvas.style.inlineSize = `${viewport.width}px`
-    canvas.style.blockSize = `${viewport.height}px`
 
     renderTask = page.render({
       canvas,
@@ -1636,8 +1648,10 @@ function updateBufferedScrollPages(additionalAnchors: Iterable<number> = []): vo
     fallbackPage: getDominantVisiblePage() ?? pageNumber.value,
     totalPages: totalPages.value,
   })
+  const previousPages = bufferedScrollPages.value
+  bufferedScrollPages.value = nextPages
 
-  for (const page of [...bufferedScrollPages.value]) {
+  for (const page of previousPages) {
     if (!nextPages.has(page)) {
       void cancelScrollRenderTask(page)
       clearScrollTextLayer(page)
@@ -1645,11 +1659,14 @@ function updateBufferedScrollPages(additionalAnchors: Iterable<number> = []): vo
     }
   }
 
-  bufferedScrollPages.value = nextPages
-
   void nextTick(() => {
-    for (const page of nextPages) {
-      void renderScrollPage(page)
+    const prioritizedPages = prioritizePdfPages({
+      focusPage: getDominantVisiblePage() ?? pageNumber.value,
+      pages: nextPages,
+      visibleAreas: visibleScrollPageAreas,
+    })
+    for (const [priority, page] of prioritizedPages.entries()) {
+      void renderScrollPage(page, priority)
     }
     queueSideControlPositionUpdate()
   })
@@ -1709,13 +1726,15 @@ function getDominantVisiblePage(): number | null {
   return getDominantPdfPage(visibleScrollPageAreas)
 }
 
-async function renderScrollPage(page: number): Promise<void> {
+async function renderScrollPage(page: number, priority = getScrollRenderPriority(page)): Promise<void> {
   const existingPromise = scrollRenderPromises.get(page)
   if (existingPromise) {
+    scrollRenderQueue.schedule(page, priority, () => performScrollPageRender(page))
     return existingPromise
   }
 
-  const promise = performScrollPageRender(page).finally(() => {
+  const queuedPromise = scrollRenderQueue.schedule(page, priority, () => performScrollPageRender(page))
+  const promise = queuedPromise.finally(() => {
     if (scrollRenderPromises.get(page) === promise) {
       scrollRenderPromises.delete(page)
     }
@@ -1733,6 +1752,16 @@ async function renderScrollPage(page: number): Promise<void> {
   })
   scrollRenderPromises.set(page, promise)
   return promise
+}
+
+function getScrollRenderPriority(page: number): number {
+  const pages = prioritizePdfPages({
+    focusPage: getDominantVisiblePage() ?? pageNumber.value,
+    pages: bufferedScrollPages.value,
+    visibleAreas: visibleScrollPageAreas,
+  })
+  const priority = pages.indexOf(page)
+  return priority >= 0 ? priority : pages.length
 }
 
 async function performScrollPageRender(page: number): Promise<void> {
@@ -1814,17 +1843,12 @@ async function performScrollPageRender(page: number): Promise<void> {
     emitProgress()
     queueSideControlPositionUpdate()
 
-    const ratio = window.devicePixelRatio || 1
+    const ratio = preparePdfCanvas(canvas, viewport)
     const context = canvas.getContext('2d')
 
     if (!context) {
       throw new Error('Canvas context is not available')
     }
-
-    canvas.width = Math.floor(viewport.width * ratio)
-    canvas.height = Math.floor(viewport.height * ratio)
-    canvas.style.inlineSize = `${viewport.width}px`
-    canvas.style.blockSize = `${viewport.height}px`
 
     const task = pdfPage.render({
       canvas,
@@ -1930,6 +1954,7 @@ async function ensureScrollTextLayer(page: number): Promise<void> {
 
 async function cancelScrollRenderTask(page: number): Promise<void> {
   scrollRenderSequences.set(page, (scrollRenderSequences.get(page) ?? 0) + 1)
+  scrollRenderQueue.cancelPending(page)
   const task = scrollRenderTasks.get(page)
   if (!task) {
     updatePageSlot(page, { renderState: 'idle' })

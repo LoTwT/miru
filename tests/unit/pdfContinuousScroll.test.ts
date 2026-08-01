@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   getBufferedPdfPages,
   getDominantPdfPage,
+  prioritizePdfPages,
 } from '@/features/reader/pdfContinuousScroll'
 
 describe('PDF continuous-scroll planning', () => {
@@ -25,6 +26,14 @@ describe('PDF continuous-scroll planning', () => {
   it('uses observer-provided visible area to select the dominant page', () => {
     expect(getDominantPdfPage([[7, 120], [8, 480], [9, 80]])).toBe(8)
     expect(getDominantPdfPage([[7, 0], [8, Number.NaN]])).toBeNull()
+  })
+
+  it('renders visible pages first, then nearby buffered pages', () => {
+    expect(prioritizePdfPages({
+      focusPage: 10,
+      pages: [8, 9, 10, 11, 12],
+      visibleAreas: new Map([[10, 100], [11, 400]]),
+    })).toEqual([11, 10, 9, 8, 12])
   })
 
 })
