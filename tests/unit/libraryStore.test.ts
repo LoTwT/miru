@@ -2,11 +2,13 @@ import 'fake-indexeddb/auto'
 
 import { Blob as NodeBlob } from 'node:buffer'
 
+import { openDB } from 'idb'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
   createLibraryStore,
   deleteLibraryDatabase,
+  libraryDatabaseVersion,
   LibraryQuotaExceededError,
 } from '@/features/library/libraryStore'
 import type { LibraryEntry } from '@/features/library/types'
@@ -156,8 +158,9 @@ describe('local library store', () => {
     })
   })
 
-  it('stores PDF entries as blobs without hydrating blobs into the bookshelf list', async () => {
-    const store = createTestStore()
+  it('stores PDF entries as portable bytes without hydrating bodies into the bookshelf list', async () => {
+    const dbName = `miru:test-library:${crypto.randomUUID()}`
+    const store = createTestStore({ dbName })
     const blob = createPdfBlob()
     const entry = await store.addPdfDocument({
       blob,
@@ -177,9 +180,45 @@ describe('local library store', () => {
     expect(list).toHaveLength(1)
     expect((list[0] as LibraryEntry & { blob?: Blob }).blob).toBeUndefined()
 
+    const db = await openDB(dbName, libraryDatabaseVersion)
+    const storedBody = await db.get('pdfBodies', entry.id)
+    db.close()
+    expect(storedBody).toMatchObject({
+      documentId: entry.id,
+      mimeType: 'application/pdf',
+      byteSize: blob.size,
+      schemaVersion: 2,
+    })
+    expect(Object.prototype.toString.call(storedBody.bytes)).toBe('[object ArrayBuffer]')
+    expect(storedBody.bytes.byteLength).toBe(blob.size)
+    expect(storedBody).not.toHaveProperty('blob')
+
     const opened = await store.openPdfDocument(entry.id)
     expect(opened?.blob.size).toBe(blob.size)
     expect(opened?.blob.type).toBe('application/pdf')
+    expect(await opened?.blob.text()).toBe('%PDF-1.7 fake')
+  })
+
+  it('opens legacy Blob-backed PDF bodies without discarding local documents', async () => {
+    const dbName = `miru:test-library:${crypto.randomUUID()}`
+    const store = createTestStore({ dbName })
+    const entry = await store.addPdfDocument({
+      blob: createPdfBlob('current body'),
+      source: { kind: 'file', fileName: 'Archive.pdf', mimeType: 'application/pdf' },
+    })
+    const legacyBlob = createPdfBlob('legacy body')
+    const db = await openDB(dbName, libraryDatabaseVersion)
+    await db.put('pdfBodies', {
+      documentId: entry.id,
+      blob: legacyBlob,
+      mimeType: 'application/pdf',
+      byteSize: legacyBlob.size,
+    })
+    db.close()
+
+    const opened = await store.openPdfDocument(entry.id)
+    expect(opened?.blob.type).toBe('application/pdf')
+    expect(await opened?.blob.text()).toBe('legacy body')
   })
 
   it('updates title and pin state while keeping pinned documents above sorted rows', async () => {

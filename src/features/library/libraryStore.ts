@@ -9,9 +9,9 @@ import type {
   MarkdownReadingPosition,
   OpenMarkdownDocumentResult,
   OpenPdfDocumentResult,
-  PdfBody,
   PdfReadingPosition,
   ReadingPosition,
+  StoredPdfBody,
   UpdateLibraryEntryInput,
   UrlLibrarySource,
 } from './types'
@@ -39,7 +39,7 @@ interface LibraryDatabase extends DBSchema {
   }
   pdfBodies: {
     key: string
-    value: PdfBody
+    value: StoredPdfBody
   }
   positions: {
     key: string
@@ -220,6 +220,7 @@ export function createLibraryStore(options: LibraryStoreOptions = {}) {
   async function addPdfDocument(input: AddPdfDocumentInput): Promise<LibraryEntry> {
     const byteSize = input.blob.size
     await ensureStorageBudget(byteSize)
+    const bytes = await input.blob.arrayBuffer()
 
     const id = createId()
     const timestamp = now()
@@ -244,9 +245,10 @@ export function createLibraryStore(options: LibraryStoreOptions = {}) {
       tx.objectStore('entries').add(entry),
       tx.objectStore('pdfBodies').add({
         documentId: id,
-        blob: input.blob,
+        bytes,
         mimeType: 'application/pdf',
         byteSize,
+        schemaVersion: 2,
       }),
       tx.done,
     ])
@@ -289,7 +291,7 @@ export function createLibraryStore(options: LibraryStoreOptions = {}) {
     const nextEntry = await markOpened(entry)
     return {
       entry: nextEntry,
-      blob: body.blob,
+      blob: pdfBodyToBlob(body),
       position: position?.type === 'pdf' ? position : null,
     }
   }
@@ -430,6 +432,14 @@ export function createLibraryStore(options: LibraryStoreOptions = {}) {
     saveReadingPosition,
     updateEntry,
   }
+}
+
+function pdfBodyToBlob(body: StoredPdfBody): Blob {
+  if ('bytes' in body) {
+    return new Blob([body.bytes], { type: body.mimeType })
+  }
+
+  return body.blob
 }
 
 export async function deleteLibraryDatabase(dbName = libraryDatabaseName): Promise<void> {
