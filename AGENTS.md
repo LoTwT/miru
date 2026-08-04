@@ -32,11 +32,12 @@ pnpm test:unit
 pnpm bench:reader
 pnpm build
 pnpm check:bundle
+pnpm check:deploy
 pnpm exec playwright install chromium
 pnpm test:e2e
 ```
 
-`pnpm check:bundle` 依赖已生成的 `dist/index.html`，因此应在 `pnpm build` 后运行。端到端测试通过 production preview 使用 `dist/`，覆盖桌面与移动 Chromium 项目。
+`pnpm check:bundle` 与 `pnpm check:deploy` 依赖已生成的 `dist/`，因此应在 `pnpm build` 后运行。`pnpm check:deploy` 会复核安全响应头、PWA 产物和 precache 边界，并执行无凭据的 Wrangler dry-run。端到端测试通过 production preview 使用 `dist/`，覆盖桌面与移动 Chromium 项目。
 
 `pnpm bench:reader` 是手动性能对比工具，不是 CI 时间硬门槛。比较结果时应使用相同机器与运行时，并记录基准输出。
 

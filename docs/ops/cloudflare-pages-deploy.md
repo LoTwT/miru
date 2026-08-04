@@ -103,8 +103,7 @@ pnpm test
 pnpm run build
 pnpm test:e2e
 git diff --check origin/main...HEAD
-test -f dist/_headers
-pnpm exec wrangler deploy --dry-run --outdir .wrangler/dry-run
+pnpm check:deploy
 ```
 
 Expected artifact checks:
@@ -114,7 +113,7 @@ find dist -maxdepth 2 -type f | sort
 sed -n '1,120p' dist/_headers
 ```
 
-`dist/_headers` must include the V0 CSP, `Referrer-Policy: no-referrer`, and `X-Content-Type-Options: nosniff`. `pnpm build` bundles the first-paint theme entry and fails if the SHA-256 allowed by `public/_headers` does not match the exact inline script bytes.
+`pnpm check:deploy` verifies the required `_headers`, manifest, and service-worker artifacts, ensures optional fonts and PDF runtime assets stay out of the shared precache, and runs an isolated Wrangler dry-run. `dist/_headers` must include the V0 CSP, `Referrer-Policy: no-referrer`, and `X-Content-Type-Options: nosniff`. `pnpm build` bundles the first-paint theme entry and fails if the SHA-256 allowed by `public/_headers` does not match the exact inline script bytes.
 
 ## Post-deploy Smoke
 

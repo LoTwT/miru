@@ -16,13 +16,14 @@
     "test:unit": "vitest run",
     "test:e2e": "playwright test",
     "bench:reader": "vitest bench tests/bench/reader.bench.ts --run",
-    "check:bundle": "node scripts/check-bundle-budget.mjs"
+    "check:bundle": "node scripts/check-bundle-budget.mjs",
+    "check:deploy": "node scripts/check-deploy-contract.mjs"
   },
   "dependencies": {
     "@ayingott/theme": "0.2.0",
     "@fontsource-variable/newsreader": "^5.3.0",
     "@tanstack/vue-virtual": "^3.13.35",
-    "dompurify": "^3.4.12",
+    "dompurify": "^3.4.13",
     "idb": "^8.0.3",
     "markdown-it": "^15.0.0",
     "markdown-it-anchor": "^9.2.1",
@@ -46,7 +47,7 @@
     "vite-plugin-pwa": "^1.3.0",
     "vitest": "^4.1.10",
     "vue-tsc": "^3.3.9",
-    "wrangler": "4.116.0"
+    "wrangler": "4.118.0"
   },
   "packageManager": "pnpm@10.25.0"
 }

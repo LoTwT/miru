@@ -2,6 +2,8 @@ packages:
   - .
 
 overrides:
+  # Miniflare currently pins undici@7.28.0, which is affected by multiple advisories.
+  "miniflare>undici": 7.29.0
   # Workbox's build-only Jake chain otherwise resolves vulnerable brace-expansion@2.
   "jake@10.9.4>filelist": 2.0.2
   # Miru does not use the optional asset generator, which pins vulnerable sharp@0.33.
