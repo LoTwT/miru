@@ -42,10 +42,20 @@ export interface MarkdownBody {
 
 export interface PdfBody {
   documentId: string
+  bytes: ArrayBuffer
+  mimeType: 'application/pdf'
+  byteSize: number
+  schemaVersion: 2
+}
+
+export interface LegacyPdfBody {
+  documentId: string
   blob: Blob
   mimeType: 'application/pdf'
   byteSize: number
 }
+
+export type StoredPdfBody = PdfBody | LegacyPdfBody
 
 export interface MarkdownReadingPosition {
   documentId: string
