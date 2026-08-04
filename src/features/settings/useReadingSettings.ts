@@ -18,6 +18,7 @@ import type { ReadingPalette } from '@/lib/theme/readingThemeContract'
 
 import {
   createLocalFontFamilyId,
+  createLocalFontFaceFamily,
   customizableReadingTokens,
   defaultReadingSettings,
   fixCustomThemeToAA,
@@ -59,15 +60,9 @@ import {
   writePersistedReadingPresets,
 } from './readingPresets'
 import type { ReadingPreset, ReadingPresetSnapshot } from './readingPresets'
-import {
-  createLocalFontFace,
-  createLocalFontFaceFamily,
-  createLocalFontOption,
-  createLocalFontStore,
-  normalizeLocalFontName,
-  validateLocalFontFile,
-} from './localFonts'
-import type { LocalFontOption, LocalFontRecord } from './localFonts'
+import type { createLocalFontStore, LocalFontOption, LocalFontRecord } from './localFonts'
+
+type LocalFontStore = ReturnType<typeof createLocalFontStore>
 
 export interface ReadingCustomizationState {
   fontSize: ReadingFontSizeId
@@ -92,12 +87,12 @@ export interface ReadingSettingsMessage {
 export function useReadingSettings(options: {
   root?: HTMLElement
   storage?: Storage
-  localFontStore?: ReturnType<typeof createLocalFontStore>
+  localFontStore?: LocalFontStore
   systemDark?: boolean
 } = {}) {
   const root = options.root ?? document.documentElement
   const storage = options.storage ?? localStorage
-  const localFontStore = options.localFontStore ?? createLocalFontStore()
+  const providedLocalFontStore = options.localFontStore
   const systemDark = shallowRef(options.systemDark ?? resolveSystemDarkScheme())
   const persisted = readPersistedReadingSettings(storage)
   const remoteImageMode = persisted?.remoteImageMode
@@ -105,6 +100,12 @@ export function useReadingSettings(options: {
   const presets = shallowRef<ReadingPreset[]>(readPersistedReadingPresets(storage))
   const localFonts = shallowRef<LocalFontOption[]>([])
   const localFontMessage = shallowRef<ReadingSettingsMessage | null>(null)
+  const registeredLocalFontIds = new Set<string>()
+  const pendingLocalFontRegistrations = new Map<string, Promise<boolean>>()
+  const localFontRegistrationGenerations = new Map<string, number>()
+  let localFontStorePromise: Promise<LocalFontStore> | null = null
+  let localFontsInitializationPromise: Promise<void> | null = null
+  let fontFamilyLoadSequence = 0
   const resolvedTheme = computed(() => resolveReadingThemeState({
     version: 2,
     themeStyle: state.themeStyle,
@@ -113,6 +114,7 @@ export function useReadingSettings(options: {
     customTheme: state.customTheme,
   }, systemDark.value))
   const effectiveColorScheme = computed<'light' | 'dark'>(() => resolvedTheme.value.effectiveColorScheme)
+  const hasActiveLocalFont = computed(() => isLocalFontFamilyId(state.fontFamily))
 
   const isDefault = computed(() =>
     state.fontSize === defaultReadingSettings.fontSize
@@ -137,21 +139,65 @@ export function useReadingSettings(options: {
     return presets.value.find(preset => arePresetSnapshotsEqual(preset.settings, currentSnapshot))?.name ?? '自定义（未保存）'
   })
 
-  async function initializeLocalFonts(): Promise<void> {
+  function getLocalFontStore(): Promise<LocalFontStore> {
+    if (providedLocalFontStore) {
+      return Promise.resolve(providedLocalFontStore)
+    }
+
+    localFontStorePromise ??= loadLocalFontsModule().then(({ createLocalFontStore }) => createLocalFontStore())
+    return localFontStorePromise
+  }
+
+  function initializeLocalFonts(): Promise<void> {
+    if (localFontsInitializationPromise) {
+      return localFontsInitializationPromise
+    }
+
+    const initialization = performLocalFontInitialization()
+    localFontsInitializationPromise = initialization
+    void initialization.catch(() => {
+      if (localFontsInitializationPromise === initialization) {
+        localFontsInitializationPromise = null
+      }
+    })
+    return initialization
+  }
+
+  async function performLocalFontInitialization(): Promise<void> {
+    const loadSequence = ++fontFamilyLoadSequence
+    const [localFontStore, { createLocalFontOption }] = await Promise.all([
+      getLocalFontStore(),
+      loadLocalFontsModule(),
+    ])
     const records = await localFontStore.listFonts()
-    const registeredFonts: LocalFontOption[] = []
+    localFonts.value = records.map(createLocalFontOption)
+    if (loadSequence !== fontFamilyLoadSequence) {
+      return
+    }
 
-    for (const record of records) {
-      const registered = await registerLocalFont(record)
+    let normalizedFontFamily = fallbackMissingLocalFont(state.fontFamily, localFonts.value)
 
-      if (registered) {
-        registeredFonts.push(registered)
+    if (isLocalFontFamilyId(normalizedFontFamily)) {
+      const localFontId = localFontIdFromFamilyId(normalizedFontFamily)
+      const registered = await ensureLocalFontRegistered(localFontId)
+      if (loadSequence !== fontFamilyLoadSequence) {
+        if (state.fontFamily !== normalizedFontFamily) {
+          unloadLocalFontFace(localFontId)
+          registeredLocalFontIds.delete(localFontId)
+        }
+        return
+      }
+
+      if (!registered) {
+        normalizedFontFamily = defaultReadingSettings.fontFamily
+        localFontMessage.value = { kind: 'error', text: '当前字体无法加载,已恢复默认字体。' }
       }
     }
 
-    localFonts.value = registeredFonts
-    const normalizedFontFamily = fallbackMissingLocalFont(state.fontFamily, localFonts.value)
     await loadOptionalReadingFont(normalizedFontFamily)
+    if (loadSequence !== fontFamilyLoadSequence) {
+      return
+    }
 
     if (normalizedFontFamily !== state.fontFamily) {
       state.fontFamily = normalizedFontFamily
@@ -205,9 +251,14 @@ export function useReadingSettings(options: {
   }
 
   function updateFontFamily(value: ReadingFontFamilyId): void {
+    const loadSequence = ++fontFamilyLoadSequence
     state.fontFamily = fallbackMissingLocalFont(value, localFonts.value)
     void loadOptionalReadingFont(state.fontFamily)
     commit()
+
+    if (isLocalFontFamilyId(state.fontFamily)) {
+      void activateLocalFontFamily(state.fontFamily, loadSequence)
+    }
   }
 
   function updateThemeStyle(value: ReadingThemeStyleId): void {
@@ -249,6 +300,7 @@ export function useReadingSettings(options: {
   }
 
   function reset(): void {
+    fontFamilyLoadSequence += 1
     state.fontSize = defaultReadingSettings.fontSize
     state.measure = defaultReadingSettings.measure
     state.lineHeight = defaultReadingSettings.lineHeight
@@ -300,13 +352,22 @@ export function useReadingSettings(options: {
       return false
     }
 
+    const loadSequence = ++fontFamilyLoadSequence
     applySnapshotToState(state, preset.settings, localFonts.value)
     void loadOptionalReadingFont(state.fontFamily)
     commit()
+
+    if (isLocalFontFamilyId(state.fontFamily)) {
+      void activateLocalFontFamily(state.fontFamily, loadSequence)
+    }
     return true
   }
 
   async function uploadLocalFont(file: File): Promise<boolean> {
+    const {
+      normalizeLocalFontName,
+      validateLocalFontFile,
+    } = await loadLocalFontsModule()
     const validation = validateLocalFontFile(file)
 
     if (!validation.ok) {
@@ -329,9 +390,9 @@ export function useReadingSettings(options: {
     let record: LocalFontRecord
 
     try {
-      const fileBlob = new Blob([await file.arrayBuffer()], { type: file.type })
+      const localFontStore = await getLocalFontStore()
       record = await localFontStore.addFont({
-        file: fileBlob,
+        file,
         fileName: file.name,
         mimeType: file.type,
         name,
@@ -345,12 +406,15 @@ export function useReadingSettings(options: {
     const registered = await registerLocalFont(record)
 
     if (!registered) {
+      const localFontStore = await getLocalFontStore()
       await localFontStore.deleteFont(record.id)
       localFontMessage.value = { kind: 'error', text: '字体无法解析,请换一个字体文件。' }
       return false
     }
 
+    registeredLocalFontIds.add(record.id)
     localFonts.value = [...localFonts.value, registered]
+    fontFamilyLoadSequence += 1
     state.fontFamily = createLocalFontFamilyId(registered.id)
     localFontMessage.value = validation.warning
       ? { kind: 'warning', text: validation.warning }
@@ -360,6 +424,7 @@ export function useReadingSettings(options: {
   }
 
   async function renameLocalFont(id: string, name: string): Promise<boolean> {
+    const { createLocalFontOption, normalizeLocalFontName } = await loadLocalFontsModule()
     const normalizedName = normalizeLocalFontName(name)
 
     if (!normalizedName) {
@@ -372,6 +437,7 @@ export function useReadingSettings(options: {
       return false
     }
 
+    const localFontStore = await getLocalFontStore()
     const nextRecord = await localFontStore.renameFont(id, normalizedName)
 
     if (!nextRecord) {
@@ -393,11 +459,13 @@ export function useReadingSettings(options: {
       return false
     }
 
+    const localFontStore = await getLocalFontStore()
     await localFontStore.deleteFont(id)
-    unloadLocalFontFace(id)
+    invalidateLocalFontRegistration(id)
     localFonts.value = localFonts.value.filter(font => font.id !== id)
 
     if (state.fontFamily === createLocalFontFamilyId(id)) {
+      fontFamilyLoadSequence += 1
       state.fontFamily = defaultReadingSettings.fontFamily
       commit()
     }
@@ -455,7 +523,7 @@ export function useReadingSettings(options: {
   }
 
   function hasLocalFontName(name: string, ignoredFontId?: string): boolean {
-    const normalizedName = normalizeLocalFontName(name).toLowerCase()
+    const normalizedName = name.toLowerCase()
     return localFonts.value.some(font => font.id !== ignoredFontId && font.name.toLowerCase() === normalizedName)
   }
 
@@ -466,6 +534,87 @@ export function useReadingSettings(options: {
   function commit(): void {
     applyCurrent()
     persist()
+  }
+
+  async function activateLocalFontFamily(
+    fontFamily: ReadingFontFamilyId,
+    loadSequence: number,
+  ): Promise<void> {
+    if (!isLocalFontFamilyId(fontFamily)) {
+      return
+    }
+
+    const localFontId = localFontIdFromFamilyId(fontFamily)
+
+    const registered = await ensureLocalFontRegistered(localFontId)
+
+    if (loadSequence !== fontFamilyLoadSequence || state.fontFamily !== fontFamily) {
+      return
+    }
+
+    if (!registered) {
+      state.fontFamily = defaultReadingSettings.fontFamily
+      localFontMessage.value = { kind: 'error', text: '这个字体无法加载,已恢复默认字体。' }
+      commit()
+      return
+    }
+
+    applyCurrent()
+  }
+
+  function ensureLocalFontRegistered(id: string): Promise<boolean> {
+    if (registeredLocalFontIds.has(id) || hasRegisteredLocalFontFace(id)) {
+      registeredLocalFontIds.add(id)
+      return Promise.resolve(true)
+    }
+
+    const pendingRegistration = pendingLocalFontRegistrations.get(id)
+
+    if (pendingRegistration) {
+      return pendingRegistration
+    }
+
+    const registrationGeneration = localFontRegistrationGenerations.get(id) ?? 0
+    const registration = (async () => {
+      try {
+        const localFontStore = await getLocalFontStore()
+        const record = await localFontStore.getFont(id)
+
+        if (!record) {
+          return false
+        }
+
+        const registered = await registerLocalFont(record)
+
+        if (!registered) {
+          return false
+        }
+
+        if (
+          (localFontRegistrationGenerations.get(id) ?? 0) !== registrationGeneration
+          || !localFonts.value.some(font => font.id === id)
+        ) {
+          unloadLocalFontFace(id)
+          registeredLocalFontIds.delete(id)
+          return false
+        }
+
+        registeredLocalFontIds.add(id)
+        return true
+      }
+      catch {
+        return false
+      }
+    })().finally(() => pendingLocalFontRegistrations.delete(id))
+
+    pendingLocalFontRegistrations.set(id, registration)
+    return registration
+  }
+
+  function invalidateLocalFontRegistration(id: string): void {
+    localFontRegistrationGenerations.set(id, (localFontRegistrationGenerations.get(id) ?? 0) + 1)
+    registeredLocalFontIds.delete(id)
+    unloadLocalFontFace(id)
   }
 
   function persist(): void {
@@ -514,6 +663,7 @@ export function useReadingSettings(options: {
     localFontMessage: readonly(localFontMessage),
     isDefault,
     effectiveColorScheme,
+    hasActiveLocalFont,
     activePresetName,
     initializeLocalFonts,
     applyCurrent,
@@ -544,6 +694,7 @@ export function useReadingSettings(options: {
 
 async function registerLocalFont(record: LocalFontRecord): Promise<LocalFontOption | null> {
   try {
+    const { createLocalFontFace, createLocalFontOption } = await loadLocalFontsModule()
     const fontFace = await createLocalFontFace(record)
     document.fonts.add(fontFace)
     return createLocalFontOption(record)
@@ -551,6 +702,15 @@ async function registerLocalFont(record: LocalFontRecord): Promise<LocalFontOpti
   catch {
     return null
   }
+}
+
+function hasRegisteredLocalFontFace(id: string): boolean {
+  if (typeof document === 'undefined' || !('fonts' in document)) {
+    return false
+  }
+
+  const fontFaceFamily = createLocalFontFaceFamily(id)
+  return Array.from(document.fonts).some(fontFace => fontFace.family === fontFaceFamily)
 }
 
 function unloadLocalFontFace(id: string): void {
@@ -561,6 +721,10 @@ function unloadLocalFontFace(id: string): void {
       document.fonts.delete(fontFace)
     }
   }
+}
+
+function loadLocalFontsModule() {
+  return import('./localFonts')
 }
 
 function applySnapshotToState(

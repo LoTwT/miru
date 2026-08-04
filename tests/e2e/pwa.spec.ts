@@ -595,6 +595,7 @@ test.describe('PWA install and offline shell', () => {
     expect(cachedPaths.some(pathname => pathname === '/' || pathname === '/index.html')).toBe(true)
     expect(cachedPaths.some(pathname => /\/assets\/bricolage-grotesque-[^/]+\.woff2$/.test(pathname))).toBe(true)
     expect(cachedPaths.some(pathname => /\/assets\/space-mono-[^/]+\.woff2$/.test(pathname))).toBe(true)
+    expect(cachedPaths.some(pathname => /\/assets\/PdfViewer-[^/]+\.js$/.test(pathname))).toBe(true)
     expect(cachedPaths.some(pathname => /\/assets\/literata-[^/]+\.woff2$/.test(pathname))).toBe(false)
     expect(cachedUrls.some(url => url.includes('example.com'))).toBe(false)
     expect(cachedUrls.some(url => url.includes('Offline%20file'))).toBe(false)

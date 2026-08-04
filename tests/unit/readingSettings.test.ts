@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  createLocalFontFamilyId,
   deriveCustomThemeTokenOverrides,
   fixCustomThemeToAA,
   readingColorSchemeOptions,
@@ -9,6 +10,8 @@ import {
   sepiaContrastTokenOverrides,
   sepiaThemeTokenOverrides,
 } from '@/features/settings/readingSettingsOptions'
+import { createLocalFontStore } from '@/features/settings/localFonts'
+import type { LocalFontMetadata, LocalFontRecord } from '@/features/settings/localFonts'
 import { useReadingSettings } from '@/features/settings/useReadingSettings'
 import {
   legacyReadingPresetsStorageKey,
@@ -64,6 +67,11 @@ describe('reading customization settings', () => {
   beforeEach(() => {
     root = document.createElement('html')
     storage = createStorage()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    Reflect.deleteProperty(document, 'fonts')
   })
 
   it('writes only selected override tokens and persists them', () => {
@@ -927,6 +935,108 @@ describe('reading customization settings', () => {
     expect(restored.state.fontFamily).toBe('lxgw-wenkai')
   })
 
+  it('stores an uploaded local font without cloning its file blob', async () => {
+    const { store } = createMockLocalFontStore([])
+    const addFont = vi.mocked(store.addFont)
+    addFont.mockImplementation(async input => ({
+      ...createLocalFontRecord('font-uploaded', input.name),
+      fileName: input.fileName,
+      mimeType: input.mimeType,
+      byteSize: input.file.size,
+      blob: input.file,
+    }))
+    installFontFaceMock()
+    const file = new File([new Uint8Array([0, 1, 2, 3])], 'Quiet Serif.woff2', {
+      type: 'font/woff2',
+    })
+    const settings = useReadingSettings({ root, storage, localFontStore: store })
+
+    await expect(settings.uploadLocalFont(file)).resolves.toBe(true)
+
+    expect(addFont).toHaveBeenCalledOnce()
+    expect(addFont.mock.calls[0]?.[0]).toMatchObject({
+      fileName: file.name,
+      mimeType: file.type,
+      name: 'Quiet Serif',
+    })
+    expect(addFont.mock.calls[0]?.[0].file).toBe(file)
+  })
+
+  it('loads only the selected local font at startup and lazily loads another on selection', async () => {
+    const first = createLocalFontRecord('font-one', 'Quiet Serif')
+    const second = createLocalFontRecord('font-two', 'Reading Sans')
+    const { store, getFont, listFonts } = createMockLocalFontStore([first, second])
+    const addedFontFaces = installFontFaceMock()
+    writePersistedReadingSettings({
+      version: 2,
+      themeStyle: 'brutal',
+      colorScheme: 'system',
+      fontFamily: createLocalFontFamilyId(second.id),
+    }, storage)
+    const settings = useReadingSettings({ root, storage, localFontStore: store })
+
+    await settings.initializeLocalFonts()
+
+    expect(listFonts).toHaveBeenCalledOnce()
+    expect(settings.localFonts.value.map(font => font.id)).toEqual([first.id, second.id])
+    expect(getFont).toHaveBeenCalledTimes(1)
+    expect(getFont).toHaveBeenCalledWith(second.id)
+    expect(Array.from(addedFontFaces, fontFace => fontFace.family)).toEqual([
+      'MiruLocalFont-font-two',
+    ])
+
+    settings.updateFontFamily(createLocalFontFamilyId(first.id))
+
+    await vi.waitFor(() => {
+      expect(getFont).toHaveBeenCalledTimes(2)
+      expect(addedFontFaces.size).toBe(2)
+    })
+    expect(getFont).toHaveBeenLastCalledWith(first.id)
+    expect(Array.from(addedFontFaces, fontFace => fontFace.family)).toEqual([
+      'MiruLocalFont-font-two',
+      'MiruLocalFont-font-one',
+    ])
+  })
+
+  it('does not let a slow startup font restore overwrite a newer font choice', async () => {
+    const localFont = createLocalFontRecord('font-slow', 'Slow Serif')
+    const { store } = createMockLocalFontStore([localFont])
+    const fontLoading = installDeferredFontFaceMock()
+    writePersistedReadingSettings({
+      version: 2,
+      themeStyle: 'brutal',
+      colorScheme: 'system',
+      fontFamily: createLocalFontFamilyId(localFont.id),
+    }, storage)
+    const settings = useReadingSettings({ root, storage, localFontStore: store })
+
+    const initialization = settings.initializeLocalFonts()
+    await vi.waitFor(() => expect(fontLoading.pendingLoads).toHaveLength(1))
+    settings.updateFontFamily('system-sans')
+    fontLoading.resolveNext()
+    await initialization
+
+    expect(settings.state.fontFamily).toBe('system-sans')
+    expect(fontLoading.fontFaces.size).toBe(0)
+  })
+
+  it('discards a font registration that finishes after the font was deleted', async () => {
+    const localFont = createLocalFontRecord('font-deleted', 'Deleted Serif')
+    const { store } = createMockLocalFontStore([localFont])
+    const fontLoading = installDeferredFontFaceMock()
+    const settings = useReadingSettings({ root, storage, localFontStore: store })
+    await settings.initializeLocalFonts()
+
+    settings.updateFontFamily(createLocalFontFamilyId(localFont.id))
+    await vi.waitFor(() => expect(fontLoading.pendingLoads).toHaveLength(1))
+    await settings.deleteLocalFont(localFont.id)
+    fontLoading.resolveNext()
+    await vi.waitFor(() => expect(settings.state.fontFamily).toBe('serif'))
+
+    expect(settings.localFonts.value).toHaveLength(0)
+    expect(fontLoading.fontFaces.size).toBe(0)
+  })
+
   it('reset clears customization overrides without losing remote image mode', () => {
     storage.setItem('miru:reading-settings:v1', JSON.stringify({
       version: 1,
@@ -1027,6 +1137,122 @@ describe('reading customization settings', () => {
     }
   })
 })
+
+function createLocalFontRecord(id: string, name: string): LocalFontRecord {
+  const timestamp = '2026-01-01T00:00:00.000Z'
+
+  return {
+    id,
+    name,
+    fileName: `${name}.woff2`,
+    mimeType: 'font/woff2',
+    byteSize: 4,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    schemaVersion: 2,
+    blob: new Blob(['font'], { type: 'font/woff2' }),
+  }
+}
+
+function createMockLocalFontStore(records: LocalFontRecord[]) {
+  const metadata = records.map(({ blob: _blob, ...record }) => record satisfies LocalFontMetadata)
+  const recordsById = new Map(records.map(record => [record.id, record]))
+  const listFonts = vi.fn(async () => metadata)
+  const getFont = vi.fn(async (id: string) => recordsById.get(id) ?? null)
+  const store = {
+    addFont: vi.fn(),
+    close: vi.fn(),
+    countFonts: vi.fn(),
+    deleteFont: vi.fn(),
+    getFont,
+    listFonts,
+    renameFont: vi.fn(),
+  } as unknown as ReturnType<typeof createLocalFontStore>
+
+  return { store, getFont, listFonts }
+}
+
+function installFontFaceMock(): Set<FontFace> {
+  const fontFaces = new Set<FontFace>()
+  const fontSet = {
+    add(fontFace: FontFace) {
+      fontFaces.add(fontFace)
+      return fontSet
+    },
+    delete(fontFace: FontFace) {
+      return fontFaces.delete(fontFace)
+    },
+    [Symbol.iterator]() {
+      return fontFaces[Symbol.iterator]()
+    },
+  } as unknown as FontFaceSet
+
+  class TestFontFace {
+    family: string
+
+    constructor(family: string) {
+      this.family = family
+    }
+
+    async load(): Promise<this> {
+      return this
+    }
+  }
+
+  vi.stubGlobal('FontFace', TestFontFace)
+  Object.defineProperty(document, 'fonts', {
+    configurable: true,
+    value: fontSet,
+  })
+  return fontFaces
+}
+
+function installDeferredFontFaceMock() {
+  const fontFaces = new Set<FontFace>()
+  const pendingLoads: Array<() => void> = []
+  const fontSet = {
+    add(fontFace: FontFace) {
+      fontFaces.add(fontFace)
+      return fontSet
+    },
+    delete(fontFace: FontFace) {
+      return fontFaces.delete(fontFace)
+    },
+    [Symbol.iterator]() {
+      return fontFaces[Symbol.iterator]()
+    },
+  } as unknown as FontFaceSet
+
+  class DeferredFontFace {
+    family: string
+
+    constructor(family: string) {
+      this.family = family
+    }
+
+    load(): Promise<this> {
+      return new Promise(resolve => pendingLoads.push(() => resolve(this)))
+    }
+  }
+
+  vi.stubGlobal('FontFace', DeferredFontFace)
+  Object.defineProperty(document, 'fonts', {
+    configurable: true,
+    value: fontSet,
+  })
+
+  return {
+    fontFaces,
+    pendingLoads,
+    resolveNext() {
+      const resolve = pendingLoads.shift()
+      if (!resolve) {
+        throw new Error('No pending font load')
+      }
+      resolve()
+    },
+  }
+}
 
 function contrastRatio(colorA: string, colorB: string): number {
   const luminanceA = relativeLuminance(colorA)

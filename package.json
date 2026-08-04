@@ -14,11 +14,14 @@
     "typecheck": "vue-tsc -b",
     "test": "vitest run",
     "test:unit": "vitest run",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "bench:reader": "vitest bench tests/bench/reader.bench.ts --run",
+    "check:bundle": "node scripts/check-bundle-budget.mjs"
   },
   "dependencies": {
     "@ayingott/theme": "0.2.0",
     "@fontsource-variable/newsreader": "^5.3.0",
+    "@tanstack/vue-virtual": "^3.13.35",
     "dompurify": "^3.4.12",
     "idb": "^8.0.3",
     "markdown-it": "^15.0.0",

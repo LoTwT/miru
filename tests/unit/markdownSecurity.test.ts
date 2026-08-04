@@ -96,12 +96,22 @@ describe('markdown renderer security baseline', () => {
     expect(inputs[1].disabled).toBe(true)
   })
 
-  it('highlights supported fenced code blocks after lazy-loading the language grammar', async () => {
+  it('emits both syntax themes so color-scheme changes do not require rerendering', async () => {
     const html = await renderMarkdown('```ts\nconst answer: number = 42\n```')
 
     expect(html.value).toContain('class="shiki')
     expect(html.value).toContain('const')
     expect(html.value).toContain('github-light')
     expect(html.value).toContain('--shiki-dark')
+  })
+
+  it('can render fenced code before the optional syntax highlighter loads', async () => {
+    const html = await renderMarkdown('```ts\nconst answer: number = 42\n```', {
+      syntaxHighlighting: false,
+    })
+
+    expect(html.value).toContain('<pre><code class="language-ts">')
+    expect(html.value).toContain('const answer: number = 42')
+    expect(html.value).not.toContain('class="shiki')
   })
 })
