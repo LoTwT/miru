@@ -16,7 +16,8 @@
     "test:unit": "vitest run",
     "test:e2e": "playwright test",
     "bench:reader": "vitest bench tests/bench/reader.bench.ts --run",
-    "check:bundle": "node scripts/check-bundle-budget.mjs"
+    "check:bundle": "node scripts/check-bundle-budget.mjs",
+    "check:deploy": "node scripts/check-deploy-contract.mjs"
   },
   "dependencies": {
     "@ayingott/theme": "0.2.0",
