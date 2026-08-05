@@ -4,6 +4,7 @@
 > **Already shipped — reuse, don't rebuild**: **quiet TOC / 大纲导航** (task #34: desktop rail / mobile bottom-sheet, adaptive, only on heading-rich docs) + reading-position persistence + the floating affordance (input menu) + reading tokens + focus-ring + reduced-motion.
 > **New this round**: **阅读进度 (reading progress) · 文内搜索 (in-doc search) · 书签 (bookmarks)** — plus integrating them with the existing TOC.
 > **Aesthetic constraint**: miru is quiet, reading-first ("像翻开一本排版精良的小册子"). Every addition must be calm + non-intrusive; reuse existing surfaces (TOC panel, floating affordance) rather than adding heavy chrome.
+> **Status update**: The original round shipped Markdown search first. The phase-2 PDF search follow-up has since shipped with progressive text extraction, match navigation, and highlights in paged and continuous-scroll modes.
 
 ---
 
@@ -20,7 +21,7 @@
 - Type → highlight **all matches** in the doc (subtle accent-tinted highlight, not garish); show **match count + position「3 / 12」**; **prev/next** (↑/↓ or Enter/Shift+Enter) scrolls to + emphasizes the active match; **Esc** closes + clears.
 - Case-insensitive default; live (debounced) as you type.
 - **Markdown first** (text is directly searchable + highlightable in the rendered DOM).
-- **PDF search = follow-up / phase 2** (pdf.js needs a text layer; heavier — scope separately so it doesn't block markdown search). Flag for TL: in PDF mode, either disable search with a clear "PDF 搜索即将支持" or scope a text-layer pass later.
+- **PDF search** was deferred from the original round so Markdown search could ship first. The phase-2 follow-up is now implemented with pdf.js text extraction, progressive page indexing, match navigation, and highlights in paged and continuous-scroll modes.
 - Perf: debounce + efficient highlight on long docs (no jank); don't re-layout the whole doc per keystroke.
 - a11y: search input labeled, match-nav keyboard-operable, active match announced (aria-live "第 3 个,共 12 个"), focus management on open/close.
 
@@ -34,18 +35,18 @@
 
 ## 4. Slicing / priority (recommend confirming PM-Akira's A/B split)
 - **A (do first — closest to reading experience)**: **阅读进度** (top progress line + position restore) + TOC integration (it exists; just wire progress + the bookmarks section into it). Low risk, high felt value.
-- **B**: **文内搜索 (markdown)** + **书签**. Depends on this scope. PDF search deferred to a phase-2 follow-up.
+- **B**: **文内搜索 (markdown)** + **书签**. Depends on this scope. PDF search was deferred from this slice and later shipped as the phase-2 follow-up.
 - Engineering health (item 5: chunk split #5.1, focus-ring unify #5.2) runs after, not blocking.
 
 ## 5. Acceptance (per feature)
 - **进度**: line accurate to scroll/page; position restored on reopen; quiet (doesn't intrude on reading surface); paged + scroll PDF both; a11y + reduced-motion.
-- **搜索**: all matches highlighted; count + prev/next nav + active emphasis; Cmd/Ctrl+F open + Esc close; no jank on long docs; markdown works (PDF clearly deferred-or-disabled); a11y (labeled, keyboard, aria-live).
+- **搜索**: all matches highlighted; count + prev/next nav + active emphasis; Cmd/Ctrl+F open + Esc close; no jank on long docs; Markdown and PDF both work, with PDF extraction progress and clear handling for pages without searchable text; a11y (labeled, keyboard, aria-live).
 - **书签**: add (heading + arbitrary position) / remove / jump; persist per-doc; listed in TOC panel; a11y.
 
 ## 6. a11y / motion (all three)
 Keyboard-reachable + `aria` + focus-visible (reuse focus-ring; note item 5.2 will unify it全站); AA contrast for highlight + progress + bookmark UI (light + dark reading themes); reduced-motion → instant (no fill/scroll animation).
 
 ## 7. Out of scope (note)
-- PDF in-doc search → phase-2 follow-up (text layer).
+- PDF in-doc search was out of scope for the original round and later shipped as the phase-2 follow-up.
 - Cross-document search / global bookmarks → not this round (per-doc only).
 - TOC redesign → not needed (reuse #34).
