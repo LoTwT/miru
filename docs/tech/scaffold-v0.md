@@ -53,7 +53,7 @@
 ## Verification Notes
 
 - Playwright config forces `NO_PROXY` for `127.0.0.1,localhost` so local preview checks do not hit the developer machine proxy.
-- Production build currently emits a lazy `renderer` chunk of about 912 kB (186 kB gzip) because Shiki carries the explicit language/theme set. The initial shell stays about 72 kB (29 kB gzip). Monitor this before release if more languages are added.
+- Markdown rendering and syntax highlighting stay outside the initial shell, and language grammars load as separate lazy chunks. Use `pnpm build` followed by `pnpm check:bundle` as the release baseline. Re-run both commands when changing Shiki languages, themes, or eager imports.
 
 ## Review Notes
 

@@ -162,7 +162,8 @@ For the V0 release gate, attach or link:
 - SPA fallback and missing-asset SPA-fallback evidence.
 - Browser screenshots or trace for desktop/mobile and light/dark.
 - R-PERF-1 mobile 1k/3k markdown reading evidence.
-- Known non-blocking risks, including the Shiki lazy renderer chunk monitor item.
+- Bundle-budget output from `pnpm check:bundle`, with any regression called out explicitly.
+- Any known non-blocking release risks.
 
 ## Source References
 
