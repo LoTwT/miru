@@ -11,8 +11,12 @@ import type { LibrarySource } from '@/features/library/types'
 import type { ReaderDocument, ReaderError } from '@/types/reader'
 
 interface UseDocumentInputOptions {
-  onDocument: (document: ReaderDocument) => void
-  onPdf?: (file: File) => void | Promise<void>
+  onDocument: (document: ReaderDocument, operation: DocumentInputOperation) => void
+  onPdf?: (file: File, operation: DocumentInputOperation) => void | Promise<void>
+}
+
+export interface DocumentInputOperation {
+  readonly isCurrent: () => boolean
 }
 
 export const MAX_MARKDOWN_INPUT_BYTES = 5 * 1024 * 1024
@@ -39,11 +43,11 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
   }
 
   async function loadFromClipboard(): Promise<void> {
-    const sequence = beginInputOperation()
+    const operation = beginInputOperation()
 
     try {
       const text = await navigator.clipboard.readText()
-      if (sequence !== inputSequence) {
+      if (!operation.isCurrent()) {
         return
       }
 
@@ -63,10 +67,10 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
         return
       }
 
-      commitDocument(text, 'paste', 'Pasted markdown', { kind: 'paste' })
+      commitDocument(text, 'paste', 'Pasted markdown', operation, { kind: 'paste' })
     }
     catch {
-      if (sequence !== inputSequence) {
+      if (!operation.isCurrent()) {
         return
       }
 
@@ -80,28 +84,29 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
     label = 'Markdown',
     librarySource?: LibrarySource,
   ): void {
-    beginInputOperation()
+    const operation = beginInputOperation()
 
     if (exceedsTextByteLimit(markdown, MAX_MARKDOWN_INPUT_BYTES)) {
       setMarkdownSizeError()
       return
     }
 
-    commitDocument(markdown, source, label, librarySource)
+    commitDocument(markdown, source, label, operation, librarySource)
   }
 
   function commitDocument(
     markdown: string,
     source: ReaderDocument['source'],
     label: string,
+    operation: DocumentInputOperation,
     librarySource?: LibrarySource,
   ): void {
     error.value = null
-    options.onDocument({ source, label, markdown, librarySource })
+    options.onDocument({ source, label, markdown, librarySource }, operation)
   }
 
   async function loadFromFile(file: File): Promise<void> {
-    const sequence = beginInputOperation()
+    const operation = beginInputOperation()
 
     if (isPdfFile(file)) {
       if (!options.onPdf) {
@@ -114,12 +119,12 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
         return
       }
 
-      if (sequence !== inputSequence) {
+      if (!operation.isCurrent()) {
         return
       }
 
       error.value = null
-      await options.onPdf(file)
+      await options.onPdf(file, operation)
       return
     }
 
@@ -134,7 +139,7 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
     }
 
     const text = await file.text()
-    if (sequence !== inputSequence) {
+    if (!operation.isCurrent()) {
       return
     }
 
@@ -143,7 +148,7 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
       return
     }
 
-    commitDocument(text, 'file', file.name, {
+    commitDocument(text, 'file', file.name, operation, {
       kind: 'file',
       fileName: file.name,
       mimeType: file.type || 'text/plain',
@@ -151,7 +156,7 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
   }
 
   async function loadFromUrl(url: string): Promise<void> {
-    const sequence = beginInputOperation()
+    const operation = beginInputOperation()
 
     const normalized = normalizeMarkdownUrl(url)
 
@@ -183,11 +188,11 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
 
       const text = await readBoundedResponseText(response, MAX_MARKDOWN_INPUT_BYTES)
 
-      if (controller.signal.aborted || sequence !== inputSequence) {
+      if (controller.signal.aborted || !operation.isCurrent()) {
         return
       }
 
-      commitDocument(text, 'url', normalized.inputUrl, {
+      commitDocument(text, 'url', normalized.inputUrl, operation, {
         kind: 'url',
         inputUrl: normalized.inputUrl,
         requestUrl: normalized.requestUrl,
@@ -195,7 +200,7 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
       })
     }
     catch (reason) {
-      if (controller.signal.aborted || sequence !== inputSequence) {
+      if (controller.signal.aborted || !operation.isCurrent()) {
         return
       }
 
@@ -235,10 +240,13 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
     controller?.abort()
   }
 
-  function beginInputOperation(): number {
+  function beginInputOperation(): DocumentInputOperation {
     inputSequence += 1
+    const sequence = inputSequence
     cancelActiveUrlFetch()
-    return inputSequence
+    return {
+      isCurrent: () => sequence === inputSequence,
+    }
   }
 
   function setMarkdownSizeError(): void {
