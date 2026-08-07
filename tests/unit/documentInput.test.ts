@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   MAX_MARKDOWN_INPUT_BYTES,
   MAX_PDF_INPUT_BYTES,
+  type DocumentInputOperation,
   useDocumentInput,
 } from '@/features/input/useDocumentInput'
 import type { ReaderDocument } from '@/types/reader'
@@ -264,9 +265,52 @@ describe('bounded URL loading', () => {
   })
 })
 
+describe('document input operation ordering', () => {
+  it('invalidates a published document operation as soon as a newer input starts', () => {
+    const operations: DocumentInputOperation[] = []
+    const input = createDocumentInput((_document, operation) => operations.push(operation))
+
+    input.loadFromText('# Earlier')
+    expect(operations[0]?.isCurrent()).toBe(true)
+
+    input.loadFromText('# Latest')
+
+    expect(operations[0]?.isCurrent()).toBe(false)
+    expect(operations[1]?.isCurrent()).toBe(true)
+  })
+
+  it('uses the same operation ordering across PDF and Markdown inputs', async () => {
+    const pdfCompletion = createDeferred<void>()
+    const documentOperations: DocumentInputOperation[] = []
+    let pdfOperation: DocumentInputOperation | undefined
+    const input = createDocumentInput(
+      (_document, operation) => documentOperations.push(operation),
+      (_file, operation) => {
+        pdfOperation = operation
+        return pdfCompletion.promise
+      },
+    )
+    const pdfLoad = input.loadFromFile({
+      name: 'Earlier.pdf',
+      size: 1,
+      type: 'application/pdf',
+    } as File)
+
+    expect(pdfOperation?.isCurrent()).toBe(true)
+
+    input.loadFromText('# Latest')
+
+    expect(pdfOperation?.isCurrent()).toBe(false)
+    expect(documentOperations[0]?.isCurrent()).toBe(true)
+
+    pdfCompletion.resolve()
+    await pdfLoad
+  })
+})
+
 function createDocumentInput(
-  onDocument: (document: ReaderDocument) => void,
-  onPdf?: (file: File) => void | Promise<void>,
+  onDocument: (document: ReaderDocument, operation: DocumentInputOperation) => void,
+  onPdf?: (file: File, operation: DocumentInputOperation) => void | Promise<void>,
 ) {
   const scope = effectScope()
   activeScopes.push(scope)

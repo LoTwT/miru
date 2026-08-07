@@ -8,7 +8,7 @@ import ReaderOutlineNavigation from '@/components/ReaderOutlineNavigation.vue'
 import ReaderSurface from '@/components/ReaderSurface.vue'
 import sampleMarkdown from '@/content/sample.md?raw'
 import { getBareUrlPaste } from '@/features/input/urlInput'
-import { useDocumentInput } from '@/features/input/useDocumentInput'
+import { useDocumentInput, type DocumentInputOperation } from '@/features/input/useDocumentInput'
 import { createLazyLibraryStore, isLibraryQuotaExceededError } from '@/features/library/lazyLibraryStore'
 import {
   createReaderBookmark,
@@ -115,11 +115,11 @@ let progressSyncFrame: number | undefined
 let findDebounceTimer: ReturnType<typeof setTimeout> | undefined
 
 const { error, isFetchingUrl, loadFromClipboard, loadFromFile, loadFromText, loadFromUrl } = useDocumentInput({
-  onDocument(document) {
-    void loadIncomingDocument(document)
+  onDocument(document, operation) {
+    void loadIncomingDocument(document, operation)
   },
-  onPdf(file) {
-    void loadIncomingPdf(file)
+  onPdf(file, operation) {
+    return loadIncomingPdf(file, operation)
   },
 })
 
@@ -785,7 +785,11 @@ function updateActiveOutlineId(id: string): void {
   activeOutlineId.value = id
 }
 
-async function loadIncomingDocument(document: ReaderDocument): Promise<void> {
+async function loadIncomingDocument(document: ReaderDocument, operation: DocumentInputOperation): Promise<void> {
+  if (!operation.isCurrent()) {
+    return
+  }
+
   libraryStatus.value = ''
   inputMenuStatus.value = ''
   pendingUrlImport.value = null
@@ -798,7 +802,7 @@ async function loadIncomingDocument(document: ReaderDocument): Promise<void> {
     documentState.label = document.label
     documentState.markdown = document.markdown
     appMode.value = 'reader'
-    await onDocumentLoaded(document.source)
+    await onDocumentLoaded(document.source, operation)
     return
   }
 
@@ -807,6 +811,10 @@ async function loadIncomingDocument(document: ReaderDocument): Promise<void> {
     const existingUrlEntry = source.kind === 'url'
       ? await libraryStore.findMarkdownEntryByUrl(source)
       : null
+
+    if (!operation.isCurrent()) {
+      return
+    }
 
     if (existingUrlEntry) {
       pendingUrlImport.value = {
@@ -820,14 +828,26 @@ async function loadIncomingDocument(document: ReaderDocument): Promise<void> {
     }
 
     await saveActiveReadingPosition()
+    if (!operation.isCurrent()) {
+      return
+    }
+
     const entry = await libraryStore.addMarkdownDocument({
       markdown: document.markdown,
       source,
       label: document.label,
     })
-    await activateNewMarkdownEntry(entry, document.markdown)
+    if (!operation.isCurrent()) {
+      return
+    }
+
+    await activateNewMarkdownEntry(entry, document.markdown, operation)
   }
   catch (reason) {
+    if (!operation.isCurrent()) {
+      return
+    }
+
     if (isLibraryQuotaExceededError(reason)) {
       libraryStatus.value = '本机存储空间不够, 没有加入文库。可以删除一些文档后再试。'
       inputMenuStatus.value = libraryStatus.value
@@ -903,13 +923,21 @@ async function updatePendingUrlImport(): Promise<void> {
   }
 }
 
-async function loadIncomingPdf(file: File): Promise<void> {
+async function loadIncomingPdf(file: File, operation: DocumentInputOperation): Promise<void> {
+  if (!operation.isCurrent()) {
+    return
+  }
+
   libraryStatus.value = ''
   inputMenuStatus.value = ''
   closeFindBar({ restoreFocus: false })
 
   try {
     await saveActiveReadingPosition()
+    if (!operation.isCurrent()) {
+      return
+    }
+
     const pdfBlob = file.type === 'application/pdf' ? file : file.slice(0, file.size, 'application/pdf')
     const entry = await libraryStore.addPdfDocument({
       blob: pdfBlob,
@@ -920,10 +948,22 @@ async function loadIncomingPdf(file: File): Promise<void> {
       },
     })
 
-    await activateNewPdfEntry(entry, pdfBlob)
+    if (!operation.isCurrent()) {
+      return
+    }
+
+    await activateNewPdfEntry(entry, pdfBlob, operation)
+    if (!operation.isCurrent()) {
+      return
+    }
+
     liveStatus.value = 'PDF 已加入文库'
   }
   catch (reason) {
+    if (!operation.isCurrent()) {
+      return
+    }
+
     if (isLibraryQuotaExceededError(reason)) {
       libraryStatus.value = '本机存储空间不够, PDF 没有加入文库。可以删除一些文档后再试。'
       inputMenuStatus.value = libraryStatus.value
@@ -937,7 +977,15 @@ async function loadIncomingPdf(file: File): Promise<void> {
   }
 }
 
-async function activateNewMarkdownEntry(entry: LibraryEntry, markdown: string): Promise<void> {
+async function activateNewMarkdownEntry(
+  entry: LibraryEntry,
+  markdown: string,
+  operation: DocumentInputOperation,
+): Promise<void> {
+  if (!operation.isCurrent()) {
+    return
+  }
+
   activeLibraryEntryId.value = entry.id
   activePdfDocument.value = null
   documentState.source = readerSourceFromLibrarySource(entry.source)
@@ -946,11 +994,23 @@ async function activateNewMarkdownEntry(entry: LibraryEntry, markdown: string): 
   pendingRestorePosition.value = null
   appMode.value = 'reader'
 
-  await refreshLibraryEntries()
-  await onDocumentLoaded(documentState.source)
+  await refreshLibraryEntries(operation)
+  if (!operation.isCurrent()) {
+    return
+  }
+
+  await onDocumentLoaded(documentState.source, operation)
 }
 
-async function activateNewPdfEntry(entry: LibraryEntry, blob: Blob): Promise<void> {
+async function activateNewPdfEntry(
+  entry: LibraryEntry,
+  blob: Blob,
+  operation: DocumentInputOperation,
+): Promise<void> {
+  if (!operation.isCurrent()) {
+    return
+  }
+
   activeLibraryEntryId.value = entry.id
   activePdfDocument.value = {
     entry,
@@ -960,8 +1020,12 @@ async function activateNewPdfEntry(entry: LibraryEntry, blob: Blob): Promise<voi
   pendingRestorePosition.value = null
   appMode.value = 'pdf'
 
-  await refreshLibraryEntries()
-  await focusPdfViewerWhenReady()
+  await refreshLibraryEntries(operation)
+  if (!operation.isCurrent()) {
+    return
+  }
+
+  await focusPdfViewerWhenReady(operation)
 }
 
 async function openLibraryEntry(entry: LibraryEntry, options: { skipSave?: boolean } = {}): Promise<void> {
@@ -1076,12 +1140,24 @@ function updatePdfProgress(progress: number): void {
   pdfProgress.value = clampProgress(progress)
 }
 
-async function refreshLibraryEntries(): Promise<void> {
-  libraryEntries.value = await libraryStore.listEntries(librarySortMode.value)
+async function refreshLibraryEntries(operation?: DocumentInputOperation): Promise<void> {
+  const entries = await libraryStore.listEntries(librarySortMode.value)
+  if (operation && !operation.isCurrent()) {
+    return
+  }
+
+  libraryEntries.value = entries
 }
 
-async function onDocumentLoaded(source: ReaderDocument['source']): Promise<void> {
+async function onDocumentLoaded(
+  source: ReaderDocument['source'],
+  operation?: DocumentInputOperation,
+): Promise<void> {
   if (source === 'sample') {
+    return
+  }
+
+  if (operation && !operation.isCurrent()) {
     return
   }
 
@@ -1092,6 +1168,10 @@ async function onDocumentLoaded(source: ReaderDocument['source']): Promise<void>
   liveStatus.value = '文档已加载'
 
   await nextTick()
+  if (operation && !operation.isCurrent()) {
+    return
+  }
+
   readerRef.value?.focus()
 }
 
@@ -1314,23 +1394,38 @@ function focusLibraryView(): void {
   })
 }
 
-async function focusPdfViewerWhenReady(): Promise<void> {
+async function focusPdfViewerWhenReady(operation?: DocumentInputOperation): Promise<void> {
+  if (operation && !operation.isCurrent()) {
+    return
+  }
+
   try {
     await loadPdfViewer()
   }
   catch {
+    if (operation && !operation.isCurrent()) {
+      return
+    }
+
     liveStatus.value = 'PDF 阅读器暂时无法加载，请重试。'
     return
   }
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
     await nextTick()
+    if (operation && !operation.isCurrent()) {
+      return
+    }
+
     if (pdfViewerRef.value) {
       pdfViewerRef.value.focus()
       return
     }
 
     await new Promise<void>(resolve => window.requestAnimationFrame(() => resolve()))
+    if (operation && !operation.isCurrent()) {
+      return
+    }
   }
 }
 </script>

@@ -210,6 +210,48 @@ test('auto-fetches a bare URL pasted into the reader', async ({ page }) => {
   await expect(page.locator('.app-shell__live-status')).toHaveText('文档已加载')
 })
 
+test('keeps the latest pasted document active when an earlier import finishes later', async ({ page }) => {
+  await installFirstStorageEstimateGate(page, 'resolve')
+
+  await page.goto('/')
+
+  await pasteText(page, '# Earlier import\n\nThis should stay in the library.')
+  await waitForFirstStorageEstimate(page)
+
+  await pasteText(page, '# Latest import\n\nThis should remain active.')
+  await expect(page.getByRole('heading', { name: 'Latest import' })).toBeVisible()
+
+  await releaseFirstStorageEstimate(page)
+  await expect.poll(() => countLibraryEntries(page)).toBe(2)
+
+  await expect(page.getByRole('heading', { name: 'Latest import' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Earlier import' })).toHaveCount(0)
+})
+
+test('ignores an earlier import failure after a newer document becomes active', async ({ page }) => {
+  await installFirstStorageEstimateGate(page, 'reject')
+  await page.goto('/')
+
+  await pasteText(page, '# Earlier import\n\nThis write will fail late.')
+  await waitForFirstStorageEstimate(page)
+
+  await pasteText(page, '# Latest import\n\nThis should remain active.')
+  await expect(page.getByRole('heading', { name: 'Latest import' })).toBeVisible()
+
+  await releaseFirstStorageEstimate(page)
+  await page.evaluate(async () => {
+    const state = window as typeof window & {
+      waitForFirstStorageEstimateSettled?: Promise<void>
+    }
+    await state.waitForFirstStorageEstimateSettled
+    await new Promise<void>(resolve => window.setTimeout(resolve, 0))
+  })
+
+  await expect(page.getByRole('heading', { name: 'Latest import' })).toBeVisible()
+  await expect(page.getByTestId('floating-affordance-menu')).not.toBeVisible()
+  await expect(page.getByText('无法加入文库。当前文档没有被替换, 请稍后再试。')).toHaveCount(0)
+})
+
 test('converts GitHub blob URLs to raw markdown before fetching', async ({ page }) => {
   let requestedRawUrl = ''
 
@@ -229,6 +271,81 @@ test('converts GitHub blob URLs to raw markdown before fetching', async ({ page 
   expect(requestedRawUrl).toBe('https://raw.githubusercontent.com/LoTwT/miru/main/README.md')
   await expect(page.locator('.reader-surface__meta')).toHaveText('GitHub doc')
 })
+
+async function countLibraryEntries(page: import('@playwright/test').Page): Promise<number> {
+  return page.evaluate(() => new Promise<number>((resolve, reject) => {
+    const request = indexedDB.open('miru:library:v1')
+
+    request.onerror = () => reject(request.error)
+    request.onsuccess = () => {
+      const database = request.result
+      const transaction = database.transaction('entries', 'readonly')
+      const countRequest = transaction.objectStore('entries').count()
+
+      countRequest.onerror = () => reject(countRequest.error)
+      countRequest.onsuccess = () => resolve(countRequest.result)
+      transaction.oncomplete = () => database.close()
+    }
+  }))
+}
+
+async function installFirstStorageEstimateGate(
+  page: import('@playwright/test').Page,
+  outcome: 'reject' | 'resolve',
+): Promise<void> {
+  await page.addInitScript(({ outcome }) => {
+    const state = window as typeof window & {
+      releaseFirstStorageEstimate?: () => void
+      waitForFirstStorageEstimate?: Promise<void>
+      waitForFirstStorageEstimateSettled?: Promise<void>
+    }
+    let markFirstEstimateStarted!: () => void
+    let estimateCount = 0
+
+    state.waitForFirstStorageEstimate = new Promise<void>((resolve) => {
+      markFirstEstimateStarted = resolve
+    })
+
+    Object.defineProperty(navigator, 'storage', {
+      configurable: true,
+      value: {
+        estimate: () => {
+          estimateCount += 1
+
+          if (estimateCount === 1) {
+            markFirstEstimateStarted()
+            const estimate = new Promise<StorageEstimate>((resolve, reject) => {
+              state.releaseFirstStorageEstimate = () => {
+                if (outcome === 'resolve') {
+                  resolve({ quota: 1024 ** 3, usage: 0 })
+                }
+                else {
+                  reject(new DOMException('Storage estimate failed', 'UnknownError'))
+                }
+              }
+            })
+            state.waitForFirstStorageEstimateSettled = estimate.then(() => undefined, () => undefined)
+            return estimate
+          }
+
+          return Promise.resolve({ quota: 1024 ** 3, usage: 0 })
+        },
+      },
+    })
+  }, { outcome })
+}
+
+async function waitForFirstStorageEstimate(page: import('@playwright/test').Page): Promise<void> {
+  await page.evaluate(() => (window as typeof window & {
+    waitForFirstStorageEstimate?: Promise<void>
+  }).waitForFirstStorageEstimate)
+}
+
+async function releaseFirstStorageEstimate(page: import('@playwright/test').Page): Promise<void> {
+  await page.evaluate(() => (window as typeof window & {
+    releaseFirstStorageEstimate?: () => void
+  }).releaseFirstStorageEstimate?.())
+}
 
 test('keeps the current document when pasted URL fetch is not markdown-readable', async ({ page }) => {
   await page.route('https://example.com/page', async route => route.fulfill({
