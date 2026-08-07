@@ -45,6 +45,15 @@ function confirmRenameLocalFont(): void {
   cancelRenameLocalFont()
 }
 
+function confirmRenameLocalFontOnEnter(event: KeyboardEvent): void {
+  if (event.isComposing) {
+    return
+  }
+
+  event.preventDefault()
+  confirmRenameLocalFont()
+}
+
 function requestDeleteLocalFont(id: string): void {
   if (pendingDeleteLocalFontId.value === id) {
     emit('deleteLocalFont', id)
@@ -102,7 +111,7 @@ watch(() => props.active, (active) => {
               maxlength="32"
               :aria-label="`重命名字体 ${font.name}`"
               data-settings-item
-              @keydown.enter.prevent="confirmRenameLocalFont"
+              @keydown.enter="confirmRenameLocalFontOnEnter"
               @keydown.escape.prevent="cancelRenameLocalFont"
             >
             <button
