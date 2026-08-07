@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, type Locator, test } from '@playwright/test'
 import { fileURLToPath } from 'node:url'
 import { pasteText } from './support/reader'
 
@@ -269,10 +269,20 @@ test('uploads, persists, and safely deletes local reading fonts without third-pa
   await expect(page.getByTestId('reading-settings-fonts-panel')).toBeVisible()
 
   const uploadedFontRow = page.locator('.reading-settings__saved-preset').filter({ hasText: uploadedFontName })
-  await uploadedFontRow.getByRole('button', { name: '删除' }).click()
-  await expect(uploadedFontRow).toHaveAttribute('data-pending-delete', 'true')
-  await uploadedFontRow.getByRole('button', { name: '确认删除' }).click()
-  await expect(uploadedFontRow).toHaveCount(0)
+  await uploadedFontRow.getByRole('button', { name: '重命名' }).click()
+  const localFontRenameInput = page.getByLabel(`重命名字体 ${uploadedFontName}`)
+  await enterComposingText(localFontRenameInput, 'xin')
+  await expect(localFontRenameInput).toBeVisible()
+  await expect(localFontRenameInput).toHaveValue('xin')
+  await finishComposingText(localFontRenameInput, '新字体')
+  await localFontRenameInput.press('Enter')
+
+  const renamedFontRow = page.locator('.reading-settings__saved-preset').filter({ hasText: '新字体' })
+  await expect(renamedFontRow).toBeVisible()
+  await renamedFontRow.getByRole('button', { name: '删除' }).click()
+  await expect(renamedFontRow).toHaveAttribute('data-pending-delete', 'true')
+  await renamedFontRow.getByRole('button', { name: '确认删除' }).click()
+  await expect(renamedFontRow).toHaveCount(0)
   await page.getByRole('button', { name: '返回阅读设置' }).click()
 
   await expect(page.getByRole('radio', { name: '正文字体 Newsreader' })).toHaveAttribute('aria-checked', 'true')
@@ -764,44 +774,31 @@ test('does not save a reading preset during IME composition', async ({ page }) =
   await page.getByRole('button', { name: /管理预设/ }).click()
 
   const presetNameInput = page.getByLabel('存为预设')
-  await presetNameInput.evaluate((element) => {
-    const input = element as HTMLInputElement
-    input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
-    input.value = 'ni'
-    input.dispatchEvent(new InputEvent('input', {
-      bubbles: true,
-      data: 'ni',
-      inputType: 'insertCompositionText',
-      isComposing: true,
-    }))
-  })
-  await presetNameInput.evaluate((element) => {
-    const input = element as HTMLInputElement
-    input.dispatchEvent(new KeyboardEvent('keydown', {
-      bubbles: true,
-      cancelable: true,
-      key: 'Enter',
-      isComposing: true,
-    }))
-  })
+  await enterComposingText(presetNameInput, 'ni')
 
   await expect(presetNameInput).toHaveValue('ni')
   await expect(page.locator('.reading-settings__saved-preset')).toHaveCount(0)
 
-  await presetNameInput.evaluate((element) => {
-    const input = element as HTMLInputElement
-    input.value = '你'
-    input.dispatchEvent(new CompositionEvent('compositionend', {
-      bubbles: true,
-      data: '你',
-    }))
-  })
+  await finishComposingText(presetNameInput, '你')
   await presetNameInput.press('Enter')
 
-  await expect(page.locator('.reading-settings__saved-preset').filter({ hasText: '你' })).toBeVisible()
+  const savedPreset = page.locator('.reading-settings__saved-preset').filter({ hasText: '你' })
+  await expect(savedPreset).toBeVisible()
   const persisted = await page.evaluate(() => JSON.parse(localStorage.getItem('miru:reading-presets:v2') ?? '{}'))
   expect(persisted.presets).toHaveLength(1)
   expect(persisted.presets[0].name).toBe('你')
+
+  await savedPreset.getByRole('button', { name: '重命名' }).click()
+  const presetRenameInput = page.getByLabel('重命名预设 你')
+  await enterComposingText(presetRenameInput, 'ni hao')
+  await expect(presetRenameInput).toBeVisible()
+  await expect(presetRenameInput).toHaveValue('ni hao')
+  await finishComposingText(presetRenameInput, '你好')
+  await presetRenameInput.press('Enter')
+
+  await expect(page.locator('.reading-settings__saved-preset').filter({ hasText: '你好' })).toBeVisible()
+  const renamedPersisted = await page.evaluate(() => JSON.parse(localStorage.getItem('miru:reading-presets:v2') ?? '{}'))
+  expect(renamedPersisted.presets[0].name).toBe('你好')
 })
 
 test('saves, applies, renames, and deletes reading presets', async ({ page }) => {
@@ -1155,6 +1152,37 @@ test('default Brutal follows OS color scheme changes for reading and code surfac
   expect(darkTheme.shikiColor).not.toBe(lightTheme.shikiColor)
   expect(darkTypography).toEqual(lightTypography)
 })
+
+async function enterComposingText(input: Locator, value: string): Promise<void> {
+  await input.evaluate((element, composingValue) => {
+    const field = element as HTMLInputElement
+    field.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    field.value = composingValue
+    field.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      data: composingValue,
+      inputType: 'insertCompositionText',
+      isComposing: true,
+    }))
+    field.dispatchEvent(new KeyboardEvent('keydown', {
+      bubbles: true,
+      cancelable: true,
+      key: 'Enter',
+      isComposing: true,
+    }))
+  }, value)
+}
+
+async function finishComposingText(input: Locator, value: string): Promise<void> {
+  await input.evaluate((element, composedValue) => {
+    const field = element as HTMLInputElement
+    field.value = composedValue
+    field.dispatchEvent(new CompositionEvent('compositionend', {
+      bubbles: true,
+      data: composedValue,
+    }))
+  }, value)
+}
 
 async function readThemeSnapshot(page: import('@playwright/test').Page) {
   return page.evaluate(() => {

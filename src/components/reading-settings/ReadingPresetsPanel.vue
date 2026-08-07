@@ -89,6 +89,15 @@ function confirmRenamePreset(): void {
   cancelRenamePreset()
 }
 
+function confirmRenamePresetOnEnter(event: KeyboardEvent): void {
+  if (event.isComposing) {
+    return
+  }
+
+  event.preventDefault()
+  confirmRenamePreset()
+}
+
 function requestDeletePreset(id: string): void {
   if (pendingDeletePresetId.value === id) {
     emit('deletePreset', id)
@@ -202,7 +211,7 @@ function normalizePresetNameInput(name: string): string {
               maxlength="32"
               :aria-label="`重命名预设 ${preset.name}`"
               data-settings-item
-              @keydown.enter.prevent="confirmRenamePreset"
+              @keydown.enter="confirmRenamePresetOnEnter"
               @keydown.escape.prevent="cancelRenamePreset"
             >
             <button
