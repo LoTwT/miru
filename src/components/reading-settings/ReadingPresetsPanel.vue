@@ -16,23 +16,22 @@ const props = defineProps<{
   active: boolean
   activePresetName: string
   fontFamilyOptions: readonly ReadingSettingOption<ReadingFontFamilyId>[]
-  presetNameInput: string
   presets: readonly ReadingPreset[]
 }>()
 
 const emit = defineEmits<{
-  updatePresetNameInput: [value: string]
   savePreset: [name: string]
   applyPreset: [id: string]
   renamePreset: [id: string, name: string]
   deletePreset: [id: string]
   reset: []
 }>()
+const presetNameInput = defineModel<string>('presetNameInput', { required: true })
 
 const renamingPresetId = shallowRef<string | null>(null)
 const renamePresetInput = shallowRef('')
 const pendingDeletePresetId = shallowRef<string | null>(null)
-const normalizedPresetNameInput = computed(() => normalizePresetNameInput(props.presetNameInput))
+const normalizedPresetNameInput = computed(() => normalizePresetNameInput(presetNameInput.value))
 const normalizedRenamePresetInput = computed(() => normalizePresetNameInput(renamePresetInput.value))
 const canSavePreset = computed(() => Boolean(normalizedPresetNameInput.value) && !hasPresetName(normalizedPresetNameInput.value))
 const canRenamePreset = computed(() =>
@@ -41,18 +40,23 @@ const canRenamePreset = computed(() =>
   && !hasPresetName(normalizedRenamePresetInput.value, renamingPresetId.value ?? undefined),
 )
 
-function updatePresetNameInput(event: Event): void {
-  emit('updatePresetNameInput', (event.currentTarget as HTMLInputElement).value)
-}
-
 function saveCurrentPreset(): void {
   if (!canSavePreset.value) {
     return
   }
 
   emit('savePreset', normalizedPresetNameInput.value)
-  emit('updatePresetNameInput', '')
+  presetNameInput.value = ''
   pendingDeletePresetId.value = null
+}
+
+function saveCurrentPresetOnEnter(event: KeyboardEvent): void {
+  if (event.isComposing) {
+    return
+  }
+
+  event.preventDefault()
+  saveCurrentPreset()
 }
 
 function applyPreset(id: string): void {
@@ -134,14 +138,13 @@ function normalizePresetNameInput(name: string): string {
         <div class="reading-settings__preset-input-row">
           <input
             id="reading-preset-name"
-            :value="props.presetNameInput"
+            v-model="presetNameInput"
             class="reading-settings__preset-input"
             type="text"
             maxlength="32"
             placeholder="例如 夜间长文"
             data-settings-item
-            @input="updatePresetNameInput"
-            @keydown.enter.prevent="saveCurrentPreset"
+            @keydown.enter="saveCurrentPresetOnEnter"
           >
           <button
             class="reading-settings__preset-action"

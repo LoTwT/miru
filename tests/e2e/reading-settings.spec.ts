@@ -757,6 +757,53 @@ test('keeps code and semantic panels readable with a dark Custom theme', async (
   expect(contrastRatio(dialogColors.fg, dialogColors.bg)).toBeGreaterThanOrEqual(4.5)
 })
 
+test('does not save a reading preset during IME composition', async ({ page }) => {
+  await page.goto('/')
+
+  await page.getByTestId('reading-settings-button').click()
+  await page.getByRole('button', { name: /管理预设/ }).click()
+
+  const presetNameInput = page.getByLabel('存为预设')
+  await presetNameInput.evaluate((element) => {
+    const input = element as HTMLInputElement
+    input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    input.value = 'ni'
+    input.dispatchEvent(new InputEvent('input', {
+      bubbles: true,
+      data: 'ni',
+      inputType: 'insertCompositionText',
+      isComposing: true,
+    }))
+  })
+  await presetNameInput.evaluate((element) => {
+    const input = element as HTMLInputElement
+    input.dispatchEvent(new KeyboardEvent('keydown', {
+      bubbles: true,
+      cancelable: true,
+      key: 'Enter',
+      isComposing: true,
+    }))
+  })
+
+  await expect(presetNameInput).toHaveValue('ni')
+  await expect(page.locator('.reading-settings__saved-preset')).toHaveCount(0)
+
+  await presetNameInput.evaluate((element) => {
+    const input = element as HTMLInputElement
+    input.value = '你'
+    input.dispatchEvent(new CompositionEvent('compositionend', {
+      bubbles: true,
+      data: '你',
+    }))
+  })
+  await presetNameInput.press('Enter')
+
+  await expect(page.locator('.reading-settings__saved-preset').filter({ hasText: '你' })).toBeVisible()
+  const persisted = await page.evaluate(() => JSON.parse(localStorage.getItem('miru:reading-presets:v2') ?? '{}'))
+  expect(persisted.presets).toHaveLength(1)
+  expect(persisted.presets[0].name).toBe('你')
+})
+
 test('saves, applies, renames, and deletes reading presets', async ({ page }) => {
   await page.goto('/')
 

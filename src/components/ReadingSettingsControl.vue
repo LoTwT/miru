@@ -165,10 +165,6 @@ function applyDefaultPreset(): void {
   returnToMainPanel()
 }
 
-function updatePresetNameInput(value: string): void {
-  presetNameInput.value = value
-}
-
 function forwardRenamePreset(id: string, name: string): void {
   emit('renamePreset', id, name)
 }
@@ -872,9 +868,8 @@ function syncOutlineViewport(): void {
         :active="activePanel === 'presets'"
         :active-preset-name="props.activePresetName"
         :font-family-options="fontFamilyOptions"
-        :preset-name-input="presetNameInput"
+        v-model:preset-name-input="presetNameInput"
         :presets="props.presets"
-        @update-preset-name-input="updatePresetNameInput"
         @save-preset="emit('savePreset', $event)"
         @apply-preset="emit('applyPreset', $event)"
         @rename-preset="forwardRenamePreset"
