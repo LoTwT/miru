@@ -191,6 +191,77 @@ test('adds a local PDF and reopens it through the view-only PDF viewer', async (
   await expect(page.locator('.reader-surface')).toHaveCount(0)
 })
 
+test('normalizes PDF page input on submit and blur', async ({ page }) => {
+  await page.goto('/')
+
+  await openFileThroughFloatingMenu(page, {
+    name: 'Page Input.pdf',
+    mimeType: 'application/pdf',
+    buffer: createSimplePdfBuffer(['Page one', 'Page two', 'Page three']),
+  })
+
+  const pageInput = page.getByLabel('跳转页码')
+  const viewer = page.getByTestId('pdf-viewer')
+  await expect(pageInput).toHaveValue('1')
+  await expect(viewer.getByText('1 / 3')).toBeVisible()
+
+  await pageInput.fill('2')
+  await pageInput.press('Enter')
+  await expect(pageInput).toHaveValue('2')
+  await expect(viewer.getByText('2 / 3')).toBeVisible()
+
+  await pageInput.fill('')
+  await pageInput.press('Enter')
+  await expect(pageInput).toHaveValue('2')
+  await expect(viewer.getByText('2 / 3')).toBeVisible()
+
+  await pageInput.fill('99')
+  await pageInput.press('Enter')
+  await expect(pageInput).toHaveValue('3')
+  await expect(viewer.getByText('3 / 3')).toBeVisible()
+
+  await pageInput.fill('')
+  await viewer.focus()
+  await expect(pageInput).toHaveValue('3')
+  await expect(viewer.getByText('3 / 3')).toBeVisible()
+
+  await pageInput.fill('0')
+  await viewer.focus()
+  await expect(pageInput).toHaveValue('1')
+  await expect(viewer.getByText('1 / 3')).toBeVisible()
+})
+
+test('preserves PDF toolbar layout across its responsive breakpoint', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium', 'Responsive breakpoint only needs one browser pass')
+
+  await page.setViewportSize({ width: 800, height: 900 })
+  await page.goto('/')
+
+  await openFileThroughFloatingMenu(page, {
+    name: 'Tablet Toolbar.pdf',
+    mimeType: 'application/pdf',
+    buffer: createSimplePdfBuffer(['Tablet toolbar layout']),
+  })
+
+  const toolbar = page.locator('.pdf-viewer__toolbar')
+  await expect(toolbar).toBeVisible()
+  await expect.poll(() => toolbar.evaluate(element => getComputedStyle(element).position)).toBe('sticky')
+
+  await page.setViewportSize({ width: 700, height: 900 })
+  const compactLayout = await toolbar.evaluate((element) => {
+    const controlGroupTops = Array.from(element.querySelectorAll('.pdf-viewer__control-group'))
+      .map(group => Math.round(group.getBoundingClientRect().top))
+
+    return {
+      controlGroupTops,
+      position: getComputedStyle(element).position,
+    }
+  })
+
+  expect(compactLayout.position).toBe('static')
+  expect(new Set(compactLayout.controlGroupTops).size).toBe(3)
+})
+
 test('supports continuous scroll mode for local PDFs with bounded rendered pages', async ({ page }) => {
   const pageCount = 120
   const maxMountedPageCount = 12

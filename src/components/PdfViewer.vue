@@ -3,6 +3,7 @@ import { useVirtualizer } from '@tanstack/vue-virtual'
 import type { VirtualItem } from '@tanstack/vue-virtual'
 import { computed, nextTick, onMounted, onUnmounted, shallowRef, triggerRef, useTemplateRef, watch } from 'vue'
 
+import PdfViewerToolbar from '@/components/pdf/PdfViewerToolbar.vue'
 import type { LibraryEntry, PdfReadingPosition } from '@/features/library/types'
 import {
   getBufferedPdfPages,
@@ -80,7 +81,6 @@ const scrollStackRef = useTemplateRef<HTMLElement>('scrollStack')
 const canvasRef = useTemplateRef<HTMLCanvasElement>('canvas')
 const textLayerRef = useTemplateRef<HTMLDivElement>('textLayer')
 const pageNumber = shallowRef(Math.max(1, props.position?.pageNumber ?? 1))
-const pageInputValue = shallowRef(String(pageNumber.value))
 const totalPages = shallowRef(0)
 const viewMode = shallowRef<PdfViewMode>(props.position?.viewMode ?? 'paged')
 const scaleMode = shallowRef<PdfScaleMode>(props.position?.scaleMode ?? 'fit-width')
@@ -114,7 +114,6 @@ let sideControlFrame: number | undefined
 let pendingZoomDelta = 0
 let zoomAdjustmentPromise: Promise<void> | null = null
 let zoomAdjustmentGeneration = 0
-let isPageInputEditing = false
 const scrollPageElements = new Map<number, HTMLElement>()
 const scrollCanvasElements = new Map<number, HTMLCanvasElement>()
 const scrollTextLayerElements = new Map<number, HTMLDivElement>()
@@ -137,19 +136,6 @@ const isReady = computed(() => loadState.value === 'ready' && totalPages.value >
 const canGoToPreviousPage = computed(() => isReady.value && pageNumber.value > 1)
 const canGoToNextPage = computed(() => isReady.value && pageNumber.value < totalPages.value)
 const hasMultiplePages = computed(() => isReady.value && totalPages.value > 1)
-const pageLabel = computed(() => totalPages.value > 0 ? `${pageNumber.value} / ${totalPages.value}` : '— / —')
-const zoomLabel = computed(() => `${Math.round(renderedScale.value * 100)}%`)
-const scaleModeLabel = computed(() => {
-  if (scaleMode.value === 'fit-page') {
-    return '整页'
-  }
-
-  if (scaleMode.value === 'custom') {
-    return zoomLabel.value
-  }
-
-  return '适宽'
-})
 const scrollVirtualizerOptions = computed(() => ({
   count: viewMode.value === 'scroll' && scrollModeStatus.value === 'idle'
     ? pageSlots.value.length
@@ -1195,28 +1181,8 @@ function goToPage(nextPageNumber: number): void {
   pageNumber.value = nextPage
 }
 
-function setPageFromInput(event: Event): void {
-  const input = event.target as HTMLInputElement
-  const value = Number.parseInt(pageInputValue.value, 10)
-  const nextPage = clampPageNumber(Number.isFinite(value) ? value : pageNumber.value)
-  isPageInputEditing = false
-  pageInputValue.value = String(nextPage)
-  input.value = pageInputValue.value
-  goToPage(nextPage)
-}
-
-function beginPageInputEdit(): void {
-  isPageInputEditing = true
-}
-
-function endPageInputEdit(): void {
-  isPageInputEditing = false
-  pageInputValue.value = String(pageNumber.value)
-}
-
-function updatePageInput(event: Event): void {
-  isPageInputEditing = true
-  pageInputValue.value = (event.target as HTMLInputElement).value
+function requestPage(nextPageNumber: number | null): void {
+  goToPage(nextPageNumber ?? pageNumber.value)
 }
 
 function handlePdfKeydown(event: KeyboardEvent): void {
@@ -2054,9 +2020,7 @@ function isTextInputTarget(target: EventTarget | null): boolean {
 }
 
 watch(() => props.blob, () => {
-  isPageInputEditing = false
   pageNumber.value = Math.max(1, props.position?.pageNumber ?? 1)
-  pageInputValue.value = String(pageNumber.value)
   viewMode.value = props.position?.viewMode ?? 'paged'
   scaleMode.value = props.position?.scaleMode ?? 'fit-width'
   customScale.value = props.position?.scale ?? 1
@@ -2068,9 +2032,6 @@ watch(() => props.searchQuery, () => {
 })
 
 watch(pageNumber, () => {
-  if (!isPageInputEditing) {
-    pageInputValue.value = String(pageNumber.value)
-  }
   if (!isReady.value) {
     return
   }
@@ -2151,77 +2112,23 @@ onUnmounted(() => {
       </div>
     </header>
 
-    <div class="pdf-viewer__toolbar" aria-label="PDF 查看工具">
-      <div class="pdf-viewer__control-group" aria-label="页码">
-        <button type="button" :disabled="!canGoToPreviousPage" aria-label="上一页" @click="goToPreviousPage">
-          ◁
-        </button>
-        <label class="pdf-viewer__page-jump">
-          <span class="pdf-viewer__sr-only">跳转页码</span>
-          <input
-            :value="pageInputValue"
-            inputmode="numeric"
-            pattern="[0-9]*"
-            aria-label="跳转页码"
-            :disabled="!isReady"
-            @blur="endPageInputEdit"
-            @change="setPageFromInput"
-            @focus="beginPageInputEdit"
-            @input="updatePageInput"
-            @keydown.enter.prevent="setPageFromInput"
-          >
-        </label>
-        <span class="pdf-viewer__page-total" aria-live="polite">{{ pageLabel }}</span>
-        <button type="button" :disabled="!canGoToNextPage" aria-label="下一页" @click="goToNextPage">
-          ▷
-        </button>
-      </div>
-
-      <div class="pdf-viewer__control-group" aria-label="查看模式">
-        <button
-          type="button"
-          :aria-pressed="viewMode === 'paged'"
-          :disabled="!isReady"
-          @click="setViewMode('paged')"
-        >
-          翻页
-        </button>
-        <button
-          type="button"
-          :aria-pressed="viewMode === 'scroll'"
-          :disabled="!isReady"
-          @click="setViewMode('scroll')"
-        >
-          滚动
-        </button>
-      </div>
-
-      <div class="pdf-viewer__control-group" aria-label="缩放">
-        <button type="button" :disabled="!isReady" aria-label="缩小" @click="zoomBy(-zoomStep)">
-          −
-        </button>
-        <button
-          type="button"
-          :aria-pressed="scaleMode === 'fit-width'"
-          :disabled="!isReady"
-          @click="setScaleMode('fit-width')"
-        >
-          适宽
-        </button>
-        <button
-          type="button"
-          :aria-pressed="scaleMode === 'fit-page'"
-          :disabled="!isReady"
-          @click="setScaleMode('fit-page')"
-        >
-          整页
-        </button>
-        <span class="pdf-viewer__zoom-label">{{ scaleModeLabel }}</span>
-        <button type="button" :disabled="!isReady" aria-label="放大" @click="zoomBy(zoomStep)">
-          ＋
-        </button>
-      </div>
-    </div>
+    <PdfViewerToolbar
+      :can-go-to-next-page="canGoToNextPage"
+      :can-go-to-previous-page="canGoToPreviousPage"
+      :is-ready="isReady"
+      :page-number="pageNumber"
+      :rendered-scale="renderedScale"
+      :scale-mode="scaleMode"
+      :total-pages="totalPages"
+      :view-mode="viewMode"
+      @next-page="goToNextPage"
+      @previous-page="goToPreviousPage"
+      @request-page="requestPage"
+      @select-scale-mode="setScaleMode"
+      @select-view-mode="setViewMode"
+      @zoom-in="zoomBy(zoomStep)"
+      @zoom-out="zoomBy(-zoomStep)"
+    />
 
     <p class="pdf-viewer__note">
       PDF 保持原样显示; 只有使用搜索时才在浏览器内读取文本层, 不上传。
@@ -2388,7 +2295,6 @@ onUnmounted(() => {
 }
 
 .pdf-viewer__back,
-.pdf-viewer__toolbar button,
 .pdf-viewer__state button {
   min-block-size: var(--touch-target-min);
   border: var(--border-width-control) solid var(--border-default);
@@ -2405,22 +2311,10 @@ onUnmounted(() => {
 
 .pdf-viewer__back:hover,
 .pdf-viewer__back:focus-visible,
-.pdf-viewer__toolbar button:hover,
-.pdf-viewer__toolbar button:focus-visible,
 .pdf-viewer__state button:hover,
 .pdf-viewer__state button:focus-visible {
   border-color: var(--accent-primary);
   color: var(--text-primary);
-}
-
-.pdf-viewer__toolbar button:disabled {
-  cursor: not-allowed;
-  opacity: var(--opacity-disabled);
-}
-
-.pdf-viewer__toolbar button[aria-pressed="true"] {
-  border-color: var(--accent-primary);
-  background: var(--accent-soft);
 }
 
 .pdf-viewer__title-block {
@@ -2454,55 +2348,6 @@ onUnmounted(() => {
   font-size: clamp(2rem, 6vw, 3.35rem);
   font-weight: 680;
   line-height: 1;
-}
-
-.pdf-viewer__toolbar {
-  position: sticky;
-  top: max(5.5rem, calc(env(safe-area-inset-top) + 5.5rem));
-  z-index: var(--z-sticky);
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--spacing-2-5);
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--spacing-3-5);
-  padding: var(--spacing-2);
-  border: var(--border-width-surface) solid var(--border-default);
-  border-radius: var(--radius-card);
-  background: var(--surface-panel);
-  color: var(--text-primary);
-  box-shadow: var(--shadow-panel);
-}
-
-.pdf-viewer__control-group {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.35rem;
-  align-items: center;
-}
-
-.pdf-viewer__toolbar button {
-  min-inline-size: 44px;
-  padding-inline: 0.72rem;
-}
-
-.pdf-viewer__page-jump input {
-  inline-size: 4rem;
-  min-block-size: 44px;
-  border: var(--border-width-control) solid var(--border-default);
-  border-radius: var(--radius-control);
-  color: var(--text-primary);
-  background: var(--surface-subtle);
-  font: inherit;
-  text-align: center;
-}
-
-.pdf-viewer__page-total,
-.pdf-viewer__zoom-label {
-  min-inline-size: 3.8rem;
-  color: var(--text-secondary);
-  font-size: 0.9rem;
-  text-align: center;
 }
 
 .pdf-viewer__note {
@@ -2727,18 +2572,6 @@ onUnmounted(() => {
   color: var(--reading-accent-text);
 }
 
-.pdf-viewer__sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
 @media (max-width: 900px) {
   .pdf-viewer__stage-frame--with-side-controls .pdf-viewer__stage {
     padding-inline: clamp(0.75rem, 3vw, 1.35rem);
@@ -2758,28 +2591,12 @@ onUnmounted(() => {
     display: grid;
   }
 
-  .pdf-viewer__toolbar {
-    position: static;
-    align-items: stretch;
-  }
-
-  .pdf-viewer__control-group {
-    inline-size: 100%;
-  }
-
-  .pdf-viewer__control-group > button,
-  .pdf-viewer__page-jump,
-  .pdf-viewer__page-jump input {
-    flex: 1 1 auto;
-  }
-
   .pdf-viewer__stage {
     max-inline-size: calc(100vw - 2.5rem);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .pdf-viewer__toolbar,
   .pdf-viewer__side-page-button {
     backdrop-filter: none;
   }
