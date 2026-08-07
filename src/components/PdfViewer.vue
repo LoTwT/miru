@@ -102,6 +102,7 @@ const searchIndexedPages = shallowRef(0)
 let loadingTask: PDFDocumentLoadingTask | null = null
 let pdfDocument: PDFDocumentProxy | null = null
 let renderTask: RenderTask | null = null
+let documentLoadGeneration = 0
 let resizeObserver: ResizeObserver | null = null
 let scrollPageObserver: IntersectionObserver | null = null
 let renderSequence = 0
@@ -128,6 +129,7 @@ const pdfTextContentCache = new Map<number, Promise<PdfTextContent>>()
 const scrollTextLayers = new Map<number, PdfTextLayer>()
 const pendingScrollTextLayers = new Map<number, PdfTextLayer>()
 const scrollTextRenderSequences = new Map<number, number>()
+const pdfLoadingTaskDestructions = new WeakMap<PDFDocumentLoadingTask, Promise<void>>()
 let pagedTextLayer: PdfTextLayer | null = null
 let pendingPagedTextLayer: PdfTextLayer | null = null
 let searchSequence = 0
@@ -174,32 +176,72 @@ function focus(): void {
 defineExpose({ clearSearch, focus, goToPage, goToSearchMatch })
 
 async function loadPdfDocument(): Promise<void> {
+  const generation = ++documentLoadGeneration
+  const blob = props.blob
   loadState.value = 'loading'
   renderState.value = 'idle'
   errorMessage.value = ''
   totalPages.value = 0
   await cleanupPdfDocument()
+  if (!isDocumentLoadCurrent(generation)) {
+    return
+  }
 
+  let task: PDFDocumentLoadingTask | null = null
   try {
     const pdfjs = await loadPdfJs()
-    const data = new Uint8Array(await props.blob.arrayBuffer())
-    loadingTask = pdfjs.getDocument({ data })
-    const task = loadingTask
-    pdfDocument = await task.promise
-    if (loadingTask === task) {
-      loadingTask = null
+    if (!isDocumentLoadCurrent(generation)) {
+      return
     }
-    totalPages.value = pdfDocument.numPages
+
+    const data = new Uint8Array(await blob.arrayBuffer())
+    if (!isDocumentLoadCurrent(generation)) {
+      return
+    }
+
+    task = pdfjs.getDocument({ data })
+    loadingTask = task
+    const document = await task.promise
+    if (!isDocumentLoadCurrent(generation) || loadingTask !== task) {
+      await destroyPdfLoadingTask(task)
+      return
+    }
+
+    loadingTask = null
+    pdfDocument = document
+    totalPages.value = document.numPages
     pageNumber.value = clampPageNumber(pageNumber.value)
     loadState.value = 'ready'
     await nextTick()
+    if (!isDocumentLoadCurrent(generation) || pdfDocument !== document) {
+      return
+    }
+
     await renderActiveView({ anchorPage: pageNumber.value })
+    if (!isDocumentLoadCurrent(generation) || pdfDocument !== document) {
+      return
+    }
+
     if (props.searchQuery.trim()) {
       await runPdfSearch(props.searchQuery)
     }
+    if (!isDocumentLoadCurrent(generation) || pdfDocument !== document) {
+      return
+    }
+
     emitPosition()
   }
   catch (reason) {
+    if (task && loadingTask === task) {
+      loadingTask = null
+    }
+    if (task) {
+      await destroyPdfLoadingTask(task)
+    }
+    if (!isDocumentLoadCurrent(generation)) {
+      return
+    }
+
     cancelProgrammaticScrollNavigation()
     if (isPdfCancellation(reason)) {
       return
@@ -222,23 +264,25 @@ async function loadPdfJs() {
 
 async function cleanupPdfDocument(): Promise<void> {
   scrollPrepareSequence += 1
+  renderSequence += 1
   cancelProgrammaticScrollNavigation()
   cancelPendingZoomAdjustment()
-  await cancelRenderTask()
-  await cancelScrollRenderTasks()
+  const renderCancellation = cancelRenderTask()
+  const scrollRenderCancellation = cancelScrollRenderTasks()
   clearSearch({ emitState: false })
   clearTextLayers()
   pdfSearchIndexCache.clear()
   pdfTextContentCache.clear()
 
-  const task = loadingTask ?? pdfDocument?.loadingTask
+  const tasks = new Set<PDFDocumentLoadingTask>()
+  if (loadingTask) {
+    tasks.add(loadingTask)
+  }
+  if (pdfDocument?.loadingTask) {
+    tasks.add(pdfDocument.loadingTask)
+  }
   loadingTask = null
   pdfDocument = null
-
-  if (task) {
-    await task.destroy()
-  }
-
   pageSlots.value = []
   bufferedScrollPages.value = new Set()
   scrollStackWidth.value = 1
@@ -252,6 +296,44 @@ async function cleanupPdfDocument(): Promise<void> {
   scrollPageElements.clear()
   scrollCanvasElements.clear()
   scrollTextLayerElements.clear()
+
+  await renderCancellation
+  await scrollRenderCancellation
+  await Promise.all([...tasks].map(task => destroyPdfLoadingTask(task)))
+}
+
+function isDocumentLoadCurrent(generation: number): boolean {
+  return generation === documentLoadGeneration
+}
+
+async function destroyPdfLoadingTask(task: PDFDocumentLoadingTask): Promise<void> {
+  const existingDestruction = pdfLoadingTaskDestructions.get(task)
+  if (existingDestruction) {
+    return existingDestruction
+  }
+
+  let destruction: Promise<void>
+  destruction = destroyPdfLoadingTaskWithRetry(task).then((destroyed) => {
+    if (!destroyed && pdfLoadingTaskDestructions.get(task) === destruction) {
+      pdfLoadingTaskDestructions.delete(task)
+    }
+  })
+  pdfLoadingTaskDestructions.set(task, destruction)
+  return destruction
+}
+
+async function destroyPdfLoadingTaskWithRetry(task: PDFDocumentLoadingTask): Promise<boolean> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await task.destroy()
+      return true
+    }
+    catch {
+      // A failed loading task can reject while releasing its worker and transport resources.
+    }
+  }
+
+  return false
 }
 
 async function cancelRenderTask(): Promise<void> {
@@ -835,7 +917,11 @@ async function renderCurrentPage(): Promise<void> {
     }
   }
   catch (reason) {
-    if (isPdfCancellation(reason)) {
+    if (
+      isPdfCancellation(reason)
+      || sequence !== renderSequence
+      || pdf !== pdfDocument
+    ) {
       return
     }
 
@@ -1265,6 +1351,7 @@ function calculateProgress(): number {
 
 async function renderActiveView(options: { anchorPage: number }): Promise<void> {
   if (viewMode.value === 'scroll') {
+    renderSequence += 1
     await cancelRenderTask()
     await prepareScrollMode(options.anchorPage)
     return
@@ -1322,6 +1409,13 @@ async function prepareScrollMode(anchorPage: number): Promise<void> {
     queueSideControlPositionUpdate()
   }
   catch (reason) {
+    if (
+      sequence !== scrollPrepareSequence
+      || pdf !== pdfDocument
+    ) {
+      return
+    }
+
     cancelProgrammaticScrollNavigation()
     if (isPdfCancellation(reason)) {
       return
@@ -2079,6 +2173,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  documentLoadGeneration += 1
   if (sideControlFrame !== undefined) {
     window.cancelAnimationFrame(sideControlFrame)
   }

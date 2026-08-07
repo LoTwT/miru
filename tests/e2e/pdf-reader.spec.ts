@@ -6,6 +6,16 @@ import {
   readReadingProgressPercent,
 } from './support/reader'
 
+interface PdfLoadRaceProbe {
+  events: string[]
+  release: () => void
+  workerStarts: number
+}
+
+type PdfLoadRaceWindow = Window & {
+  __miruPdfLoadRaceProbe: PdfLoadRaceProbe
+}
+
 test('adds a local PDF and reopens it through the view-only PDF viewer', async ({ page }) => {
   const pdfWorkerResponses: Array<{ contentType: string | undefined, status: number, url: string }> = []
   page.on('response', (response) => {
@@ -189,6 +199,100 @@ test('adds a local PDF and reopens it through the view-only PDF viewer', async (
   await expect(page.getByTestId('pdf-viewer')).toBeFocused()
   await expect(page.getByText('2 / 2')).toBeVisible()
   await expect(page.locator('.reader-surface')).toHaveCount(0)
+})
+
+test('keeps the latest PDF active when an earlier viewer load finishes later', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium', 'The load generation is independent of responsive layout')
+
+  const slowPdf = createSimplePdfBuffer(['Slow A page one', 'Slow A page two', 'Slow A page three'])
+  const fastPdf = createSimplePdfBuffer(['Fast B page one', 'Fast B page two'])
+
+  await page.addInitScript(({ slowPdfSize }) => {
+    const originalArrayBuffer = Blob.prototype.arrayBuffer
+    const NativeWorker = window.Worker
+    const events: string[] = []
+    let matchingReadCount = 0
+    let releaseBlockedRead: (() => void) | undefined
+    let workerStarts = 0
+    const blockedRead = new Promise<void>((resolve) => {
+      releaseBlockedRead = resolve
+    })
+
+    Object.defineProperty(window, 'Worker', {
+      configurable: true,
+      value: new Proxy(NativeWorker, {
+        construct(target, argumentsList, newTarget) {
+          workerStarts += 1
+          return Reflect.construct(target, argumentsList, newTarget)
+        },
+      }),
+      writable: true,
+    })
+
+    Object.defineProperty(window, '__miruPdfLoadRaceProbe', {
+      configurable: true,
+      value: {
+        events,
+        release: () => releaseBlockedRead?.(),
+        get workerStarts() {
+          return workerStarts
+        },
+      } satisfies PdfLoadRaceProbe,
+    })
+
+    Blob.prototype.arrayBuffer = async function () {
+      const matchingRead = this.size === slowPdfSize ? ++matchingReadCount : 0
+      events.push(`start:${this.size}:${matchingRead}`)
+      const result = await originalArrayBuffer.call(this)
+
+      if (matchingRead === 2) {
+        events.push('blocked:slow-viewer')
+        await blockedRead
+        events.push('released:slow-viewer')
+      }
+
+      events.push(`finish:${this.size}:${matchingRead}`)
+      return result
+    }
+  }, { slowPdfSize: slowPdf.byteLength })
+
+  await page.goto('/')
+  await openFileThroughFloatingMenu(page, {
+    name: 'Slow A.pdf',
+    mimeType: 'application/pdf',
+    buffer: slowPdf,
+  })
+  await page.waitForFunction(() =>
+    (window as PdfLoadRaceWindow).__miruPdfLoadRaceProbe.events.includes('blocked:slow-viewer'),
+  )
+  await expect(page.getByRole('heading', { name: 'Slow A' })).toBeVisible()
+
+  await openFileThroughFloatingMenu(page, {
+    name: 'Fast B.pdf',
+    mimeType: 'application/pdf',
+    buffer: fastPdf,
+  })
+
+  const viewer = page.getByTestId('pdf-viewer')
+  await expect(page.getByRole('heading', { name: 'Fast B' })).toBeVisible()
+  await expect(viewer.getByText('1 / 2')).toBeVisible()
+  const currentWorkerStarts = await page.evaluate(() =>
+    (window as PdfLoadRaceWindow).__miruPdfLoadRaceProbe.workerStarts,
+  )
+  expect(currentWorkerStarts).toBeGreaterThan(0)
+
+  await page.evaluate(() => (window as PdfLoadRaceWindow).__miruPdfLoadRaceProbe.release())
+  await page.waitForFunction(({ slowPdfSize }) =>
+    (window as PdfLoadRaceWindow).__miruPdfLoadRaceProbe.events.includes(`finish:${slowPdfSize}:2`),
+  { slowPdfSize: slowPdf.byteLength })
+  await page.evaluate(() => new Promise<void>(resolve => window.setTimeout(resolve, 0)))
+
+  await expect(page.getByRole('heading', { name: 'Fast B' })).toBeVisible()
+  await expect(viewer.getByText('1 / 2')).toBeVisible()
+  await expect(viewer.getByText('1 / 3')).toHaveCount(0)
+  expect(await page.evaluate(() =>
+    (window as PdfLoadRaceWindow).__miruPdfLoadRaceProbe.workerStarts,
+  )).toBe(currentWorkerStarts)
 })
 
 test('normalizes PDF page input on submit and blur', async ({ page }) => {
