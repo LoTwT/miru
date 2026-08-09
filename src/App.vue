@@ -29,6 +29,8 @@ import type { ReaderOutlineItem } from '@/features/reader/outlineNavigation'
 type AppMode = 'reader' | 'library' | 'pdf'
 type CommandSurfaceId = 'actions' | 'outline' | 'settings'
 
+const libraryRefreshErrorMessage = '文库暂时无法刷新。已保留当前列表，请稍后重试。'
+
 interface PdfViewerHandle {
   clearSearch: (options?: { emitState?: boolean }) => void
   focus: () => void
@@ -83,6 +85,10 @@ const libraryEntries = shallowRef<LibraryEntry[]>([])
 const librarySortMode = shallowRef<LibrarySortMode>('last-opened')
 const activeLibraryEntryId = shallowRef<string | null>(null)
 const libraryStatus = shallowRef('')
+const libraryRefreshStatus = shallowRef('')
+const libraryViewStatus = computed(() => [libraryStatus.value, libraryRefreshStatus.value]
+  .filter(Boolean)
+  .join(' '))
 const inputMenuStatus = shallowRef('')
 const pendingUrlImport = shallowRef<PendingUrlImport | null>(null)
 const pendingRestorePosition = shallowRef<MarkdownReadingPosition | null>(null)
@@ -132,7 +138,7 @@ let findDebounceTimer: ReturnType<typeof setTimeout> | undefined
 let documentActivationController: AbortController | null = null
 let libraryWriteController = new AbortController()
 let libraryRefreshSequence = 0
-let libraryRefreshAppliedSequence = 0
+let libraryRefreshSettledSequence = 0
 let pdfDocumentActivationSequence = 0
 let pdfPositionSaveSequence = 0
 
@@ -316,13 +322,13 @@ async function showLibrary(): Promise<void> {
     return
   }
 
+  libraryStatus.value = ''
   await refreshLibraryEntries(operation)
   if (!operation.isCurrent()) {
     return
   }
 
   appMode.value = 'library'
-  libraryStatus.value = ''
   window.scrollTo({ top: 0, behavior: 'auto' })
 }
 
@@ -1410,13 +1416,24 @@ function updatePdfProgress(progress: number): void {
 
 async function refreshLibraryEntries(operation?: DocumentInputOperation): Promise<void> {
   const sequence = ++libraryRefreshSequence
-  const entries = await libraryStore.listEntries(librarySortMode.value)
-  if ((operation && !operation.isCurrent()) || sequence < libraryRefreshAppliedSequence) {
-    return
-  }
+  try {
+    const entries = await libraryStore.listEntries(librarySortMode.value)
+    if ((operation && !operation.isCurrent()) || sequence < libraryRefreshSettledSequence) {
+      return
+    }
 
-  libraryRefreshAppliedSequence = sequence
-  libraryEntries.value = entries
+    libraryRefreshSettledSequence = sequence
+    libraryEntries.value = entries
+    libraryRefreshStatus.value = ''
+  }
+  catch {
+    if ((operation && !operation.isCurrent()) || sequence < libraryRefreshSettledSequence) {
+      return
+    }
+
+    libraryRefreshSettledSequence = sequence
+    libraryRefreshStatus.value = libraryRefreshErrorMessage
+  }
 }
 
 async function onDocumentLoaded(
@@ -1816,7 +1833,7 @@ async function focusPdfViewerWhenReady(operation?: DocumentInputOperation): Prom
       :entries="libraryEntries"
       :sort-mode="librarySortMode"
       :active-entry-id="activeLibraryEntryId"
-      :status="libraryStatus"
+      :status="libraryViewStatus"
       @add="openAddMenu"
       @open="openLibraryEntry"
       @sort="updateLibrarySortMode"
