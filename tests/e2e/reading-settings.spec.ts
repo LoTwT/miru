@@ -1,6 +1,6 @@
 import { expect, type Locator, test } from '@playwright/test'
 import { fileURLToPath } from 'node:url'
-import { pasteText } from './support/reader'
+import { pasteText, waitForReaderReady } from './support/reader'
 
 test('customizes reading settings, persists them, and resets to defaults', async ({ page }) => {
   await page.goto('/')
@@ -21,6 +21,7 @@ test('customizes reading settings, persists them, and resets to defaults', async
     '',
     'Fourth section.',
   ].join('\n'))
+  await waitForReaderReady(page, 'Heading one')
 
   const settingsButton = page.getByTestId('reading-settings-button')
   const defaultTypography = await readReadingTypography(page)
@@ -906,7 +907,7 @@ test('contains reading settings panel scroll chaining on desktop', async ({ page
     '',
     Array.from({ length: 80 }, (_, index) => `Paragraph ${index + 1}.`).join('\n\n'),
   ].join('\n'))
-  await expect(page.getByRole('heading', { name: 'Long settings panel doc' })).toBeVisible()
+  await waitForReaderReady(page, 'Long settings panel doc')
 
   await page.evaluate(() => window.scrollTo(0, 360))
   const pageScrollBefore = await page.evaluate(() => Math.round(window.scrollY))
@@ -954,7 +955,7 @@ test('locks page scroll while mobile command sheets are open', async ({ page }) 
     '',
     Array.from({ length: 70 }, (_, index) => `Paragraph ${index + 1}.`).join('\n\n'),
   ].join('\n'))
-  await expect(page.getByRole('heading', { name: 'Scroll lock doc' })).toBeVisible()
+  await waitForReaderReady(page, 'Scroll lock doc')
 
   await page.evaluate(() => window.scrollTo(0, 520))
   const scrollBeforeSettings = await page.evaluate(() => Math.round(window.scrollY))
@@ -1020,7 +1021,7 @@ test('uses a full-width outline sheet scrim on tablet and system dark', async ({
     '',
     Array.from({ length: 48 }, (_, index) => `Paragraph ${index + 1}.`).join('\n\n'),
   ].join('\n'))
-  await expect(page.getByRole('heading', { name: 'Tablet outline' })).toBeVisible()
+  await waitForReaderReady(page, 'Tablet outline')
   await expect(page.getByTestId('reader-outline-button')).toBeVisible()
   await expect(page.getByTestId('reader-outline')).toHaveCount(0)
 

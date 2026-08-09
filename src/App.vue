@@ -904,6 +904,7 @@ async function loadIncomingDocument(document: ReaderDocument, operation: Documen
       signal: operation.libraryWriteSignal,
     })
     if (!operation.isCurrent()) {
+      await refreshLibraryEntries()
       return
     }
 
@@ -1049,6 +1050,7 @@ async function loadIncomingPdf(file: File, operation: DocumentInputOperation): P
     })
 
     if (!operation.isCurrent()) {
+      await refreshLibraryEntries()
       return
     }
 

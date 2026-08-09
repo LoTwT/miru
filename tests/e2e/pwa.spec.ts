@@ -1,4 +1,5 @@
 import { expect, type Page, test } from '@playwright/test'
+import { waitForReaderReady } from './support/reader'
 
 test.describe('PWA install and offline shell', () => {
   test('applies the default Brutal scheme before the app module runs', async ({ page }) => {
@@ -566,7 +567,7 @@ test.describe('PWA install and offline shell', () => {
     await expect(page.getByTestId('floating-affordance-button')).toBeVisible()
 
     await pasteText(page, '# Offline paste\n\nLocal content still works.')
-    await expect(page.getByRole('heading', { name: 'Offline paste' })).toBeVisible()
+    await waitForReaderReady(page, 'Offline paste')
     await expect(page.getByText('Local content still works.')).toBeVisible()
 
     await page.getByTestId('floating-affordance-button').click()

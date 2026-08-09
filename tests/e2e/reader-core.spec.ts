@@ -4,6 +4,7 @@ import {
   openBookshelfEntry,
   pasteText,
   readReadingProgressPercent,
+  waitForReaderReady,
 } from './support/reader'
 
 test('renders the sample document and supports paste input', async ({ page }) => {
@@ -122,7 +123,7 @@ test('shows the back-to-top button only for long scrolled reader content', async
     '',
     Array.from({ length: 70 }, (_, index) => `Paragraph ${index + 1}.`).join('\n\n'),
   ].join('\n'))
-  await expect(page.getByRole('heading', { name: 'Long footer test' })).toBeVisible()
+  await waitForReaderReady(page, 'Long footer test')
   await page.evaluate(() => {
     window.scrollTo({
       top: window.innerHeight + 96,
@@ -156,7 +157,7 @@ test('updates the quiet reading progress line for long markdown documents', asyn
       Array.from({ length: 10 }, (_, paragraphIndex) => `Paragraph ${index + 1}.${paragraphIndex + 1} keeps the reader moving quietly.`).join('\n\n'),
     ].join('\n')),
   ].join('\n\n'))
-  await expect(page.getByRole('heading', { name: 'Progress doc' })).toBeVisible()
+  await waitForReaderReady(page, 'Progress doc')
   await expect(page.getByTestId('reading-progress-line')).toBeVisible()
   await expect(page.getByTestId('reading-progress-line')).toHaveAttribute('role', 'progressbar')
   await expect.poll(() => readReadingProgressPercent(page)).toBeLessThan(10)
@@ -216,7 +217,7 @@ test('searches markdown content and keeps document bookmarks in the outline surf
     '',
     'Gamma keeps the outline available.',
   ].join('\n\n'))
-  await expect(page.getByRole('heading', { name: 'Searchable note' })).toBeVisible()
+  await waitForReaderReady(page, 'Searchable note')
 
   await page.keyboard.press('Control+F')
   await expect(page.getByTestId('reader-find-bar')).toBeVisible()
@@ -293,6 +294,8 @@ test('prints a clean full document without app chrome', async ({ page }) => {
     '',
     'Final body.',
   ].join('\n'))
+
+  await waitForReaderReady(page, 'First section')
 
   const firstToggle = page.locator('[data-reader-heading-toggle]').first()
   await firstToggle.click()

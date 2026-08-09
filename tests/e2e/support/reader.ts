@@ -12,6 +12,16 @@ export async function pasteText(page: import('@playwright/test').Page, text: str
   }, text)
 }
 
+export async function waitForReaderReady(
+  page: import('@playwright/test').Page,
+  headingName: string | RegExp,
+) {
+  await expect(page.getByRole('heading', { name: headingName })).toBeVisible()
+  const readerSurface = page.locator('.reader-surface')
+  await expect(readerSurface).toHaveAttribute('aria-busy', 'false')
+  await expect(readerSurface).toBeFocused()
+}
+
 export async function readReadingProgressPercent(page: import('@playwright/test').Page): Promise<number> {
   return page.getByTestId('reading-progress-fill').evaluate((element) => {
     return Number.parseFloat((element as HTMLElement).style.inlineSize || '0')

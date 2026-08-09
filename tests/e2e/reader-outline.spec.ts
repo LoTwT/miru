@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { isWideViewport, pasteText } from './support/reader'
+import { isWideViewport, pasteText, waitForReaderReady } from './support/reader'
 
 test('collapses heading sections while preserving heading permalinks', async ({ page }) => {
   await page.goto('/')
@@ -25,6 +25,8 @@ test('collapses heading sections while preserving heading permalinks', async ({ 
     ].join('\n'))
     document.querySelector('main')?.dispatchEvent(event)
   })
+
+  await waitForReaderReady(page, 'First section')
 
   const firstHeading = page.getByRole('heading', { name: 'First section' })
   const firstToggle = page.locator('[data-reader-heading-toggle]').first()
@@ -77,6 +79,7 @@ test('keeps heading permalinks below the sticky top bar', async ({ page }) => {
     '',
     Array.from({ length: 40 }, (_, index) => `After paragraph ${index + 1}.`).join('\n\n'),
   ].join('\n'))
+  await waitForReaderReady(page, 'Sticky anchor offset')
 
   const targetHeading = page.locator('h2#target-heading')
   await targetHeading.scrollIntoViewIfNeeded()
@@ -116,6 +119,8 @@ test('separates heading, body link, permalink, and collapse control styles', asy
     '',
     'Second body.',
   ].join('\n'))
+
+  await waitForReaderReady(page, 'First section')
 
   const h1 = page.locator('h1#first-section')
   const h2 = page.locator('h2#nested-topic')
@@ -205,6 +210,7 @@ test('shows quiet outline navigation only for heading-rich documents', async ({ 
     '',
     'Three body.',
   ].join('\n'))
+  await waitForReaderReady(page, 'One')
   await expect(page.getByTestId('reader-outline')).toHaveCount(0)
 
   await pasteText(page, [
@@ -224,6 +230,7 @@ test('shows quiet outline navigation only for heading-rich documents', async ({ 
     '',
     'Four body.',
   ].join('\n'))
+  await waitForReaderReady(page, 'Four')
 
   if (isWideViewport(page)) {
     await expect(page.getByTestId('reader-outline')).toBeVisible()
@@ -269,7 +276,7 @@ test('keeps long outline navigation scrollable without dragging reader content',
   await page.setViewportSize({ width: 1280, height: 900 })
   await page.goto('/')
   await pasteText(page, longOutlineMarkdown)
-  await expect(page.getByRole('heading', { name: 'Long outline' })).toBeVisible()
+  await waitForReaderReady(page, 'Long outline')
   await expect(page.getByTestId('reader-outline-rail')).toBeVisible()
   await expect(page.getByTestId('reader-outline').getByRole('link', { name: 'Final outline stop' })).toBeVisible()
 
@@ -310,7 +317,7 @@ test('keeps long outline navigation scrollable without dragging reader content',
   await page.setViewportSize({ width: 390, height: 844 })
   await page.reload()
   await pasteText(page, longOutlineMarkdown)
-  await expect(page.getByRole('heading', { name: 'Long outline' })).toBeVisible()
+  await waitForReaderReady(page, 'Long outline')
   const mobileReaderScrollBefore = await page.evaluate(() => Math.round(window.scrollY))
 
   await page.getByTestId('reader-outline-button').click()
@@ -364,6 +371,7 @@ test('keeps the active outline item visible while the reader scrolls', async ({ 
   await page.setViewportSize({ width: 1280, height: 900 })
   await page.goto('/')
   await pasteText(page, autoRevealMarkdown)
+  await waitForReaderReady(page, 'Active outline reveal')
   await expect(page.getByTestId('reader-outline-rail')).toBeVisible()
 
   await scrollHeadingNearTop(page, 'Follow section 24')
@@ -386,6 +394,7 @@ test('keeps the active outline item visible while the reader scrolls', async ({ 
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/')
   await pasteText(page, autoRevealMarkdown)
+  await waitForReaderReady(page, 'Active outline reveal')
   await scrollHeadingNearTop(page, 'Follow section 20')
 
   await page.getByTestId('reader-outline-button').click()
@@ -421,6 +430,8 @@ test('navigates from the outline and expands a collapsed parent section first', 
     '',
     'Third body.',
   ].join('\n'))
+
+  await waitForReaderReady(page, 'First section')
 
   const firstToggle = page.locator('[data-reader-heading-toggle]').first()
   await firstToggle.click()
@@ -487,6 +498,8 @@ test('navigates from the outline and expands nested collapsed sections', async (
     'Second body.',
   ].join('\n'))
 
+  await waitForReaderReady(page, 'Small detail')
+
   const nestedToggle = page.locator('[data-reader-heading-toggle][data-reader-heading-level="2"]').first()
   await nestedToggle.click()
   await expect(nestedToggle).toHaveAttribute('aria-expanded', 'false')
@@ -529,8 +542,8 @@ test('activates the final outline item near the page bottom', async ({ page }) =
     'The last section is intentionally short.',
   ].join('\n'))
 
+  await waitForReaderReady(page, 'Now try')
   await expect(page.getByRole('heading', { name: 'Overview' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Now try' })).toBeVisible()
 
   if (isWideViewport(page)) {
     await expect(page.getByTestId('reader-outline')).toBeVisible()
