@@ -60,6 +60,18 @@ interface LibraryStoreOptions {
   storageSafetyMarginBytes?: number
 }
 
+interface OpenLibraryDocumentOptions {
+  markOpened?: boolean
+}
+
+interface LibraryMutationOptions {
+  signal?: AbortSignal
+}
+
+interface AddLibraryDocumentOptions extends LibraryMutationOptions {
+  markOpened?: boolean
+}
+
 export class LibraryQuotaExceededError extends Error {
   constructor(message = 'Library storage quota exceeded') {
     super(message)
@@ -110,7 +122,10 @@ export function createLibraryStore(options: LibraryStoreOptions = {}) {
     return sortLibraryEntries(entries, sortMode)
   }
 
-  async function addMarkdownDocument(input: AddMarkdownDocumentInput): Promise<LibraryEntry> {
+  async function addMarkdownDocument(
+    input: AddMarkdownDocumentInput,
+    mutation: AddLibraryDocumentOptions = {},
+  ): Promise<LibraryEntry> {
     const byteSize = byteSizeOfText(input.markdown)
     const contentHash = hashText(input.markdown)
     const existingEntries = input.source.kind === 'url'
@@ -118,7 +133,7 @@ export function createLibraryStore(options: LibraryStoreOptions = {}) {
       : []
 
     if (existingEntries.length > 0) {
-      return await updateExistingMarkdownDocument(input, existingEntries, byteSize, contentHash)
+      return await updateExistingMarkdownDocument(input, existingEntries, byteSize, contentHash, mutation)
     }
 
     await ensureStorageBudget(byteSize)
@@ -134,7 +149,7 @@ export function createLibraryStore(options: LibraryStoreOptions = {}) {
       source: input.source,
       createdAt: timestamp,
       updatedAt: timestamp,
-      lastOpenedAt: timestamp,
+      lastOpenedAt: mutation.markOpened === false ? null : timestamp,
       pinned: false,
       byteSize,
       contentHash,
@@ -142,12 +157,19 @@ export function createLibraryStore(options: LibraryStoreOptions = {}) {
     }
 
     const db = await getDb()
+    throwIfAborted(mutation.signal)
     const tx = db.transaction(['entries', 'markdownBodies'], 'readwrite')
-    await Promise.all([
-      tx.objectStore('entries').add(entry),
-      tx.objectStore('markdownBodies').add({ documentId: id, markdown: input.markdown }),
-      tx.done,
-    ])
+    const unbindAbort = bindAbortSignal(tx, mutation.signal)
+    try {
+      await Promise.all([
+        tx.objectStore('entries').add(entry),
+        tx.objectStore('markdownBodies').add({ documentId: id, markdown: input.markdown }),
+        tx.done,
+      ])
+    }
+    finally {
+      unbindAbort()
+    }
 
     return entry
   }
@@ -167,6 +189,7 @@ export function createLibraryStore(options: LibraryStoreOptions = {}) {
     matchingEntries: LibraryEntry[],
     byteSize: number,
     contentHash: string,
+    mutation: AddLibraryDocumentOptions,
   ): Promise<LibraryEntry> {
     const existingEntry = selectCanonicalUrlEntry(matchingEntries)
 
@@ -175,50 +198,72 @@ export function createLibraryStore(options: LibraryStoreOptions = {}) {
     }
 
     const db = await getDb()
-    const previousBody = await db.get('markdownBodies', existingEntry.id)
-    const contentChanged = previousBody?.markdown !== input.markdown
     const additionalBytes = Math.max(0, byteSize - existingEntry.byteSize)
     if (additionalBytes > 0) {
       await ensureStorageBudget(additionalBytes)
     }
 
-    const title = resolveUpdatedMarkdownTitle(existingEntry, previousBody?.markdown ?? '', input)
-    const timestamp = now()
-    const nextEntry: LibraryEntry = {
-      ...existingEntry,
-      title,
-      sortTitle: normalizeSortTitle(title),
-      source: input.source,
-      updatedAt: timestamp,
-      lastOpenedAt: timestamp,
-      byteSize,
-      contentHash,
-    }
     const duplicateEntries = matchingEntries.filter(entry => entry.id !== existingEntry.id)
 
+    throwIfAborted(mutation.signal)
     const tx = db.transaction(['entries', 'markdownBodies', 'positions'], 'readwrite')
+    const unbindAbort = bindAbortSignal(tx, mutation.signal)
     const entriesStore = tx.objectStore('entries')
     const markdownBodiesStore = tx.objectStore('markdownBodies')
     const positionsStore = tx.objectStore('positions')
-    const operations: Promise<unknown>[] = [
-      entriesStore.put(nextEntry),
-      markdownBodiesStore.put({ documentId: existingEntry.id, markdown: input.markdown }),
-      ...duplicateEntries.flatMap(entry => [
-        entriesStore.delete(entry.id),
-        markdownBodiesStore.delete(entry.id),
-        positionsStore.delete(entry.id),
-      ]),
-    ]
 
-    if (contentChanged) {
-      operations.push(positionsStore.delete(existingEntry.id))
+    try {
+      const [currentEntry, currentBody] = await Promise.all([
+        entriesStore.get(existingEntry.id),
+        markdownBodiesStore.get(existingEntry.id),
+      ])
+      if (!currentEntry || currentEntry.type !== 'markdown' || !currentBody) {
+        throw new LibraryEntryNotFoundError(existingEntry.id)
+      }
+
+      const contentChanged = currentBody.markdown !== input.markdown
+      const title = resolveUpdatedMarkdownTitle(currentEntry, currentBody.markdown, input)
+      const timestamp = now()
+      const nextEntry: LibraryEntry = {
+        ...currentEntry,
+        title,
+        sortTitle: normalizeSortTitle(title),
+        source: input.source,
+        updatedAt: timestamp,
+        lastOpenedAt: mutation.markOpened === false ? currentEntry.lastOpenedAt : timestamp,
+        byteSize,
+        contentHash,
+      }
+      const operations: Promise<unknown>[] = [
+        entriesStore.put(nextEntry),
+        markdownBodiesStore.put({ documentId: currentEntry.id, markdown: input.markdown }),
+        ...duplicateEntries.flatMap(entry => [
+          entriesStore.delete(entry.id),
+          markdownBodiesStore.delete(entry.id),
+          positionsStore.delete(entry.id),
+        ]),
+      ]
+
+      if (contentChanged) {
+        operations.push(positionsStore.delete(currentEntry.id))
+      }
+
+      await Promise.all([...operations, tx.done])
+      return nextEntry
     }
-
-    await Promise.all([...operations, tx.done])
-    return nextEntry
+    catch (reason) {
+      await tx.done.catch(() => undefined)
+      throw reason
+    }
+    finally {
+      unbindAbort()
+    }
   }
 
-  async function addPdfDocument(input: AddPdfDocumentInput): Promise<LibraryEntry> {
+  async function addPdfDocument(
+    input: AddPdfDocumentInput,
+    mutation: AddLibraryDocumentOptions = {},
+  ): Promise<LibraryEntry> {
     const byteSize = input.blob.size
     await ensureStorageBudget(byteSize)
     const bytes = await input.blob.arrayBuffer()
@@ -234,30 +279,40 @@ export function createLibraryStore(options: LibraryStoreOptions = {}) {
       source: input.source,
       createdAt: timestamp,
       updatedAt: timestamp,
-      lastOpenedAt: timestamp,
+      lastOpenedAt: mutation.markOpened === false ? null : timestamp,
       pinned: false,
       byteSize,
       schemaVersion: 1,
     }
 
     const db = await getDb()
+    throwIfAborted(mutation.signal)
     const tx = db.transaction(['entries', 'pdfBodies'], 'readwrite')
-    await Promise.all([
-      tx.objectStore('entries').add(entry),
-      tx.objectStore('pdfBodies').add({
-        documentId: id,
-        bytes,
-        mimeType: 'application/pdf',
-        byteSize,
-        schemaVersion: 2,
-      }),
-      tx.done,
-    ])
+    const unbindAbort = bindAbortSignal(tx, mutation.signal)
+    try {
+      await Promise.all([
+        tx.objectStore('entries').add(entry),
+        tx.objectStore('pdfBodies').add({
+          documentId: id,
+          bytes,
+          mimeType: 'application/pdf',
+          byteSize,
+          schemaVersion: 2,
+        }),
+        tx.done,
+      ])
+    }
+    finally {
+      unbindAbort()
+    }
 
     return entry
   }
 
-  async function openMarkdownDocument(id: string): Promise<OpenMarkdownDocumentResult | null> {
+  async function openMarkdownDocument(
+    id: string,
+    options: OpenLibraryDocumentOptions = {},
+  ): Promise<OpenMarkdownDocumentResult | null> {
     const db = await getDb()
     const [entry, body, position] = await Promise.all([
       db.get('entries', id),
@@ -269,15 +324,22 @@ export function createLibraryStore(options: LibraryStoreOptions = {}) {
       return null
     }
 
-    const nextEntry = await markOpened(entry)
+    const openedEntry = options.markOpened === false ? entry : await markOpened(entry.id)
+    if (!openedEntry || openedEntry.type !== 'markdown') {
+      return null
+    }
+
     return {
-      entry: nextEntry,
+      entry: openedEntry,
       markdown: body.markdown,
       position: position?.type === 'markdown' ? position : null,
     }
   }
 
-  async function openPdfDocument(id: string): Promise<OpenPdfDocumentResult | null> {
+  async function openPdfDocument(
+    id: string,
+    options: OpenLibraryDocumentOptions = {},
+  ): Promise<OpenPdfDocumentResult | null> {
     const db = await getDb()
     const [entry, body, position] = await Promise.all([
       db.get('entries', id),
@@ -289,9 +351,13 @@ export function createLibraryStore(options: LibraryStoreOptions = {}) {
       return null
     }
 
-    const nextEntry = await markOpened(entry)
+    const openedEntry = options.markOpened === false ? entry : await markOpened(entry.id)
+    if (!openedEntry || openedEntry.type !== 'pdf') {
+      return null
+    }
+
     return {
-      entry: nextEntry,
+      entry: openedEntry,
       blob: pdfBodyToBlob(body),
       position: position?.type === 'pdf' ? position : null,
     }
@@ -299,9 +365,11 @@ export function createLibraryStore(options: LibraryStoreOptions = {}) {
 
   async function updateEntry(id: string, input: UpdateLibraryEntryInput): Promise<LibraryEntry> {
     const db = await getDb()
-    const entry = await db.get('entries', id)
+    const tx = db.transaction('entries', 'readwrite')
+    const entry = await tx.store.get(id)
 
     if (!entry) {
+      await tx.done
       throw new LibraryEntryNotFoundError(id)
     }
 
@@ -314,14 +382,29 @@ export function createLibraryStore(options: LibraryStoreOptions = {}) {
       updatedAt: now(),
     }
 
-    await db.put('entries', nextEntry)
+    await Promise.all([
+      tx.store.put(nextEntry),
+      tx.done,
+    ])
     return nextEntry
   }
 
-  async function saveReadingPosition(position: Omit<MarkdownReadingPosition, 'updatedAt'> | PdfReadingLocation): Promise<ReadingPosition> {
+  async function saveReadingPosition(
+    position: Omit<MarkdownReadingPosition, 'updatedAt'> | PdfReadingLocation,
+  ): Promise<ReadingPosition | null> {
     const nextPosition = { ...position, updatedAt: now() } as ReadingPosition
     const db = await getDb()
-    await db.put('positions', nextPosition)
+    const tx = db.transaction(['entries', 'positions'], 'readwrite')
+    const entry = await tx.objectStore('entries').get(position.documentId)
+    if (!entry) {
+      await tx.done
+      return null
+    }
+
+    await Promise.all([
+      tx.objectStore('positions').put(nextPosition),
+      tx.done,
+    ])
     return nextPosition
   }
 
@@ -380,15 +463,39 @@ export function createLibraryStore(options: LibraryStoreOptions = {}) {
     dbPromise = null
   }
 
-  async function markOpened(entry: LibraryEntry): Promise<LibraryEntry> {
-    const nextEntry: LibraryEntry = {
-      ...entry,
-      lastOpenedAt: now(),
-      updatedAt: now(),
-    }
+  async function markOpened(
+    id: string,
+    mutation: LibraryMutationOptions = {},
+  ): Promise<LibraryEntry | null> {
     const db = await getDb()
-    await db.put('entries', nextEntry)
-    return nextEntry
+    throwIfAborted(mutation.signal)
+    const tx = db.transaction('entries', 'readwrite')
+    const unbindAbort = bindAbortSignal(tx, mutation.signal)
+    try {
+      const entry = await tx.store.get(id)
+      if (!entry) {
+        await tx.done
+        return null
+      }
+
+      const nextEntry: LibraryEntry = {
+        ...entry,
+        lastOpenedAt: now(),
+        updatedAt: now(),
+      }
+      await Promise.all([
+        tx.store.put(nextEntry),
+        tx.done,
+      ])
+      return nextEntry
+    }
+    catch (reason) {
+      await tx.done.catch(() => undefined)
+      throw reason
+    }
+    finally {
+      unbindAbort()
+    }
   }
 
   async function findMarkdownEntriesByUrl(source: UrlLibrarySource): Promise<LibraryEntry[]> {
@@ -428,6 +535,7 @@ export function createLibraryStore(options: LibraryStoreOptions = {}) {
     getReadingPosition,
     isMarkdownContentChanged,
     listEntries,
+    markOpened,
     openMarkdownDocument,
     openPdfDocument,
     saveReadingPosition,
@@ -461,7 +569,7 @@ export function sortLibraryEntries(entries: LibraryEntry[], sortMode: LibrarySor
       return compareDateDesc(left.createdAt, right.createdAt)
     }
 
-    return compareDateDesc(left.lastOpenedAt ?? left.updatedAt, right.lastOpenedAt ?? right.updatedAt)
+    return compareLastOpenedDesc(left, right)
   })
 }
 
@@ -479,8 +587,20 @@ function selectCanonicalUrlEntry(entries: LibraryEntry[]): LibraryEntry | null {
       return left.pinned ? -1 : 1
     }
 
-    return compareDateDesc(left.lastOpenedAt ?? left.updatedAt, right.lastOpenedAt ?? right.updatedAt)
+    return compareLastOpenedDesc(left, right)
   })[0] ?? null
+}
+
+function compareLastOpenedDesc(left: LibraryEntry, right: LibraryEntry): number {
+  if (left.lastOpenedAt === null && right.lastOpenedAt !== null) {
+    return 1
+  }
+
+  if (left.lastOpenedAt !== null && right.lastOpenedAt === null) {
+    return -1
+  }
+
+  return compareDateDesc(left.lastOpenedAt ?? left.updatedAt, right.lastOpenedAt ?? right.updatedAt)
 }
 
 function resolveUpdatedMarkdownTitle(existingEntry: LibraryEntry, previousMarkdown: string, input: AddMarkdownDocumentInput): string {
@@ -589,6 +709,35 @@ function stripFileExtension(fileName: string): string | null {
   }
 
   return trimmed.replace(/\.[^.]+$/, '')
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  signal?.throwIfAborted()
+}
+
+function bindAbortSignal(
+  transaction: { abort: () => void },
+  signal?: AbortSignal,
+): () => void {
+  if (!signal) {
+    return () => undefined
+  }
+
+  const abortTransaction = () => {
+    try {
+      transaction.abort()
+    }
+    catch {
+      // The transaction already completed before cancellation reached it.
+    }
+  }
+
+  signal.addEventListener('abort', abortTransaction, { once: true })
+  if (signal.aborted) {
+    abortTransaction()
+  }
+
+  return () => signal.removeEventListener('abort', abortTransaction)
 }
 
 function byteSizeOfText(text: string): number {

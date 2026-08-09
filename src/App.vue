@@ -42,6 +42,16 @@ interface ActivePdfDocument {
   position: PdfReadingLocation | null
 }
 
+interface OperationGuard extends DocumentInputOperation {
+  readonly libraryWriteSignal: AbortSignal
+  readonly signal: AbortSignal
+}
+
+interface OpenLibraryEntryOptions {
+  operation?: OperationGuard
+  skipSave?: boolean
+}
+
 const loadLibraryView = () => import('@/components/LibraryView.vue')
 const loadPdfViewer = () => import('@/components/PdfViewer.vue')
 const loadReadingSettingsControl = () => import('@/components/ReadingSettingsControl.vue')
@@ -119,10 +129,23 @@ let systemDarkThemeMediaQuery: MediaQueryList | undefined
 let reducedMotionMediaQuery: MediaQueryList | undefined
 let progressSyncFrame: number | undefined
 let findDebounceTimer: ReturnType<typeof setTimeout> | undefined
+let documentActivationController: AbortController | null = null
+let libraryWriteController = new AbortController()
+let libraryRefreshSequence = 0
+let libraryRefreshAppliedSequence = 0
 let pdfDocumentActivationSequence = 0
 let pdfPositionSaveSequence = 0
 
-const { error, isFetchingUrl, loadFromClipboard, loadFromFile, loadFromText, loadFromUrl } = useDocumentInput({
+const {
+  cancelPendingOperation: cancelPendingDocumentInput,
+  error,
+  isFetchingUrl,
+  loadFromClipboard,
+  loadFromFile,
+  loadFromText,
+  loadFromUrl,
+} = useDocumentInput({
+  createOperationGuard: beginInputDocumentActivation,
   onDocument(document, operation) {
     void loadIncomingDocument(document, operation)
   },
@@ -257,6 +280,8 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  invalidatePendingLibraryWrites()
+  invalidatePendingDocumentActivation()
   window.clearTimeout(positionSaveTimer)
   if (progressSyncFrame !== undefined) {
     window.cancelAnimationFrame(progressSyncFrame)
@@ -280,41 +305,56 @@ function resetToSample(): void {
 }
 
 async function showLibrary(): Promise<void> {
+  const operation = beginDocumentActivation()
   preloadLibraryView()
   closeSurface()
   closeFindBar({ restoreFocus: false })
   const currentScrollY = getCurrentScrollY()
   window.clearTimeout(positionSaveTimer)
   await saveActiveReadingPosition({ scrollY: currentScrollY })
-  await refreshLibraryEntries()
+  if (!operation.isCurrent()) {
+    return
+  }
+
+  await refreshLibraryEntries(operation)
+  if (!operation.isCurrent()) {
+    return
+  }
+
   appMode.value = 'library'
   libraryStatus.value = ''
   window.scrollTo({ top: 0, behavior: 'auto' })
 }
 
-async function showReader(): Promise<void> {
+async function showReader(operation?: OperationGuard): Promise<void> {
   closeSurface()
   activePdfDocument.value = null
   appMode.value = 'reader'
   await nextTick()
+  if (operation && !operation.isCurrent()) {
+    return
+  }
+
   readerRef.value?.focus()
 }
 
 async function returnToActiveDocument(): Promise<void> {
+  const operation = beginDocumentActivation()
   closeSurface()
 
   const pdfDocument = activePdfDocument.value
   if (pdfDocument) {
     activatePdfDocument(pdfDocument)
     appMode.value = 'pdf'
-    await focusPdfViewerWhenReady()
+    await focusPdfViewerWhenReady(operation)
     return
   }
 
-  await showReader()
+  await showReader(operation)
 }
 
 function openAddMenu(): void {
+  invalidatePendingDocumentActivation()
   openSurface('actions')
 }
 
@@ -688,7 +728,7 @@ function toggleHeadingBookmark(item: ReaderOutlineItem): void {
     return
   }
 
-  persistReaderBookmarks([
+  const persisted = persistReaderBookmarks([
     ...readerBookmarks.value,
     createReaderBookmark({
       documentKey,
@@ -698,7 +738,9 @@ function toggleHeadingBookmark(item: ReaderOutlineItem): void {
       target: { headingId: item.id },
     }),
   ])
-  liveStatus.value = `已添加「${item.title}」书签`
+  if (persisted) {
+    liveStatus.value = `已添加「${item.title}」书签`
+  }
 }
 
 function bookmarkCurrentPosition(): void {
@@ -718,7 +760,7 @@ function bookmarkCurrentPosition(): void {
       return
     }
 
-    persistReaderBookmarks([
+    const persisted = persistReaderBookmarks([
       ...readerBookmarks.value,
       createReaderBookmark({
         documentKey,
@@ -728,12 +770,14 @@ function bookmarkCurrentPosition(): void {
         target: { pageNumber },
       }),
     ])
-    liveStatus.value = `已添加第 ${pageNumber} 页书签`
+    if (persisted) {
+      liveStatus.value = `已添加第 ${pageNumber} 页书签`
+    }
     return
   }
 
   const label = readerRef.value?.getBookmarkSnippet() ?? '当前位置'
-  persistReaderBookmarks([
+  const persisted = persistReaderBookmarks([
     ...readerBookmarks.value,
     createReaderBookmark({
       documentKey,
@@ -746,21 +790,30 @@ function bookmarkCurrentPosition(): void {
       },
     }),
   ])
-  liveStatus.value = `已添加「${label}」书签`
+  if (persisted) {
+    liveStatus.value = `已添加「${label}」书签`
+  }
 }
 
 function removeBookmark(id: string): void {
   const bookmark = readerBookmarks.value.find(item => item.id === id)
-  persistReaderBookmarks(readerBookmarks.value.filter(item => item.id !== id))
+  const persisted = persistReaderBookmarks(readerBookmarks.value.filter(item => item.id !== id))
 
-  if (bookmark) {
+  if (bookmark && persisted) {
     liveStatus.value = `已删除「${bookmark.label}」书签`
   }
 }
 
-function persistReaderBookmarks(bookmarks: ReaderBookmark[]): void {
+function persistReaderBookmarks(bookmarks: ReaderBookmark[]): boolean {
   readerBookmarks.value = bookmarks
-  writePersistedReaderBookmarks(bookmarks)
+  try {
+    writePersistedReaderBookmarks(bookmarks)
+    return true
+  }
+  catch {
+    liveStatus.value = '书签变更暂时无法保存到本机。'
+    return false
+  }
 }
 
 function getActiveBookmarkDocumentKey(): string | null {
@@ -846,6 +899,9 @@ async function loadIncomingDocument(document: ReaderDocument, operation: Documen
       markdown: document.markdown,
       source,
       label: document.label,
+    }, {
+      markOpened: false,
+      signal: operation.libraryWriteSignal,
     })
     if (!operation.isCurrent()) {
       return
@@ -876,10 +932,13 @@ async function openPendingUrlImport(): Promise<void> {
     return
   }
 
+  const operation = beginDocumentActivation()
   pendingUrlImport.value = null
   closeSurface()
-  await openLibraryEntry(pending.entry)
-  liveStatus.value = '已打开文库中的已有文档'
+  const opened = await openLibraryEntry(pending.entry, { operation })
+  if (opened) {
+    liveStatus.value = '已打开文库中的已有文档'
+  }
 }
 
 async function updatePendingUrlImport(): Promise<void> {
@@ -888,6 +947,7 @@ async function updatePendingUrlImport(): Promise<void> {
     return
   }
 
+  const operation = beginDocumentActivation()
   pendingUrlImport.value = null
   const source = pending.document.librarySource ?? createFallbackLibrarySource(pending.document)
 
@@ -900,29 +960,56 @@ async function updatePendingUrlImport(): Promise<void> {
 
     if (activeLibraryEntryId.value && activeLibraryEntryId.value !== pending.entry.id) {
       await saveActiveReadingPosition()
+      if (!operation.isCurrent()) {
+        return
+      }
     }
 
     const contentChanged = await libraryStore.isMarkdownContentChanged(pending.entry.id, pending.document.markdown)
+    if (!operation.isCurrent()) {
+      return
+    }
+
     const updated = await libraryStore.addMarkdownDocument({
       markdown: pending.document.markdown,
       source,
       label: pending.document.label,
+    }, {
+      markOpened: false,
+      signal: operation.signal,
     })
 
-    if (contentChanged) {
-      persistReaderBookmarks(removeBookmarksForDocument(readerBookmarks.value, libraryBookmarkKey(updated.id)))
+    const bookmarksPersisted = !contentChanged || persistReaderBookmarks(
+      removeBookmarksForDocument(readerBookmarks.value, libraryBookmarkKey(updated.id)),
+    )
+
+    if (!operation.isCurrent()) {
+      return
     }
 
-    await refreshLibraryEntries()
-    await openLibraryEntry(updated, {
+    await refreshLibraryEntries(operation)
+    if (!operation.isCurrent()) {
+      return
+    }
+
+    const opened = await openLibraryEntry(updated, {
+      operation,
       skipSave: contentChanged && activeLibraryEntryId.value === updated.id,
     })
 
-    liveStatus.value = contentChanged
-      ? '已更新到最新, 阅读位置和书签已重置'
-      : '内容没有变化, 已打开已有文档'
+    if (opened) {
+      liveStatus.value = !bookmarksPersisted
+        ? '内容已更新，但书签变更暂时无法保存到本机。'
+        : contentChanged
+          ? '已更新到最新, 阅读位置和书签已重置'
+          : '内容没有变化, 已打开已有文档'
+    }
   }
   catch (reason) {
+    if (!operation.isCurrent()) {
+      return
+    }
+
     if (isLibraryQuotaExceededError(reason)) {
       inputMenuStatus.value = '本机存储空间不够, 没有更新文库。可以删除一些文档后再试。'
     }
@@ -956,6 +1043,9 @@ async function loadIncomingPdf(file: File, operation: DocumentInputOperation): P
         fileName: file.name || 'document.pdf',
         mimeType: 'application/pdf',
       },
+    }, {
+      markOpened: false,
+      signal: operation.libraryWriteSignal,
     })
 
     if (!operation.isCurrent()) {
@@ -996,10 +1086,15 @@ async function activateNewMarkdownEntry(
     return
   }
 
-  activeLibraryEntryId.value = entry.id
+  const markedEntry = await markImportedLibraryEntryOpened(entry, operation)
+  if (!operation.isCurrent() || !markedEntry) {
+    return
+  }
+
+  activeLibraryEntryId.value = markedEntry.id
   activePdfDocument.value = null
-  documentState.source = readerSourceFromLibrarySource(entry.source)
-  documentState.label = labelForEntry(entry)
+  documentState.source = readerSourceFromLibrarySource(markedEntry.source)
+  documentState.label = labelForEntry(markedEntry)
   documentState.markdown = markdown
   pendingRestorePosition.value = null
   appMode.value = 'reader'
@@ -1021,9 +1116,14 @@ async function activateNewPdfEntry(
     return
   }
 
-  activeLibraryEntryId.value = entry.id
+  const markedEntry = await markImportedLibraryEntryOpened(entry, operation)
+  if (!operation.isCurrent() || !markedEntry) {
+    return
+  }
+
+  activeLibraryEntryId.value = markedEntry.id
   activatePdfDocument({
-    entry,
+    entry: markedEntry,
     blob,
     position: null,
   })
@@ -1038,52 +1138,169 @@ async function activateNewPdfEntry(
   await focusPdfViewerWhenReady(operation)
 }
 
-async function openLibraryEntry(entry: LibraryEntry, options: { skipSave?: boolean } = {}): Promise<void> {
+async function openLibraryEntry(entry: LibraryEntry, options: OpenLibraryEntryOptions = {}): Promise<boolean> {
+  const operation = options.operation ?? beginDocumentActivation()
+  if (!operation.isCurrent()) {
+    return false
+  }
+
   libraryStatus.value = ''
   closeFindBar({ restoreFocus: false })
 
   if (entry.type === 'pdf') {
     if (!options.skipSave) {
       await saveActiveReadingPosition()
+      if (!operation.isCurrent()) {
+        return false
+      }
     }
-    const opened = await libraryStore.openPdfDocument(entry.id)
+    const opened = await libraryStore.openPdfDocument(entry.id, { markOpened: false })
+
+    if (!operation.isCurrent()) {
+      return false
+    }
 
     if (!opened) {
       libraryStatus.value = '这个 PDF 已经不在文库中。'
-      await refreshLibraryEntries()
-      return
+      await refreshLibraryEntries(operation)
+      return false
     }
 
-    activeLibraryEntryId.value = opened.entry.id
-    activatePdfDocument(opened)
+    const markedEntry = await markLibraryEntryOpened(opened.entry.id, operation)
+    if (!operation.isCurrent()) {
+      return false
+    }
+
+    if (!markedEntry) {
+      libraryStatus.value = '这个 PDF 已经不在文库中。'
+      await refreshLibraryEntries(operation)
+      return false
+    }
+
+    activeLibraryEntryId.value = markedEntry.id
+    activatePdfDocument({
+      ...opened,
+      entry: markedEntry,
+    })
     appMode.value = 'pdf'
-    await refreshLibraryEntries()
-    await focusPdfViewerWhenReady()
-    return
+
+    await focusPdfViewerWhenReady(operation)
+    if (!operation.isCurrent()) {
+      return false
+    }
+
+    await refreshLibraryEntries(operation)
+    return operation.isCurrent()
   }
 
   if (!options.skipSave) {
     await saveActiveReadingPosition()
+    if (!operation.isCurrent()) {
+      return false
+    }
   }
-  const opened = await libraryStore.openMarkdownDocument(entry.id)
+  const opened = await libraryStore.openMarkdownDocument(entry.id, { markOpened: false })
+
+  if (!operation.isCurrent()) {
+    return false
+  }
 
   if (!opened) {
     libraryStatus.value = '这篇文档已经不在文库中。'
-    await refreshLibraryEntries()
-    return
+    await refreshLibraryEntries(operation)
+    return false
   }
 
-  activeLibraryEntryId.value = opened.entry.id
+  const markedEntry = await markLibraryEntryOpened(opened.entry.id, operation)
+  if (!operation.isCurrent()) {
+    return false
+  }
+
+  if (!markedEntry) {
+    libraryStatus.value = '这篇文档已经不在文库中。'
+    await refreshLibraryEntries(operation)
+    return false
+  }
+
+  activeLibraryEntryId.value = markedEntry.id
   activePdfDocument.value = null
-  documentState.source = readerSourceFromLibrarySource(opened.entry.source)
-  documentState.label = labelForEntry(opened.entry)
+  documentState.source = readerSourceFromLibrarySource(markedEntry.source)
+  documentState.label = labelForEntry(markedEntry)
   documentState.markdown = opened.markdown
   appMode.value = 'reader'
   pendingRestorePosition.value = opened.position
 
-  await refreshLibraryEntries()
-  await onDocumentLoaded(documentState.source)
+  await onDocumentLoaded(documentState.source, operation)
+  if (!operation.isCurrent()) {
+    return false
+  }
+
   restorePendingPositionIfReady()
+  await refreshLibraryEntries(operation)
+  return operation.isCurrent()
+}
+
+async function markLibraryEntryOpened(
+  id: string,
+  operation: DocumentInputOperation,
+): Promise<LibraryEntry | null> {
+  try {
+    return await libraryStore.markOpened(id, { signal: operation.signal })
+  }
+  catch (reason) {
+    if (!operation.isCurrent()) {
+      return null
+    }
+
+    throw reason
+  }
+}
+
+async function markImportedLibraryEntryOpened(
+  entry: LibraryEntry,
+  operation: DocumentInputOperation,
+): Promise<LibraryEntry | null> {
+  try {
+    return await libraryStore.markOpened(entry.id, { signal: operation.signal })
+  }
+  catch {
+    if (!operation.isCurrent()) {
+      return null
+    }
+
+    liveStatus.value = '文档已加入文库，但最近打开时间暂时无法更新。'
+    return entry
+  }
+}
+
+function beginInputDocumentActivation(): OperationGuard {
+  return beginDocumentActivation({ cancelInput: false })
+}
+
+function beginDocumentActivation(options: { cancelInput?: boolean } = {}): OperationGuard {
+  if (options.cancelInput !== false) {
+    cancelPendingDocumentInput()
+  }
+
+  documentActivationController?.abort()
+  const controller = new AbortController()
+  documentActivationController = controller
+  return {
+    isCurrent: () => !controller.signal.aborted && documentActivationController === controller,
+    libraryWriteSignal: libraryWriteController.signal,
+    signal: controller.signal,
+  }
+}
+
+function invalidatePendingDocumentActivation(): void {
+  cancelPendingDocumentInput()
+  documentActivationController?.abort()
+  documentActivationController = null
+}
+
+function invalidatePendingLibraryWrites(): void {
+  libraryWriteController.abort()
+  libraryWriteController = new AbortController()
 }
 
 async function updateLibrarySortMode(mode: LibrarySortMode): Promise<void> {
@@ -1105,6 +1322,7 @@ async function toggleLibraryPin(entry: LibraryEntry): Promise<void> {
 }
 
 async function deleteLibraryEntry(entry: LibraryEntry): Promise<void> {
+  const operation = beginDocumentActivation()
   await libraryStore.deleteEntry(entry.id)
   persistReaderBookmarks(removeBookmarksForDocument(readerBookmarks.value, libraryBookmarkKey(entry.id)))
 
@@ -1114,22 +1332,38 @@ async function deleteLibraryEntry(entry: LibraryEntry): Promise<void> {
     documentState.source = 'sample'
     documentState.label = 'miru sample'
     documentState.markdown = sampleMarkdown
+    if (!operation.isCurrent() && appMode.value !== 'library') {
+      appMode.value = 'reader'
+    }
   }
 
   await refreshLibraryEntries()
-  focusLibraryView()
+  if (operation.isCurrent()) {
+    focusLibraryView()
+  }
 }
 
 async function clearLibrary(): Promise<void> {
+  const activeEntryIdAtClear = activeLibraryEntryId.value
+  invalidatePendingLibraryWrites()
+  const operation = beginDocumentActivation()
   await libraryStore.clearLibrary()
   persistReaderBookmarks(removeLibraryBookmarks(readerBookmarks.value))
-  activeLibraryEntryId.value = null
-  activePdfDocument.value = null
-  documentState.source = 'sample'
-  documentState.label = 'miru sample'
-  documentState.markdown = sampleMarkdown
+  if (operation.isCurrent() || activeLibraryEntryId.value === activeEntryIdAtClear) {
+    activeLibraryEntryId.value = null
+    activePdfDocument.value = null
+    documentState.source = 'sample'
+    documentState.label = 'miru sample'
+    documentState.markdown = sampleMarkdown
+    if (!operation.isCurrent() && appMode.value !== 'library') {
+      appMode.value = 'reader'
+    }
+  }
+
   await refreshLibraryEntries()
-  focusLibraryView()
+  if (operation.isCurrent()) {
+    focusLibraryView()
+  }
 }
 
 async function savePdfReadingPosition(position: PdfReadingLocation): Promise<void> {
@@ -1147,7 +1381,8 @@ async function savePdfReadingPosition(position: PdfReadingLocation): Promise<voi
 
   const saved = await libraryStore.saveReadingPosition(position)
   if (
-    saved.type !== 'pdf'
+    !saved
+    || saved.type !== 'pdf'
     || saved.documentId !== position.documentId
     || activationSequence !== pdfDocumentActivationSequence
     || saveSequence !== pdfPositionSaveSequence
@@ -1172,11 +1407,13 @@ function updatePdfProgress(progress: number): void {
 }
 
 async function refreshLibraryEntries(operation?: DocumentInputOperation): Promise<void> {
+  const sequence = ++libraryRefreshSequence
   const entries = await libraryStore.listEntries(librarySortMode.value)
-  if (operation && !operation.isCurrent()) {
+  if ((operation && !operation.isCurrent()) || sequence < libraryRefreshAppliedSequence) {
     return
   }
 
+  libraryRefreshAppliedSequence = sequence
   libraryEntries.value = entries
 }
 
