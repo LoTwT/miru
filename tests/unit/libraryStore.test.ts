@@ -73,6 +73,51 @@ afterEach(async () => {
 })
 
 describe('local library store', () => {
+  it('retries opening the same store after an IndexedDB open failure', async () => {
+    const dbName = `miru:test-library:${crypto.randomUUID()}`
+    dbNames.add(dbName)
+    const incompatibleDb = await openDB(dbName, libraryDatabaseVersion + 1, {
+      upgrade(db) {
+        db.createObjectStore('future')
+      },
+    })
+    incompatibleDb.close()
+    const store = createLibraryStore({ dbName })
+
+    try {
+      await expect(store.listEntries()).rejects.toMatchObject({ name: 'VersionError' })
+      await deleteLibraryDatabase(dbName)
+
+      await expect(store.listEntries()).resolves.toEqual([])
+    }
+    finally {
+      await store.close().catch(() => undefined)
+    }
+  })
+
+  it('closes cleanly after an IndexedDB open failure and allows the store to reopen', async () => {
+    const dbName = `miru:test-library:${crypto.randomUUID()}`
+    dbNames.add(dbName)
+    const incompatibleDb = await openDB(dbName, libraryDatabaseVersion + 1, {
+      upgrade(db) {
+        db.createObjectStore('future')
+      },
+    })
+    incompatibleDb.close()
+    const store = createLibraryStore({ dbName })
+
+    try {
+      await expect(store.listEntries()).rejects.toMatchObject({ name: 'VersionError' })
+      await expect(store.close()).resolves.toBeUndefined()
+      await deleteLibraryDatabase(dbName)
+
+      await expect(store.listEntries()).resolves.toEqual([])
+    }
+    finally {
+      await store.close().catch(() => undefined)
+    }
+  })
+
   it('stores Markdown entries and bodies separately, then opens through the Markdown path', async () => {
     const store = createTestStore()
     const entry = await store.addMarkdownDocument({

@@ -3,7 +3,7 @@ import 'fake-indexeddb/auto'
 import { Blob as NodeBlob, File as NodeFile } from 'node:buffer'
 
 import { openDB } from 'idb'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   createLocalFontOption,
@@ -11,6 +11,7 @@ import {
   deleteLocalFontsDatabase,
   localFontHardLimitBytes,
   localFontSoftWarningBytes,
+  localFontsDatabaseVersion,
   validateLocalFontFile,
 } from '@/features/settings/localFonts'
 
@@ -48,6 +49,85 @@ afterEach(async () => {
 })
 
 describe('local font store', () => {
+  it('retries opening the same store after an IndexedDB open failure', async () => {
+    const dbName = `miru:test-local-fonts:${crypto.randomUUID()}`
+    dbNames.add(dbName)
+    const incompatibleDb = await openDB(dbName, localFontsDatabaseVersion + 1, {
+      upgrade(db) {
+        db.createObjectStore('future')
+      },
+    })
+    incompatibleDb.close()
+    const store = createLocalFontStore({ dbName })
+
+    try {
+      await expect(store.listFonts()).rejects.toMatchObject({ name: 'VersionError' })
+      await deleteLocalFontsDatabase(dbName)
+
+      await expect(store.listFonts()).resolves.toEqual([])
+    }
+    finally {
+      await store.close().catch(() => undefined)
+    }
+  })
+
+  it('closes cleanly after an IndexedDB open failure and allows the store to reopen', async () => {
+    const dbName = `miru:test-local-fonts:${crypto.randomUUID()}`
+    dbNames.add(dbName)
+    const incompatibleDb = await openDB(dbName, localFontsDatabaseVersion + 1, {
+      upgrade(db) {
+        db.createObjectStore('future')
+      },
+    })
+    incompatibleDb.close()
+    const store = createLocalFontStore({ dbName })
+
+    try {
+      await expect(store.listFonts()).rejects.toMatchObject({ name: 'VersionError' })
+      await expect(store.close()).resolves.toBeUndefined()
+      await deleteLocalFontsDatabase(dbName)
+
+      await expect(store.listFonts()).resolves.toEqual([])
+    }
+    finally {
+      await store.close().catch(() => undefined)
+    }
+  })
+
+  it('keeps a newer opening cached when close waits for an older opening', async () => {
+    const dbName = `miru:test-local-fonts:${crypto.randomUUID()}`
+    dbNames.add(dbName)
+    const legacyDb = await openDB(dbName, 1, {
+      upgrade(db) {
+        const fonts = db.createObjectStore('fonts', { keyPath: 'id' })
+        fonts.createIndex('name', 'name')
+        fonts.createIndex('createdAt', 'createdAt')
+      },
+    })
+    const store = createLocalFontStore({ dbName })
+    const openSpy = vi.spyOn(indexedDB, 'open')
+
+    try {
+      const olderList = store.listFonts()
+      const closing = store.close()
+      const newerList = store.listFonts()
+      legacyDb.close()
+
+      await expect(olderList).resolves.toEqual([])
+      await expect(closing).resolves.toBeUndefined()
+      await expect(newerList).resolves.toEqual([])
+      expect(openSpy).toHaveBeenCalledTimes(2)
+
+      await expect(store.listFonts()).resolves.toEqual([])
+      expect(openSpy).toHaveBeenCalledTimes(2)
+    }
+    finally {
+      legacyDb.close()
+      await store.close().catch(() => undefined)
+      openSpy.mockRestore()
+    }
+  })
+
   it('validates supported local font files with soft and hard size limits', () => {
     expect(validateLocalFontFile(createFontFile('quiet.woff2', 64))).toEqual({ ok: true })
     expect(validateLocalFontFile(createFontFile('large.otf', localFontSoftWarningBytes + 1, 'font/otf')))
