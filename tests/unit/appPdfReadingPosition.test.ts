@@ -1,9 +1,19 @@
+import 'fake-indexeddb/auto'
+
 import { createApp, nextTick } from 'vue'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import App from '@/App.vue'
-import type { LibraryEntry, OpenPdfDocumentResult, PdfReadingPosition } from '@/features/library/types'
+import sampleMarkdown from '@/content/sample.md?raw'
+import { createLibraryStore, deleteLibraryDatabase } from '@/features/library/libraryStore'
+import type {
+  LibraryEntry,
+  OpenMarkdownDocumentResult,
+  OpenPdfDocumentResult,
+  PdfReadingPosition,
+} from '@/features/library/types'
 import { readerBookmarksStorageKey } from '@/features/reader/bookmarks'
+import type { ReaderDocument } from '@/types/reader'
 
 const libraryStoreMocks = vi.hoisted(() => ({
   addMarkdownDocument: vi.fn(),
@@ -16,6 +26,7 @@ const libraryStoreMocks = vi.hoisted(() => ({
   getReadingPosition: vi.fn(),
   isMarkdownContentChanged: vi.fn(),
   listEntries: vi.fn(),
+  markOpened: vi.fn(),
   openMarkdownDocument: vi.fn(),
   openPdfDocument: vi.fn(),
   saveReadingPosition: vi.fn(),
@@ -24,6 +35,7 @@ const libraryStoreMocks = vi.hoisted(() => ({
 const pdfJsMocks = vi.hoisted(() => ({
   getDocument: vi.fn(),
 }))
+const libraryEntriesById = new Map<string, LibraryEntry>()
 
 vi.mock('pdfjs-dist', () => ({
   GlobalWorkerOptions: { workerSrc: '' },
@@ -65,7 +77,13 @@ vi.mock('@/components/ReaderSurface.vue', async () => {
   return {
     default: defineComponent({
       name: 'ReaderSurfaceStub',
-      setup(_props, { expose }) {
+      props: {
+        document: {
+          required: true,
+          type: Object,
+        },
+      },
+      setup(props, { expose }) {
         expose({
           clearSearch: vi.fn(),
           focus: vi.fn(),
@@ -73,18 +91,26 @@ vi.mock('@/components/ReaderSurface.vue', async () => {
           goToSearchMatch: vi.fn(),
           scrollToHeading: vi.fn(),
         })
-        return () => h('article', { 'data-testid': 'reader-surface-stub' })
+        return () => {
+          const document = props.document as ReaderDocument
+          return h('article', { 'data-testid': 'reader-surface-stub' }, [
+            h('h1', { 'data-testid': 'reader-document-title' }, document.label),
+            h('p', { 'data-testid': 'reader-document-body' }, document.markdown),
+          ])
+        }
       },
     }),
   }
 })
 
-describe('App PDF reading position ownership', () => {
+describe('App document activation and PDF reading position ownership', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     for (const mock of Object.values(libraryStoreMocks)) {
       mock.mockReset()
     }
+    libraryEntriesById.clear()
+    libraryStoreMocks.markOpened.mockImplementation(async (id: string) => libraryEntriesById.get(id) ?? null)
     pdfJsMocks.getDocument.mockReset()
     localStorage.clear()
     stubAppRuntime()
@@ -99,6 +125,489 @@ describe('App PDF reading position ownership', () => {
     vi.unstubAllGlobals()
     Reflect.deleteProperty(HTMLElement.prototype, 'scrollTo')
   })
+
+  test('keeps the latest selected Markdown document active when an earlier open finishes later', async () => {
+    const earlierEntry = createMarkdownEntry('earlier-a', 'Earlier A')
+    const latestEntry = createMarkdownEntry('latest-b', 'Latest B')
+    const earlierOpen = createDeferred<OpenMarkdownDocumentResult | null>()
+    const latestOpen = createDeferred<OpenMarkdownDocumentResult | null>()
+
+    libraryStoreMocks.listEntries.mockResolvedValue([earlierEntry, latestEntry])
+    libraryStoreMocks.openMarkdownDocument.mockImplementation((id: string) =>
+      id === earlierEntry.id ? earlierOpen.promise : latestOpen.promise)
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+
+    const mounted = mountApp()
+
+    try {
+      await showLibrary(mounted.host)
+      await openLibraryEntry(mounted.host, earlierEntry.title, '打开')
+      await vi.waitFor(() => expect(libraryStoreMocks.openMarkdownDocument).toHaveBeenCalledWith(
+        earlierEntry.id,
+        expect.anything(),
+      ))
+
+      await openLibraryEntry(mounted.host, latestEntry.title, '打开')
+      await vi.waitFor(() => expect(libraryStoreMocks.openMarkdownDocument).toHaveBeenCalledWith(
+        latestEntry.id,
+        expect.anything(),
+      ))
+
+      latestOpen.resolve(createOpenMarkdownDocument(latestEntry, '# Latest body'))
+      await vi.waitFor(() => {
+        expect(readerTitle(mounted.host)).toBe('Latest B')
+        expect(readerBody(mounted.host)).toBe('# Latest body')
+      })
+
+      earlierOpen.resolve(createOpenMarkdownDocument(earlierEntry, '# Earlier body'))
+      await flushSettledWork()
+
+      expect(readerTitle(mounted.host)).toBe('Latest B')
+      expect(readerBody(mounted.host)).toBe('# Latest body')
+      expect(markedLibraryEntryIds()).toContain(latestEntry.id)
+      expect(markedLibraryEntryIds()).not.toContain(earlierEntry.id)
+    }
+    finally {
+      mounted.unmount()
+    }
+  })
+
+  test('keeps a later Markdown selection active when an earlier PDF open finishes last', async () => {
+    const earlierEntry = createPdfEntry('earlier-pdf', 'Earlier PDF')
+    const latestEntry = createMarkdownEntry('latest-markdown', 'Latest Markdown')
+    const earlierOpen = createDeferred<OpenPdfDocumentResult | null>()
+    const latestOpen = createDeferred<OpenMarkdownDocumentResult | null>()
+
+    libraryStoreMocks.listEntries.mockResolvedValue([earlierEntry, latestEntry])
+    libraryStoreMocks.openPdfDocument.mockReturnValue(earlierOpen.promise)
+    libraryStoreMocks.openMarkdownDocument.mockReturnValue(latestOpen.promise)
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+
+    const mounted = mountApp()
+
+    try {
+      await showLibrary(mounted.host)
+      await openLibraryEntry(mounted.host, earlierEntry.title)
+      await vi.waitFor(() => expect(libraryStoreMocks.openPdfDocument).toHaveBeenCalled())
+
+      await openLibraryEntry(mounted.host, latestEntry.title, '打开')
+      await vi.waitFor(() => expect(libraryStoreMocks.openMarkdownDocument).toHaveBeenCalled())
+
+      latestOpen.resolve(createOpenMarkdownDocument(latestEntry, '# Latest cross-type body'))
+      await vi.waitFor(() => expect(readerTitle(mounted.host)).toBe('Latest Markdown'))
+
+      earlierOpen.resolve(createOpenPdfDocument(earlierEntry))
+      await flushSettledWork()
+
+      expect(readerTitle(mounted.host)).toBe('Latest Markdown')
+      expect(readerBody(mounted.host)).toBe('# Latest cross-type body')
+    }
+    finally {
+      mounted.unmount()
+    }
+  })
+
+  test('keeps a pasted document active when an earlier library open finishes last', async () => {
+    const earlierEntry = createMarkdownEntry('earlier-library', 'Earlier Library')
+    const latestEntry = createMarkdownEntry('latest-paste', 'Latest Paste')
+    const earlierOpen = createDeferred<OpenMarkdownDocumentResult | null>()
+
+    libraryStoreMocks.listEntries.mockResolvedValue([earlierEntry, latestEntry])
+    libraryStoreMocks.openMarkdownDocument.mockReturnValue(earlierOpen.promise)
+    libraryStoreMocks.addMarkdownDocument.mockResolvedValue(latestEntry)
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+
+    const mounted = mountApp()
+
+    try {
+      await showLibrary(mounted.host)
+      await openLibraryEntry(mounted.host, earlierEntry.title, '打开')
+      await vi.waitFor(() => expect(libraryStoreMocks.openMarkdownDocument).toHaveBeenCalled())
+
+      dispatchPaste(mounted.host, '# Latest pasted body')
+      await vi.waitFor(() => {
+        expect(readerTitle(mounted.host)).toBe('Latest Paste')
+        expect(readerBody(mounted.host)).toBe('# Latest pasted body')
+      })
+
+      earlierOpen.resolve(createOpenMarkdownDocument(earlierEntry, '# Earlier library body'))
+      await flushSettledWork()
+
+      expect(readerTitle(mounted.host)).toBe('Latest Paste')
+      expect(readerBody(mounted.host)).toBe('# Latest pasted body')
+      expect(markedLibraryEntryIds()).not.toContain(earlierEntry.id)
+    }
+    finally {
+      mounted.unmount()
+    }
+  })
+
+  test('keeps a later library selection active when an earlier paste finishes last', async () => {
+    const earlierEntry = createMarkdownEntry('earlier-paste', 'Earlier Paste')
+    const latestEntry = createMarkdownEntry('latest-library', 'Latest Library')
+    const earlierAdd = createDeferred<LibraryEntry>()
+
+    libraryStoreMocks.listEntries.mockResolvedValue([latestEntry])
+    libraryStoreMocks.addMarkdownDocument.mockReturnValue(earlierAdd.promise)
+    libraryStoreMocks.openMarkdownDocument.mockResolvedValue(
+      createOpenMarkdownDocument(latestEntry, '# Latest library body'),
+    )
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+
+    const mounted = mountApp()
+
+    try {
+      dispatchPaste(mounted.host, '# Earlier pasted body')
+      await vi.waitFor(() => expect(libraryStoreMocks.addMarkdownDocument).toHaveBeenCalled())
+
+      await showLibrary(mounted.host)
+      await openLibraryEntry(mounted.host, latestEntry.title, '打开')
+      await vi.waitFor(() => expect(readerTitle(mounted.host)).toBe('Latest Library'))
+
+      earlierAdd.resolve(earlierEntry)
+      await flushSettledWork()
+
+      expect(readerTitle(mounted.host)).toBe('Latest Library')
+      expect(readerBody(mounted.host)).toBe('# Latest library body')
+      expect(markedLibraryEntryIds()).toContain(latestEntry.id)
+    }
+    finally {
+      mounted.unmount()
+    }
+  })
+
+  test('keeps an unrelated pending import durable when a library entry is deleted', async () => {
+    const existingEntry = createMarkdownEntry('existing-delete', 'Existing delete')
+    const pendingEntry = createMarkdownEntry('pending-import', 'Pending import')
+    const pendingAdd = createDeferred<LibraryEntry>()
+
+    libraryStoreMocks.listEntries.mockResolvedValue([existingEntry])
+    libraryStoreMocks.addMarkdownDocument.mockReturnValue(pendingAdd.promise)
+    libraryStoreMocks.deleteEntry.mockResolvedValue(undefined)
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+
+    const mounted = mountApp()
+
+    try {
+      dispatchPaste(mounted.host, '# Pending import')
+      await vi.waitFor(() => expect(libraryStoreMocks.addMarkdownDocument).toHaveBeenCalled())
+      const mutation = libraryStoreMocks.addMarkdownDocument.mock.calls[0]?.[1] as { signal?: AbortSignal }
+
+      await showLibrary(mounted.host)
+      await clickLibraryEntryAction(mounted.host, existingEntry.title, '删除')
+      click(mounted.host, '.library-dialog__danger')
+      await vi.waitFor(() => expect(libraryStoreMocks.deleteEntry).toHaveBeenCalledWith(existingEntry.id))
+
+      expect(mutation.signal?.aborted).toBe(false)
+    }
+    finally {
+      pendingAdd.resolve(pendingEntry)
+      mounted.unmount()
+      await flushSettledWork()
+    }
+  })
+
+  test('keeps the sample active when a pending library open finishes afterward', async () => {
+    const earlierEntry = createMarkdownEntry('earlier-sample', 'Earlier Sample')
+    const earlierOpen = createDeferred<OpenMarkdownDocumentResult | null>()
+
+    libraryStoreMocks.listEntries.mockResolvedValue([earlierEntry])
+    libraryStoreMocks.openMarkdownDocument.mockReturnValue(earlierOpen.promise)
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+
+    const mounted = mountApp()
+
+    try {
+      await showLibrary(mounted.host)
+      await openLibraryEntry(mounted.host, earlierEntry.title, '打开')
+      await vi.waitFor(() => expect(libraryStoreMocks.openMarkdownDocument).toHaveBeenCalled())
+
+      click(mounted.host, '[data-testid="library-sample-entry"] .library-entry__open')
+      await vi.waitFor(() => expect(readerTitle(mounted.host)).toBe('miru sample'))
+
+      earlierOpen.resolve(createOpenMarkdownDocument(earlierEntry, '# Earlier library body'))
+      await flushSettledWork()
+
+      expect(readerTitle(mounted.host)).toBe('miru sample')
+      expect(readerBody(mounted.host)).toBe(sampleMarkdown)
+    }
+    finally {
+      mounted.unmount()
+    }
+  })
+
+  test('does not enter the library after a later reset becomes active', async () => {
+    const currentEntry = createMarkdownEntry('current-before-library', 'Current before library')
+    const pendingEntries = createDeferred<LibraryEntry[]>()
+
+    libraryStoreMocks.addMarkdownDocument.mockResolvedValue(currentEntry)
+    libraryStoreMocks.listEntries
+      .mockResolvedValueOnce([currentEntry])
+      .mockReturnValueOnce(pendingEntries.promise)
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+
+    const mounted = mountApp()
+
+    try {
+      dispatchPaste(mounted.host, '# Current before library')
+      await vi.waitFor(() => expect(readerTitle(mounted.host)).toBe('Current before library'))
+
+      click(mounted.host, '[data-testid="library-open-button"]')
+      await vi.waitFor(() => expect(libraryStoreMocks.listEntries).toHaveBeenCalledTimes(2))
+
+      click(mounted.host, '[data-testid="floating-affordance-button"]')
+      await clickButtonWithText(mounted.host, '清空当前')
+      await vi.waitFor(() => expect(readerTitle(mounted.host)).toBe('miru sample'))
+
+      pendingEntries.resolve([currentEntry])
+      await flushSettledWork()
+
+      expect(mounted.host.querySelector('[data-testid="library-view"]')).toBeNull()
+      expect(readerTitle(mounted.host)).toBe('miru sample')
+      expect(readerBody(mounted.host)).toBe(sampleMarkdown)
+    }
+    finally {
+      mounted.unmount()
+    }
+  })
+
+  test('aborts a pending URL fetch when entering the library', async () => {
+    let requestSignal: AbortSignal | undefined
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      requestSignal = init?.signal ?? undefined
+      return new Promise<Response>((_resolve, reject) => {
+        requestSignal?.addEventListener('abort', () => {
+          reject(new DOMException('Aborted', 'AbortError'))
+        }, { once: true })
+      })
+    })
+
+    vi.stubGlobal('fetch', fetchMock)
+    libraryStoreMocks.listEntries.mockResolvedValue([])
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+
+    const mounted = mountApp()
+
+    try {
+      dispatchPaste(mounted.host, 'https://example.com/pending.md')
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled())
+      expect(requestSignal?.aborted).toBe(false)
+
+      await showLibrary(mounted.host)
+
+      expect(requestSignal?.aborted).toBe(true)
+    }
+    finally {
+      mounted.unmount()
+    }
+  })
+
+  test.each(['delete', 'clear'] as const)(
+    'does not reactivate a pending document after a library %s',
+    async action => {
+      const earlierEntry = createMarkdownEntry(`earlier-${action}`, `Earlier ${action}`)
+      const earlierOpen = createDeferred<OpenMarkdownDocumentResult | null>()
+
+      libraryStoreMocks.listEntries
+        .mockResolvedValueOnce([earlierEntry])
+        .mockResolvedValue([])
+      libraryStoreMocks.openMarkdownDocument.mockReturnValue(earlierOpen.promise)
+      libraryStoreMocks.deleteEntry.mockResolvedValue(undefined)
+      libraryStoreMocks.clearLibrary.mockResolvedValue(undefined)
+      libraryStoreMocks.close.mockResolvedValue(undefined)
+
+      const mounted = mountApp()
+
+      try {
+        await showLibrary(mounted.host)
+        await openLibraryEntry(mounted.host, earlierEntry.title, '打开')
+        await vi.waitFor(() => expect(libraryStoreMocks.openMarkdownDocument).toHaveBeenCalled())
+
+        if (action === 'delete') {
+          await clickLibraryEntryAction(mounted.host, earlierEntry.title, '删除')
+          click(mounted.host, '.library-dialog__danger')
+          await vi.waitFor(() => expect(libraryStoreMocks.deleteEntry).toHaveBeenCalledWith(earlierEntry.id))
+        }
+        else {
+          click(mounted.host, '[data-testid="library-management-button"]')
+          await vi.waitFor(() => expect(
+            mounted.host.querySelector('[data-testid="library-clear-button"]'),
+          ).not.toBeNull())
+          click(mounted.host, '[data-testid="library-clear-button"]')
+          await vi.waitFor(() => expect(
+            mounted.host.querySelector('.library-dialog__danger'),
+          ).not.toBeNull())
+          click(mounted.host, '.library-dialog__danger')
+          await vi.waitFor(() => expect(libraryStoreMocks.clearLibrary).toHaveBeenCalled())
+        }
+
+        earlierOpen.resolve(createOpenMarkdownDocument(earlierEntry, '# Deleted body'))
+        await flushSettledWork()
+
+        expect(mounted.host.querySelector('[data-testid="library-view"]')).not.toBeNull()
+        click(mounted.host, '[data-testid="library-open-button"]')
+        await vi.waitFor(() => expect(readerTitle(mounted.host)).toBe('miru sample'))
+        expect(readerBody(mounted.host)).toBe(sampleMarkdown)
+        expect(markedLibraryEntryIds()).not.toContain(earlierEntry.id)
+      }
+      finally {
+        mounted.unmount()
+      }
+    },
+  )
+
+  test.each(['delete', 'clear'] as const)(
+    'reconciles the library after a pending %s is superseded by the add menu',
+    async action => {
+      const entry = createMarkdownEntry(`stale-list-${action}`, `Stale list ${action}`)
+      const mutation = createDeferred<void>()
+
+      libraryStoreMocks.listEntries
+        .mockResolvedValueOnce([entry])
+        .mockResolvedValue([])
+      libraryStoreMocks.deleteEntry.mockReturnValue(mutation.promise)
+      libraryStoreMocks.clearLibrary.mockReturnValue(mutation.promise)
+      libraryStoreMocks.close.mockResolvedValue(undefined)
+
+      const mounted = mountApp()
+
+      try {
+        await showLibrary(mounted.host)
+
+        if (action === 'delete') {
+          await clickLibraryEntryAction(mounted.host, entry.title, '删除')
+          click(mounted.host, '.library-dialog__danger')
+          await vi.waitFor(() => expect(libraryStoreMocks.deleteEntry).toHaveBeenCalledWith(entry.id))
+        }
+        else {
+          click(mounted.host, '[data-testid="library-management-button"]')
+          await vi.waitFor(() => expect(
+            mounted.host.querySelector('[data-testid="library-clear-button"]'),
+          ).not.toBeNull())
+          click(mounted.host, '[data-testid="library-clear-button"]')
+          await vi.waitFor(() => expect(
+            mounted.host.querySelector('.library-dialog__danger'),
+          ).not.toBeNull())
+          click(mounted.host, '.library-dialog__danger')
+          await vi.waitFor(() => expect(libraryStoreMocks.clearLibrary).toHaveBeenCalled())
+        }
+
+        click(mounted.host, '[data-testid="library-add-button"]')
+        mutation.resolve(undefined)
+        await flushSettledWork()
+
+        expect(mounted.host.querySelectorAll('[data-testid="library-entry"]')).toHaveLength(0)
+        expect(mounted.host.querySelector('[data-testid="library-empty"]')).not.toBeNull()
+      }
+      finally {
+        mounted.unmount()
+      }
+    },
+  )
+
+  test('does not let a stale guarded refresh suppress deletion reconciliation', async () => {
+    const entry = createMarkdownEntry('refresh-race', 'Refresh race')
+    const deletion = createDeferred<void>()
+    const open = createDeferred<OpenMarkdownDocumentResult | null>()
+    const deletionRefresh = createDeferred<LibraryEntry[]>()
+    const staleOpenRefresh = createDeferred<LibraryEntry[]>()
+
+    libraryStoreMocks.listEntries
+      .mockResolvedValueOnce([entry])
+      .mockReturnValueOnce(deletionRefresh.promise)
+      .mockReturnValueOnce(staleOpenRefresh.promise)
+    libraryStoreMocks.deleteEntry.mockReturnValue(deletion.promise)
+    libraryStoreMocks.openMarkdownDocument.mockReturnValue(open.promise)
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+
+    const mounted = mountApp()
+
+    try {
+      await showLibrary(mounted.host)
+      await clickLibraryEntryAction(mounted.host, entry.title, '删除')
+      click(mounted.host, '.library-dialog__danger')
+      await vi.waitFor(() => expect(libraryStoreMocks.deleteEntry).toHaveBeenCalledWith(entry.id))
+
+      await clickLibraryEntryAction(mounted.host, entry.title, '打开')
+      await vi.waitFor(() => expect(libraryStoreMocks.openMarkdownDocument).toHaveBeenCalled())
+
+      deletion.resolve(undefined)
+      await vi.waitFor(() => expect(libraryStoreMocks.listEntries).toHaveBeenCalledTimes(2))
+      open.resolve(null)
+      await vi.waitFor(() => expect(libraryStoreMocks.listEntries).toHaveBeenCalledTimes(3))
+
+      click(mounted.host, '[data-testid="library-add-button"]')
+      staleOpenRefresh.resolve([])
+      deletionRefresh.resolve([])
+      await flushSettledWork()
+
+      expect(mounted.host.querySelectorAll('[data-testid="library-entry"]')).toHaveLength(0)
+      expect(mounted.host.querySelector('[data-testid="library-empty"]')).not.toBeNull()
+    }
+    finally {
+      mounted.unmount()
+    }
+  })
+
+  test.each(['delete', 'clear'] as const)(
+    'falls back to the sample when a pending PDF %s is superseded by return to reading',
+    async action => {
+      const entry = createPdfEntry(`active-pdf-${action}`, `Active PDF ${action}`)
+      const opened = createOpenPdfDocument(entry)
+      const mutation = createDeferred<void>()
+      let visibleEntries = [entry]
+
+      libraryStoreMocks.listEntries.mockImplementation(async () => visibleEntries)
+      libraryStoreMocks.openPdfDocument.mockResolvedValue(opened)
+      libraryStoreMocks.deleteEntry.mockReturnValue(mutation.promise)
+      libraryStoreMocks.clearLibrary.mockReturnValue(mutation.promise)
+      libraryStoreMocks.saveReadingPosition.mockImplementation(async position => ({
+        ...position,
+        updatedAt: '2026-08-09T00:00:01.000Z',
+      }))
+      libraryStoreMocks.close.mockResolvedValue(undefined)
+
+      const mounted = mountApp()
+
+      try {
+        await showLibrary(mounted.host)
+        await openLibraryEntry(mounted.host, entry.title)
+        await vi.waitFor(() => {
+          expect(mounted.host.querySelector('[data-testid="library-view"]')).toBeNull()
+          expect(mounted.host.textContent).toContain(entry.title)
+        })
+        await showLibrary(mounted.host)
+
+        if (action === 'delete') {
+          await clickLibraryEntryAction(mounted.host, entry.title, '删除')
+          click(mounted.host, '.library-dialog__danger')
+          await vi.waitFor(() => expect(libraryStoreMocks.deleteEntry).toHaveBeenCalledWith(entry.id))
+        }
+        else {
+          click(mounted.host, '[data-testid="library-management-button"]')
+          await vi.waitFor(() => expect(
+            mounted.host.querySelector('[data-testid="library-clear-button"]'),
+          ).not.toBeNull())
+          click(mounted.host, '[data-testid="library-clear-button"]')
+          await vi.waitFor(() => expect(
+            mounted.host.querySelector('.library-dialog__danger'),
+          ).not.toBeNull())
+          click(mounted.host, '.library-dialog__danger')
+          await vi.waitFor(() => expect(libraryStoreMocks.clearLibrary).toHaveBeenCalled())
+        }
+
+        click(mounted.host, '[data-testid="library-open-button"]')
+        visibleEntries = []
+        mutation.resolve(undefined)
+        await vi.waitFor(() => expect(readerTitle(mounted.host)).toBe('miru sample'))
+
+        expect(readerBody(mounted.host)).toBe(sampleMarkdown)
+      }
+      finally {
+        mounted.unmount()
+      }
+    },
+  )
 
   test('does not apply a completed save to a PDF opened while that save was pending', async () => {
     const slowEntry = createPdfEntry('slow-a', 'Slow A')
@@ -388,6 +897,223 @@ describe('App PDF reading position ownership', () => {
   })
 })
 
+describe('library activation persistence contract', () => {
+  test('keeps read-only opens unmarked until the active document is committed', async () => {
+    await withLibraryStore(async (store) => {
+      const entry = await store.addMarkdownDocument({
+        markdown: '# Read-only open',
+        source: { kind: 'paste' },
+      })
+
+      const opened = await store.openMarkdownDocument(entry.id, { markOpened: false })
+      expect(opened?.entry.lastOpenedAt).toBe(entry.lastOpenedAt)
+      expect((await store.listEntries())[0]?.lastOpenedAt).toBe(entry.lastOpenedAt)
+
+      const marked = await store.markOpened(entry.id)
+      expect(marked?.lastOpenedAt).not.toBe(entry.lastOpenedAt)
+      expect((await store.listEntries())[0]?.lastOpenedAt).toBe(marked?.lastOpenedAt)
+    })
+  })
+
+  test.each(['delete', 'clear'] as const)(
+    'does not recreate a read snapshot after %s',
+    async action => {
+      await withLibraryStore(async (store) => {
+        const entry = await store.addMarkdownDocument({
+          markdown: `# ${action} snapshot`,
+          source: { kind: 'paste' },
+        })
+        expect(await store.openMarkdownDocument(entry.id, { markOpened: false })).not.toBeNull()
+
+        if (action === 'delete') {
+          await store.deleteEntry(entry.id)
+        }
+        else {
+          await store.clearLibrary()
+        }
+
+        expect(await store.markOpened(entry.id)).toBeNull()
+        expect(await store.countStoreEntries()).toEqual({
+          entries: 0,
+          markdownBodies: 0,
+          pdfBodies: 0,
+          positions: 0,
+        })
+      })
+    },
+  )
+
+  test('cancels an import that has not committed before the library is cleared', async () => {
+    const estimateStarted = createDeferred<void>()
+    const estimateResult = createDeferred<StorageEstimate>()
+    const controller = new AbortController()
+
+    await withLibraryStore(async (store) => {
+      const pendingAdd = store.addMarkdownDocument({
+        markdown: '# Pending import',
+        source: { kind: 'paste' },
+      }, { signal: controller.signal })
+
+      await estimateStarted.promise
+      controller.abort()
+      await store.clearLibrary()
+      estimateResult.resolve({ quota: 1024 * 1024, usage: 0 })
+
+      await expect(pendingAdd).rejects.toMatchObject({ name: 'AbortError' })
+      expect(await store.countStoreEntries()).toEqual({
+        entries: 0,
+        markdownBodies: 0,
+        pdfBodies: 0,
+        positions: 0,
+      })
+    }, {
+      estimateStorage: () => {
+        estimateStarted.resolve(undefined)
+        return estimateResult.promise
+      },
+    })
+  })
+
+  test('does not mark a stale URL update as opened', async () => {
+    await withLibraryStore(async (store) => {
+      const source = {
+        domain: 'example.com',
+        inputUrl: 'https://example.com/note.md',
+        kind: 'url' as const,
+        requestUrl: 'https://example.com/note.md',
+      }
+      const entry = await store.addMarkdownDocument({
+        markdown: '# Original',
+        source,
+      })
+
+      const updated = await store.addMarkdownDocument({
+        markdown: '# Updated',
+        source,
+      }, { markOpened: false })
+
+      expect(updated.lastOpenedAt).toBe(entry.lastOpenedAt)
+      expect((await store.openMarkdownDocument(entry.id, { markOpened: false }))?.markdown).toBe('# Updated')
+    })
+  })
+
+  test('keeps unopened imports behind documents that were actually opened', async () => {
+    await withLibraryStore(async (store) => {
+      const opened = await store.addMarkdownDocument({
+        markdown: '# Opened first',
+        source: { kind: 'paste' },
+      })
+      const unopened = await store.addMarkdownDocument({
+        markdown: '# Unopened later',
+        source: { kind: 'paste' },
+      }, { markOpened: false })
+
+      expect((await store.listEntries()).map(entry => entry.id)).toEqual([opened.id, unopened.id])
+    })
+  })
+
+  test('aborts an older delayed URL update before it can overwrite a newer update', async () => {
+    const estimateStarted = createDeferred<void>()
+    const estimateResult = createDeferred<StorageEstimate>()
+    const olderController = new AbortController()
+    let estimateCallCount = 0
+
+    await withLibraryStore(async (store) => {
+      const source = {
+        domain: 'example.com',
+        inputUrl: 'https://example.com/latest.md',
+        kind: 'url' as const,
+        requestUrl: 'https://example.com/latest.md',
+      }
+      const entry = await store.addMarkdownDocument({
+        markdown: '# Original body',
+        source,
+      })
+      const olderUpdate = store.addMarkdownDocument({
+        markdown: `# Older request\n\n${'x'.repeat(100)}`,
+        source,
+      }, {
+        markOpened: false,
+        signal: olderController.signal,
+      })
+
+      await estimateStarted.promise
+      const newer = await store.addMarkdownDocument({
+        markdown: '# Newer',
+        source,
+      }, { markOpened: false })
+      olderController.abort()
+      estimateResult.resolve({ quota: 1024 * 1024, usage: 0 })
+
+      await expect(olderUpdate).rejects.toMatchObject({ name: 'AbortError' })
+      expect(newer.id).toBe(entry.id)
+      expect((await store.openMarkdownDocument(entry.id, { markOpened: false }))?.markdown).toBe('# Newer')
+    }, {
+      estimateStorage: async () => {
+        estimateCallCount += 1
+        if (estimateCallCount === 1) {
+          return { quota: 1024 * 1024, usage: 0 }
+        }
+
+        estimateStarted.resolve(undefined)
+        return estimateResult.promise
+      },
+    })
+  })
+
+  test.each(['delete', 'clear'] as const)(
+    'does not recreate an orphan reading position during %s',
+    async action => {
+      await withLibraryStore(async (store) => {
+        const entry = await store.addMarkdownDocument({
+          markdown: `# Position ${action}`,
+          source: { kind: 'paste' },
+        })
+
+        const destructive = action === 'delete'
+          ? store.deleteEntry(entry.id)
+          : store.clearLibrary()
+        const save = store.saveReadingPosition({
+          activeHeadingId: null,
+          documentId: entry.id,
+          scrollY: 120,
+          type: 'markdown',
+        })
+        await Promise.all([destructive, save])
+
+        expect(await store.countStoreEntries()).toEqual({
+          entries: 0,
+          markdownBodies: 0,
+          pdfBodies: 0,
+          positions: 0,
+        })
+      })
+    },
+  )
+})
+
+async function withLibraryStore(
+  run: (store: ReturnType<typeof createLibraryStore>) => Promise<void>,
+  options: { estimateStorage?: () => Promise<StorageEstimate> } = {},
+): Promise<void> {
+  const dbName = `miru:test-activation:${crypto.randomUUID()}`
+  let tick = 0
+  const store = createLibraryStore({
+    dbName,
+    estimateStorage: options.estimateStorage ?? (async () => ({ quota: 1024 * 1024, usage: 0 })),
+    now: () => new Date(Date.UTC(2026, 7, 9, 0, 0, tick++)).toISOString(),
+    storageSafetyMarginBytes: 0,
+  })
+
+  try {
+    await run(store)
+  }
+  finally {
+    await store.close()
+    await deleteLibraryDatabase(dbName)
+  }
+}
+
 function mountApp() {
   const host = document.createElement('div')
   document.body.append(host)
@@ -413,16 +1139,47 @@ function click(host: HTMLElement, selector: string): void {
   button?.click()
 }
 
-async function openLibraryEntry(host: HTMLElement, title: string): Promise<void> {
+async function showLibrary(host: HTMLElement): Promise<void> {
+  click(host, '[data-testid="library-open-button"]')
+  await vi.waitFor(() => expect(host.querySelector('[data-testid="library-view"]')).not.toBeNull())
+}
+
+async function openLibraryEntry(host: HTMLElement, title: string, action = '看原件'): Promise<void> {
+  await clickLibraryEntryAction(host, title, action)
+}
+
+async function clickLibraryEntryAction(host: HTMLElement, title: string, action: string): Promise<void> {
   let openButton: HTMLButtonElement | undefined
   await vi.waitFor(() => {
     const entry = [...host.querySelectorAll<HTMLElement>('[data-testid="library-entry"]')]
       .find(candidate => candidate.textContent?.includes(title))
     openButton = [...(entry?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
-      .find(button => button.textContent?.trim() === '看原件')
+      .find(button => button.textContent?.trim() === action)
     expect(openButton).toBeDefined()
   })
   openButton?.click()
+}
+
+function dispatchPaste(host: HTMLElement, markdown: string): void {
+  const event = new Event('paste', { bubbles: true, cancelable: true }) as ClipboardEvent
+  Object.defineProperty(event, 'clipboardData', {
+    value: {
+      getData: (type: string) => type === 'text/plain' ? markdown : '',
+    },
+  })
+  host.querySelector('main')?.dispatchEvent(event)
+}
+
+function readerTitle(host: HTMLElement): string | undefined {
+  return host.querySelector('[data-testid="reader-document-title"]')?.textContent ?? undefined
+}
+
+function readerBody(host: HTMLElement): string | undefined {
+  return host.querySelector('[data-testid="reader-document-body"]')?.textContent ?? undefined
+}
+
+function markedLibraryEntryIds(): string[] {
+  return libraryStoreMocks.markOpened.mock.calls.map(([id]) => id as string)
 }
 
 async function clickButtonWithText(host: HTMLElement, text: string): Promise<void> {
@@ -487,8 +1244,26 @@ class IntersectionObserverStub {
   unobserve(): void {}
 }
 
+function createMarkdownEntry(id: string, title: string): LibraryEntry {
+  const entry: LibraryEntry = {
+    byteSize: 1,
+    createdAt: '2026-08-08T00:00:00.000Z',
+    id,
+    lastOpenedAt: null,
+    pinned: false,
+    schemaVersion: 1,
+    sortTitle: title.toLocaleLowerCase(),
+    source: { kind: 'paste' },
+    title,
+    type: 'markdown',
+    updatedAt: '2026-08-08T00:00:00.000Z',
+  }
+  libraryEntriesById.set(entry.id, entry)
+  return entry
+}
+
 function createPdfEntry(id: string, title: string): LibraryEntry {
-  return {
+  const entry: LibraryEntry = {
     byteSize: 1,
     createdAt: '2026-08-08T00:00:00.000Z',
     id,
@@ -504,6 +1279,19 @@ function createPdfEntry(id: string, title: string): LibraryEntry {
     title,
     type: 'pdf',
     updatedAt: '2026-08-08T00:00:00.000Z',
+  }
+  libraryEntriesById.set(entry.id, entry)
+  return entry
+}
+
+function createOpenMarkdownDocument(
+  entry: LibraryEntry,
+  markdown: string,
+): OpenMarkdownDocumentResult {
+  return {
+    entry,
+    markdown,
+    position: null,
   }
 }
 

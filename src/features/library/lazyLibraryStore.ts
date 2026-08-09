@@ -29,8 +29,8 @@ export function createLazyLibraryStore(options: LazyLibraryStoreOptions = {}): L
   }
 
   return {
-    addMarkdownDocument: async input => (await getStore()).addMarkdownDocument(input),
-    addPdfDocument: async input => (await getStore()).addPdfDocument(input),
+    addMarkdownDocument: async (input, mutation) => (await getStore()).addMarkdownDocument(input, mutation),
+    addPdfDocument: async (input, mutation) => (await getStore()).addPdfDocument(input, mutation),
     clearLibrary: async () => (await getStore()).clearLibrary(),
     async close() {
       const loading = storePromise
@@ -45,8 +45,9 @@ export function createLazyLibraryStore(options: LazyLibraryStoreOptions = {}): L
     getReadingPosition: async id => (await getStore()).getReadingPosition(id),
     isMarkdownContentChanged: async (id, markdown) => (await getStore()).isMarkdownContentChanged(id, markdown),
     listEntries: async sortMode => (await getStore()).listEntries(sortMode),
-    openMarkdownDocument: async id => (await getStore()).openMarkdownDocument(id),
-    openPdfDocument: async id => (await getStore()).openPdfDocument(id),
+    markOpened: async (id, mutation) => (await getStore()).markOpened(id, mutation),
+    openMarkdownDocument: async (id, options) => (await getStore()).openMarkdownDocument(id, options),
+    openPdfDocument: async (id, options) => (await getStore()).openPdfDocument(id, options),
     saveReadingPosition: async position => (await getStore()).saveReadingPosition(position),
     updateEntry: async (id, input) => (await getStore()).updateEntry(id, input),
   }

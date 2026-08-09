@@ -11,12 +11,15 @@ import type { LibrarySource } from '@/features/library/types'
 import type { ReaderDocument, ReaderError } from '@/types/reader'
 
 interface UseDocumentInputOptions {
+  createOperationGuard?: () => DocumentInputOperation
   onDocument: (document: ReaderDocument, operation: DocumentInputOperation) => void
   onPdf?: (file: File, operation: DocumentInputOperation) => void | Promise<void>
 }
 
 export interface DocumentInputOperation {
   readonly isCurrent: () => boolean
+  readonly libraryWriteSignal?: AbortSignal
+  readonly signal?: AbortSignal
 }
 
 export const MAX_MARKDOWN_INPUT_BYTES = 5 * 1024 * 1024
@@ -37,8 +40,7 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
 
   if (getCurrentScope()) {
     onScopeDispose(() => {
-      inputSequence += 1
-      cancelActiveUrlFetch()
+      cancelPendingOperation()
     })
   }
 
@@ -240,12 +242,20 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
     controller?.abort()
   }
 
+  function cancelPendingOperation(): void {
+    inputSequence += 1
+    cancelActiveUrlFetch()
+  }
+
   function beginInputOperation(): DocumentInputOperation {
     inputSequence += 1
     const sequence = inputSequence
+    const externalGuard = options.createOperationGuard?.()
     cancelActiveUrlFetch()
     return {
-      isCurrent: () => sequence === inputSequence,
+      isCurrent: () => sequence === inputSequence && (externalGuard?.isCurrent() ?? true),
+      libraryWriteSignal: externalGuard?.libraryWriteSignal,
+      signal: externalGuard?.signal,
     }
   }
 
@@ -258,6 +268,7 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
   }
 
   return {
+    cancelPendingOperation,
     error: readonly(error),
     isFetchingUrl: readonly(isFetchingUrl),
     loadFromClipboard,
