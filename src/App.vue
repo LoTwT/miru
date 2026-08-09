@@ -22,7 +22,7 @@ import { useRenderedMarkdown } from '@/features/reader/useRenderedMarkdown'
 import { useReadingSettings } from '@/features/settings/useReadingSettings'
 import { loadDefaultReadingFonts } from '@/lib/theme/fonts'
 import { readPersistedReadingSettings } from '@/lib/theme/tokens'
-import type { LibraryEntry, LibrarySortMode, LibrarySource, MarkdownReadingPosition, OpenPdfDocumentResult, PdfReadingPosition } from '@/features/library/types'
+import type { LibraryEntry, LibrarySortMode, LibrarySource, MarkdownReadingPosition, PdfReadingLocation } from '@/features/library/types'
 import type { ReaderDocument, RemoteImageMode } from '@/types/reader'
 import type { ReaderOutlineItem } from '@/features/reader/outlineNavigation'
 
@@ -34,6 +34,12 @@ interface PdfViewerHandle {
   focus: () => void
   goToPage: (page: number) => void
   goToSearchMatch: (delta: number) => void
+}
+
+interface ActivePdfDocument {
+  blob: Blob
+  entry: LibraryEntry
+  position: PdfReadingLocation | null
 }
 
 const loadLibraryView = () => import('@/components/LibraryView.vue')
@@ -70,7 +76,7 @@ const libraryStatus = shallowRef('')
 const inputMenuStatus = shallowRef('')
 const pendingUrlImport = shallowRef<PendingUrlImport | null>(null)
 const pendingRestorePosition = shallowRef<MarkdownReadingPosition | null>(null)
-const activePdfDocument = shallowRef<OpenPdfDocumentResult | null>(null)
+const activePdfDocument = shallowRef<ActivePdfDocument | null>(null)
 const isDragging = shallowRef(false)
 const openSurfaceId = shallowRef<CommandSurfaceId | null>(null)
 const liveStatus = shallowRef('')
@@ -113,6 +119,8 @@ let systemDarkThemeMediaQuery: MediaQueryList | undefined
 let reducedMotionMediaQuery: MediaQueryList | undefined
 let progressSyncFrame: number | undefined
 let findDebounceTimer: ReturnType<typeof setTimeout> | undefined
+let pdfDocumentActivationSequence = 0
+let pdfPositionSaveSequence = 0
 
 const { error, isFetchingUrl, loadFromClipboard, loadFromFile, loadFromText, loadFromUrl } = useDocumentInput({
   onDocument(document, operation) {
@@ -295,7 +303,9 @@ async function showReader(): Promise<void> {
 async function returnToActiveDocument(): Promise<void> {
   closeSurface()
 
-  if (activePdfDocument.value) {
+  const pdfDocument = activePdfDocument.value
+  if (pdfDocument) {
+    activatePdfDocument(pdfDocument)
     appMode.value = 'pdf'
     await focusPdfViewerWhenReady()
     return
@@ -1012,11 +1022,11 @@ async function activateNewPdfEntry(
   }
 
   activeLibraryEntryId.value = entry.id
-  activePdfDocument.value = {
+  activatePdfDocument({
     entry,
     blob,
     position: null,
-  }
+  })
   pendingRestorePosition.value = null
   appMode.value = 'pdf'
 
@@ -1045,7 +1055,7 @@ async function openLibraryEntry(entry: LibraryEntry, options: { skipSave?: boole
     }
 
     activeLibraryEntryId.value = opened.entry.id
-    activePdfDocument.value = opened
+    activatePdfDocument(opened)
     appMode.value = 'pdf'
     await refreshLibraryEntries()
     await focusPdfViewerWhenReady()
@@ -1122,18 +1132,39 @@ async function clearLibrary(): Promise<void> {
   focusLibraryView()
 }
 
-async function savePdfReadingPosition(position: Omit<PdfReadingPosition, 'updatedAt'>): Promise<void> {
-  if (activePdfDocument.value?.entry.id !== position.documentId) {
+async function savePdfReadingPosition(position: PdfReadingLocation): Promise<void> {
+  const pdfDocument = activePdfDocument.value
+  if (pdfDocument?.entry.id !== position.documentId) {
     return
   }
 
-  const saved = await libraryStore.saveReadingPosition(position)
-  if (saved.type === 'pdf' && activePdfDocument.value) {
-    activePdfDocument.value = {
-      ...activePdfDocument.value,
-      position: saved,
-    }
+  const activationSequence = pdfDocumentActivationSequence
+  const saveSequence = ++pdfPositionSaveSequence
+  activePdfDocument.value = {
+    ...pdfDocument,
+    position,
   }
+
+  const saved = await libraryStore.saveReadingPosition(position)
+  if (
+    saved.type !== 'pdf'
+    || saved.documentId !== position.documentId
+    || activationSequence !== pdfDocumentActivationSequence
+    || saveSequence !== pdfPositionSaveSequence
+    || activePdfDocument.value?.entry.id !== position.documentId
+  ) {
+    return
+  }
+
+  activePdfDocument.value = {
+    ...activePdfDocument.value,
+    position: saved,
+  }
+}
+
+function activatePdfDocument(document: ActivePdfDocument): void {
+  pdfDocumentActivationSequence += 1
+  activePdfDocument.value = document
 }
 
 function updatePdfProgress(progress: number): void {

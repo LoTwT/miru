@@ -4,7 +4,7 @@ import type { VirtualItem } from '@tanstack/vue-virtual'
 import { computed, nextTick, onMounted, onUnmounted, shallowRef, triggerRef, useTemplateRef, watch } from 'vue'
 
 import PdfViewerToolbar from '@/components/pdf/PdfViewerToolbar.vue'
-import type { LibraryEntry, PdfReadingPosition } from '@/features/library/types'
+import type { LibraryEntry, PdfReadingLocation } from '@/features/library/types'
 import {
   getBufferedPdfPages,
   getDominantPdfPage,
@@ -20,8 +20,8 @@ import { createPdfSearchPageIndex, findPdfSearchMatches } from '@/features/reade
 import type { PdfSearchMatch, PdfSearchPageIndex } from '@/features/reader/pdfSearchIndex'
 import type { PDFDocumentLoadingTask, PDFDocumentProxy, PDFPageProxy, RenderTask } from 'pdfjs-dist'
 
-type PdfScaleMode = PdfReadingPosition['scaleMode']
-type PdfViewMode = PdfReadingPosition['viewMode']
+type PdfScaleMode = PdfReadingLocation['scaleMode']
+type PdfViewMode = PdfReadingLocation['viewMode']
 type PdfRenderState = 'idle' | 'rendering' | 'ready' | 'error'
 type PdfPageViewport = ReturnType<PDFPageProxy['getViewport']>
 type PdfTextContent = Awaited<ReturnType<PDFPageProxy['getTextContent']>>
@@ -53,13 +53,13 @@ interface PdfTextLayerRenderOptions {
 const props = defineProps<{
   blob: Blob
   entry: LibraryEntry
-  position: PdfReadingPosition | null
+  position: PdfReadingLocation | null
   searchQuery: string
 }>()
 
 const emit = defineEmits<{
   back: []
-  positionChange: [position: Omit<PdfReadingPosition, 'updatedAt'>]
+  positionChange: [position: PdfReadingLocation]
   progressChange: [progress: number]
   searchChange: [state: { activeIndex: number, announcement?: string, resultContext?: string, statusText?: string, total: number }]
 }>()

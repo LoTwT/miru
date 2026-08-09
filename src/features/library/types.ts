@@ -65,13 +65,16 @@ export interface MarkdownReadingPosition {
   updatedAt: string
 }
 
-export interface PdfReadingPosition {
+export interface PdfReadingLocation {
   documentId: string
   type: 'pdf'
   pageNumber: number
   viewMode: 'paged' | 'scroll'
   scaleMode: 'fit-width' | 'fit-page' | 'custom'
   scale: number | null
+}
+
+export interface PdfReadingPosition extends PdfReadingLocation {
   updatedAt: string
 }
 

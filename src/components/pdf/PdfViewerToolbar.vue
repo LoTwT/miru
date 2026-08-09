@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, shallowRef, watch } from 'vue'
 
-import type { PdfReadingPosition } from '@/features/library/types'
+import type { PdfReadingLocation } from '@/features/library/types'
 
-type PdfScaleMode = PdfReadingPosition['scaleMode']
-type PdfViewMode = PdfReadingPosition['viewMode']
+type PdfScaleMode = PdfReadingLocation['scaleMode']
+type PdfViewMode = PdfReadingLocation['viewMode']
 
 const props = defineProps<{
   canGoToNextPage: boolean
