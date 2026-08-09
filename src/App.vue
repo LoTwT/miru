@@ -19,10 +19,14 @@ import {
   type ReaderBookmark,
 } from '@/features/reader/bookmarks'
 import { useRenderedMarkdown } from '@/features/reader/useRenderedMarkdown'
+import {
+  useMarkdownPositionOwnership,
+  type MarkdownPositionOwnerSuspension,
+} from '@/features/reader/useMarkdownPositionOwnership'
 import { useReadingSettings } from '@/features/settings/useReadingSettings'
 import { loadDefaultReadingFonts } from '@/lib/theme/fonts'
 import { readPersistedReadingSettings } from '@/lib/theme/tokens'
-import type { LibraryEntry, LibrarySortMode, LibrarySource, MarkdownReadingPosition, PdfReadingLocation } from '@/features/library/types'
+import type { LibraryEntry, LibrarySortMode, LibrarySource, PdfReadingLocation } from '@/features/library/types'
 import type { ReaderDocument, RemoteImageMode } from '@/types/reader'
 import type { ReaderOutlineItem } from '@/features/reader/outlineNavigation'
 
@@ -91,7 +95,6 @@ const libraryViewStatus = computed(() => [libraryStatus.value, libraryRefreshSta
   .join(' '))
 const inputMenuStatus = shallowRef('')
 const pendingUrlImport = shallowRef<PendingUrlImport | null>(null)
-const pendingRestorePosition = shallowRef<MarkdownReadingPosition | null>(null)
 const activePdfDocument = shallowRef<ActivePdfDocument | null>(null)
 const isDragging = shallowRef(false)
 const openSurfaceId = shallowRef<CommandSurfaceId | null>(null)
@@ -163,6 +166,36 @@ const {
 const rendered = useRenderedMarkdown({
   markdown: () => documentState.markdown,
   remoteImageMode: () => remoteImageMode.value,
+})
+
+const {
+  activate: activateMarkdownPositionOwner,
+  clearPendingRestore: clearPendingMarkdownRestore,
+  dispose: disposeMarkdownPositionOwnership,
+  flushPending: flushPendingActiveReadingPosition,
+  getActiveOwner: getActiveMarkdownPositionOwner,
+  invalidate: invalidateMarkdownPositionOwner,
+  onScroll: saveMarkdownPositionOnScroll,
+  pauseRestore: pauseMarkdownPositionRestore,
+  preserveActive: preserveActiveReadingPosition,
+  restorePendingIfReady: restorePendingPositionIfReady,
+  resumeRestore: resumeMarkdownPositionRestore,
+  resumeSuspension: resumeMarkdownPositionOwner,
+  saveActive: saveActiveReadingPosition,
+  setPendingRestore: setPendingMarkdownRestore,
+  settleSaves: settleMarkdownPositionSaves,
+  suspend: suspendMarkdownPositionOwner,
+} = useMarkdownPositionOwnership({
+  getActiveDocumentId: () => activeLibraryEntryId.value,
+  getActiveHeadingId: () => activeOutlineId.value,
+  getScrollY: getCurrentScrollY,
+  isLibraryActive: () => appMode.value === 'library',
+  isReaderActive: () => appMode.value === 'reader',
+  isRendering: () => rendered.isRendering.value,
+  isScrollTrackingEnabled: () => pageScrollLock === null,
+  onPositionRestored: updateMarkdownProgress,
+  restoreScroll: restoreMarkdownScrollPosition,
+  savePosition: position => libraryStore.saveReadingPosition(position),
 })
 
 const status = computed(() => rendered.error.value ?? error.value?.detail ?? inputMenuStatus.value ?? '')
@@ -288,7 +321,7 @@ onMounted(() => {
 onUnmounted(() => {
   invalidatePendingLibraryWrites()
   invalidatePendingDocumentActivation()
-  window.clearTimeout(positionSaveTimer)
+  disposeMarkdownPositionOwnership()
   if (progressSyncFrame !== undefined) {
     window.cancelAnimationFrame(progressSyncFrame)
   }
@@ -316,20 +349,30 @@ async function showLibrary(): Promise<void> {
   closeSurface()
   closeFindBar({ restoreFocus: false })
   const currentScrollY = getCurrentScrollY()
-  window.clearTimeout(positionSaveTimer)
   await saveActiveReadingPosition({ scrollY: currentScrollY })
   if (!operation.isCurrent()) {
     return
   }
 
-  libraryStatus.value = ''
-  await refreshLibraryEntries(operation)
-  if (!operation.isCurrent()) {
-    return
-  }
+  const restorePause = pauseMarkdownPositionRestore()
+  try {
+    libraryStatus.value = ''
+    await refreshLibraryEntries(operation)
+    if (!operation.isCurrent()) {
+      return
+    }
 
-  appMode.value = 'library'
-  window.scrollTo({ top: 0, behavior: 'auto' })
+    await flushPendingActiveReadingPosition()
+    if (!operation.isCurrent()) {
+      return
+    }
+
+    appMode.value = 'library'
+    window.scrollTo({ top: 0, behavior: 'auto' })
+  }
+  finally {
+    resumeMarkdownPositionRestore(restorePause)
+  }
 }
 
 async function showReader(operation?: OperationGuard): Promise<void> {
@@ -341,6 +384,7 @@ async function showReader(operation?: OperationGuard): Promise<void> {
     return
   }
 
+  restorePendingPositionIfReady()
   readerRef.value?.focus()
 }
 
@@ -865,8 +909,15 @@ async function loadIncomingDocument(document: ReaderDocument, operation: Documen
   closeFindBar({ restoreFocus: false })
 
   if (document.source === 'sample') {
+    await preserveActiveReadingPosition()
+    if (!operation.isCurrent()) {
+      return
+    }
+
+    invalidateMarkdownPositionOwner()
     activeLibraryEntryId.value = null
     activePdfDocument.value = null
+    clearPendingMarkdownRestore()
     documentState.source = document.source
     documentState.label = document.label
     documentState.markdown = document.markdown
@@ -962,10 +1013,11 @@ async function updatePendingUrlImport(): Promise<void> {
     return
   }
 
+  let positionOwnerSuspension: MarkdownPositionOwnerSuspension | null = null
   try {
     closeSurface()
 
-    if (activeLibraryEntryId.value && activeLibraryEntryId.value !== pending.entry.id) {
+    if (activeLibraryEntryId.value) {
       await saveActiveReadingPosition()
       if (!operation.isCurrent()) {
         return
@@ -977,6 +1029,17 @@ async function updatePendingUrlImport(): Promise<void> {
       return
     }
 
+    if (contentChanged && getActiveMarkdownPositionOwner()?.documentId === pending.entry.id) {
+      positionOwnerSuspension = suspendMarkdownPositionOwner(pending.entry.id)
+      if (positionOwnerSuspension) {
+        await settleMarkdownPositionSaves(positionOwnerSuspension.owner, operation.signal)
+        if (!operation.isCurrent()) {
+          resumeMarkdownPositionOwner(positionOwnerSuspension)
+          return
+        }
+      }
+    }
+
     const updated = await libraryStore.addMarkdownDocument({
       markdown: pending.document.markdown,
       source,
@@ -985,6 +1048,13 @@ async function updatePendingUrlImport(): Promise<void> {
       markOpened: false,
       signal: operation.signal,
     })
+
+    if (positionOwnerSuspension) {
+      invalidateMarkdownPositionOwner(positionOwnerSuspension.owner, {
+        discardSuspendedPosition: true,
+      })
+      positionOwnerSuspension = null
+    }
 
     const bookmarksPersisted = !contentChanged || persistReaderBookmarks(
       removeBookmarksForDocument(readerBookmarks.value, libraryBookmarkKey(updated.id)),
@@ -1013,6 +1083,7 @@ async function updatePendingUrlImport(): Promise<void> {
     }
   }
   catch (reason) {
+    resumeMarkdownPositionOwner(positionOwnerSuspension)
     if (!operation.isCurrent()) {
       return
     }
@@ -1099,12 +1170,18 @@ async function activateNewMarkdownEntry(
     return
   }
 
+  await flushPendingActiveReadingPosition()
+  if (!operation.isCurrent()) {
+    return
+  }
+
   activeLibraryEntryId.value = markedEntry.id
+  activateMarkdownPositionOwner(markedEntry.id)
   activePdfDocument.value = null
   documentState.source = readerSourceFromLibrarySource(markedEntry.source)
   documentState.label = labelForEntry(markedEntry)
   documentState.markdown = markdown
-  pendingRestorePosition.value = null
+  clearPendingMarkdownRestore()
   appMode.value = 'reader'
 
   await refreshLibraryEntries(operation)
@@ -1129,13 +1206,19 @@ async function activateNewPdfEntry(
     return
   }
 
+  await flushPendingActiveReadingPosition()
+  if (!operation.isCurrent()) {
+    return
+  }
+
   activeLibraryEntryId.value = markedEntry.id
+  invalidateMarkdownPositionOwner()
   activatePdfDocument({
     entry: markedEntry,
     blob,
     position: null,
   })
-  pendingRestorePosition.value = null
+  clearPendingMarkdownRestore()
   appMode.value = 'pdf'
 
   await refreshLibraryEntries(operation)
@@ -1185,7 +1268,14 @@ async function openLibraryEntry(entry: LibraryEntry, options: OpenLibraryEntryOp
       return false
     }
 
+    await flushPendingActiveReadingPosition()
+    if (!operation.isCurrent()) {
+      return false
+    }
+
     activeLibraryEntryId.value = markedEntry.id
+    invalidateMarkdownPositionOwner()
+    clearPendingMarkdownRestore()
     activatePdfDocument({
       ...opened,
       entry: markedEntry,
@@ -1230,13 +1320,21 @@ async function openLibraryEntry(entry: LibraryEntry, options: OpenLibraryEntryOp
     return false
   }
 
+  if (!options.skipSave) {
+    await flushPendingActiveReadingPosition()
+    if (!operation.isCurrent()) {
+      return false
+    }
+  }
+
   activeLibraryEntryId.value = markedEntry.id
+  const positionOwner = activateMarkdownPositionOwner(markedEntry.id)
   activePdfDocument.value = null
   documentState.source = readerSourceFromLibrarySource(markedEntry.source)
   documentState.label = labelForEntry(markedEntry)
   documentState.markdown = opened.markdown
   appMode.value = 'reader'
-  pendingRestorePosition.value = opened.position
+  setPendingMarkdownRestore(positionOwner, opened.position)
 
   await onDocumentLoaded(documentState.source, operation)
   if (!operation.isCurrent()) {
@@ -1335,8 +1433,10 @@ async function deleteLibraryEntry(entry: LibraryEntry): Promise<void> {
   persistReaderBookmarks(removeBookmarksForDocument(readerBookmarks.value, libraryBookmarkKey(entry.id)))
 
   if (activeLibraryEntryId.value === entry.id) {
+    invalidateMarkdownPositionOwner(entry.id, { discardSuspendedPosition: true })
     activeLibraryEntryId.value = null
     activePdfDocument.value = null
+    clearPendingMarkdownRestore()
     documentState.source = 'sample'
     documentState.label = 'miru sample'
     documentState.markdown = sampleMarkdown
@@ -1358,8 +1458,10 @@ async function clearLibrary(): Promise<void> {
   await libraryStore.clearLibrary()
   persistReaderBookmarks(removeLibraryBookmarks(readerBookmarks.value))
   if (operation.isCurrent() || activeLibraryEntryId.value === activeEntryIdAtClear) {
+    invalidateMarkdownPositionOwner(undefined, { discardSuspendedPosition: true })
     activeLibraryEntryId.value = null
     activePdfDocument.value = null
+    clearPendingMarkdownRestore()
     documentState.source = 'sample'
     documentState.label = 'miru sample'
     documentState.markdown = sampleMarkdown
@@ -1513,21 +1615,12 @@ async function onDrop(event: DragEvent): Promise<void> {
   }
 }
 
-let positionSaveTimer: ReturnType<typeof setTimeout> | undefined
-
 function onWindowScroll(): void {
   if (appMode.value === 'reader') {
     updateMarkdownProgress()
   }
 
-  if (appMode.value !== 'reader' || !activeLibraryEntryId.value || pageScrollLock) {
-    return
-  }
-
-  window.clearTimeout(positionSaveTimer)
-  positionSaveTimer = window.setTimeout(() => {
-    void saveActiveReadingPosition()
-  }, 450)
+  saveMarkdownPositionOnScroll()
 }
 
 function onWindowResize(): void {
@@ -1572,42 +1665,19 @@ function clampProgress(value: number): number {
   return Math.min(1, Math.max(0, value))
 }
 
-async function saveActiveReadingPosition(options: { scrollY?: number } = {}): Promise<void> {
-  const documentId = activeLibraryEntryId.value
-
-  if (!documentId || appMode.value !== 'reader') {
-    return
-  }
-
-  await libraryStore.saveReadingPosition({
-    documentId,
-    type: 'markdown',
-    scrollY: Math.max(0, Math.round(options.scrollY ?? getCurrentScrollY())),
-    activeHeadingId: activeOutlineId.value || null,
-  })
-}
-
 function getCurrentScrollY(): number {
   return pageScrollLock?.scrollY ?? window.scrollY
 }
 
-function restorePendingPositionIfReady(): void {
-  const position = pendingRestorePosition.value
-
-  if (!position || rendered.isRendering.value || appMode.value !== 'reader') {
+function restoreMarkdownScrollPosition(scrollY: number): void {
+  const top = Math.max(0, scrollY)
+  if (pageScrollLock) {
+    pageScrollLock.scrollY = top
+    document.body.style.top = `-${top}px`
     return
   }
 
-  pendingRestorePosition.value = null
-  void nextTick(() => {
-    window.requestAnimationFrame(() => {
-      window.scrollTo({
-        top: Math.max(0, position.scrollY),
-        behavior: 'auto',
-      })
-      updateMarkdownProgress()
-    })
-  })
+  window.scrollTo({ top, behavior: 'auto' })
 }
 
 watch(() => rendered.isRendering.value, (value) => {

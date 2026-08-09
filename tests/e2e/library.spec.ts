@@ -126,6 +126,104 @@ test('restores local library markdown scroll position when reopening a document'
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(800)
 })
 
+test('keeps a pending Markdown position owned by its source document during rapid import', async ({ page }) => {
+  const clockStart = new Date('2026-08-09T00:00:00.000Z')
+
+  await page.clock.install({ time: clockStart })
+  await page.goto('/')
+
+  await pasteText(page, createLongMarkdown('Timer owner A'))
+  await waitForReaderReady(page, 'Timer owner A')
+  await page.clock.pauseAt(new Date(clockStart.getTime() + 60_000))
+
+  const expectedScrollY = await page.evaluate(async () => {
+    const didScroll = new Promise<void>((resolve) => {
+      window.addEventListener('scroll', () => resolve(), { once: true })
+    })
+    window.scrollTo({ top: 1200, behavior: 'auto' })
+    await didScroll
+    return Math.round(window.scrollY)
+  })
+  expect(expectedScrollY).toBeGreaterThan(800)
+
+  await page.clock.runFor(449)
+  await pasteText(page, createLongMarkdown('Timer owner B'))
+  await waitForReaderReady(page, 'Timer owner B')
+  await expect.poll(() => page.evaluate(() => Math.round(window.scrollY))).toBe(expectedScrollY)
+
+  await page.clock.runFor(1)
+  await page.evaluate(() => new Promise<void>(resolve => queueMicrotask(resolve)))
+
+  const positions = await readMarkdownPositionsByTitle(page, [
+    'Timer owner A',
+    'Timer owner B',
+  ])
+
+  expect(positions['Timer owner A']).toMatchObject({
+    scrollY: expectedScrollY,
+    type: 'markdown',
+  })
+  expect(positions['Timer owner B']).toBeNull()
+})
+
+function createLongMarkdown(title: string): string {
+  return [
+    `# ${title}`,
+    '',
+    ...Array.from(
+      { length: 120 },
+      (_, index) => `Paragraph ${index + 1}. ${'Quiet reading text. '.repeat(6)}`,
+    ),
+  ].join('\n\n')
+}
+
+async function readMarkdownPositionsByTitle(
+  page: import('@playwright/test').Page,
+  titles: string[],
+): Promise<Record<string, { scrollY: number, type: string } | null>> {
+  return page.evaluate(async (requestedTitles) => {
+    const readRequest = <T>(request: IDBRequest<T>): Promise<T> => new Promise((resolve, reject) => {
+      request.onerror = () => reject(request.error)
+      request.onsuccess = () => resolve(request.result)
+    })
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open('miru:library:v1')
+      request.onerror = () => reject(request.error)
+      request.onsuccess = () => resolve(request.result)
+    })
+
+    try {
+      const transaction = database.transaction(['entries', 'positions'], 'readonly')
+      const completed = new Promise<void>((resolve, reject) => {
+        transaction.onabort = () => reject(transaction.error)
+        transaction.onerror = () => reject(transaction.error)
+        transaction.oncomplete = () => resolve()
+      })
+      const entriesRequest = transaction.objectStore('entries').getAll()
+      const positionsRequest = transaction.objectStore('positions').getAll()
+      const [entries, positions] = await Promise.all([
+        readRequest<Array<{ id: string, title: string }>>(entriesRequest),
+        readRequest<Array<{ documentId: string, scrollY?: number, type: string }>>(positionsRequest),
+      ])
+      await completed
+
+      return Object.fromEntries(requestedTitles.map((title) => {
+        const documentId = entries.find(entry => entry.title === title)?.id
+        const position = positions.find(candidate => candidate.documentId === documentId)
+        return [
+          title,
+          position?.type === 'markdown' && typeof position.scrollY === 'number'
+            ? { scrollY: position.scrollY, type: position.type }
+            : null,
+        ]
+      }))
+    }
+    finally {
+      database.close()
+    }
+  }, titles)
+}
+
 async function readTopBarHeight(page: import('@playwright/test').Page): Promise<number> {
   return page.getByTestId('app-top-bar').evaluate((element) => {
     return Math.round(element.getBoundingClientRect().height)
