@@ -9,6 +9,7 @@ import type {
   MarkdownReadingPosition,
   OpenMarkdownDocumentResult,
   OpenPdfDocumentResult,
+  PdfReadingLocation,
   PdfReadingPosition,
   ReadingPosition,
   StoredPdfBody,
@@ -317,7 +318,7 @@ export function createLibraryStore(options: LibraryStoreOptions = {}) {
     return nextEntry
   }
 
-  async function saveReadingPosition(position: Omit<MarkdownReadingPosition, 'updatedAt'> | Omit<PdfReadingPosition, 'updatedAt'>): Promise<ReadingPosition> {
+  async function saveReadingPosition(position: Omit<MarkdownReadingPosition, 'updatedAt'> | PdfReadingLocation): Promise<ReadingPosition> {
     const nextPosition = { ...position, updatedAt: now() } as ReadingPosition
     const db = await getDb()
     await db.put('positions', nextPosition)
