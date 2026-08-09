@@ -116,7 +116,11 @@ export function createLocalFontStore(options: LocalFontStoreOptions = {}) {
   let dbPromise: Promise<IDBPDatabase<LocalFontsDatabase>> | null = null
 
   function getDb(): Promise<IDBPDatabase<LocalFontsDatabase>> {
-    dbPromise ??= openDB<LocalFontsDatabase>(dbName, localFontsDatabaseVersion, {
+    if (dbPromise) {
+      return dbPromise
+    }
+
+    const opening = openDB<LocalFontsDatabase>(dbName, localFontsDatabaseVersion, {
       upgrade(db, oldVersion, _newVersion, transaction) {
         if (oldVersion < 1) {
           const fonts = db.createObjectStore('fonts', { keyPath: 'id' })
@@ -135,8 +139,14 @@ export function createLocalFontStore(options: LocalFontStoreOptions = {}) {
         }
       },
     })
+    dbPromise = opening
+    void opening.catch(() => {
+      if (dbPromise === opening) {
+        dbPromise = null
+      }
+    })
 
-    return dbPromise
+    return opening
   }
 
   async function listFonts(): Promise<LocalFontMetadata[]> {
@@ -228,9 +238,19 @@ export function createLocalFontStore(options: LocalFontStoreOptions = {}) {
   }
 
   async function close(): Promise<void> {
-    const db = await dbPromise
-    db?.close()
+    const opening = dbPromise
     dbPromise = null
+    if (!opening) {
+      return
+    }
+
+    try {
+      const db = await opening
+      db.close()
+    }
+    catch {
+      // A failed opening has no connection to close and must not poison cleanup.
+    }
   }
 
   return {

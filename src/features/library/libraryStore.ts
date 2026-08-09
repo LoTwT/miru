@@ -105,7 +105,11 @@ export function createLibraryStore(options: LibraryStoreOptions = {}) {
   let dbPromise: Promise<IDBPDatabase<LibraryDatabase>> | null = null
 
   function getDb(): Promise<IDBPDatabase<LibraryDatabase>> {
-    dbPromise ??= openDB<LibraryDatabase>(dbName, libraryDatabaseVersion, {
+    if (dbPromise) {
+      return dbPromise
+    }
+
+    const opening = openDB<LibraryDatabase>(dbName, libraryDatabaseVersion, {
       upgrade(db) {
         const entries = db.createObjectStore('entries', { keyPath: 'id' })
         entries.createIndex('type', 'type')
@@ -122,8 +126,14 @@ export function createLibraryStore(options: LibraryStoreOptions = {}) {
         positions.createIndex('updatedAt', 'updatedAt')
       },
     })
+    dbPromise = opening
+    void opening.catch(() => {
+      if (dbPromise === opening) {
+        dbPromise = null
+      }
+    })
 
-    return dbPromise
+    return opening
   }
 
   async function listEntries(sortMode: LibrarySortMode = 'last-opened'): Promise<LibraryEntry[]> {
@@ -521,9 +531,19 @@ export function createLibraryStore(options: LibraryStoreOptions = {}) {
   }
 
   async function close(): Promise<void> {
-    const db = await dbPromise
-    db?.close()
+    const opening = dbPromise
     dbPromise = null
+    if (!opening) {
+      return
+    }
+
+    try {
+      const db = await opening
+      db.close()
+    }
+    catch {
+      // A failed opening has no connection to close and must not poison cleanup.
+    }
   }
 
   async function markOpened(
