@@ -9,6 +9,7 @@ import { createLibraryStore, deleteLibraryDatabase } from '@/features/library/li
 import type {
   LibraryEntry,
   LibrarySortMode,
+  MarkdownReadingPosition,
   OpenMarkdownDocumentResult,
   OpenPdfDocumentResult,
   PdfReadingPosition,
@@ -512,6 +513,1054 @@ describe('App document activation and PDF reading position ownership', () => {
       expect(mounted.host.querySelector('[data-testid="library-view"]')).toBeNull()
       expect(readerTitle(mounted.host)).toBe('miru sample')
       expect(readerBody(mounted.host)).toBe(sampleMarkdown)
+    }
+    finally {
+      mounted.unmount()
+    }
+  })
+
+  test('returns to the sample when preserving the active Markdown position fails', async () => {
+    const currentEntry = createMarkdownEntry('sample-save-failure', 'Sample save failure')
+
+    libraryStoreMocks.addMarkdownDocument.mockResolvedValue(currentEntry)
+    libraryStoreMocks.listEntries.mockResolvedValue([currentEntry])
+    libraryStoreMocks.saveReadingPosition.mockRejectedValue(new Error('position save failed'))
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+
+    const mounted = mountApp()
+
+    try {
+      dispatchPaste(mounted.host, '# Sample save failure')
+      await vi.waitFor(() => expect(readerTitle(mounted.host)).toBe(currentEntry.title))
+
+      click(mounted.host, '[data-testid="floating-affordance-button"]')
+      await clickButtonWithText(mounted.host, '清空当前')
+      await vi.waitFor(() => expect(readerTitle(mounted.host)).toBe('miru sample'))
+
+      expect(readerBody(mounted.host)).toBe(sampleMarkdown)
+    }
+    finally {
+      mounted.unmount()
+    }
+  })
+
+  test('preserves a Markdown scroll made while the library is still refreshing', async () => {
+    const entry = createMarkdownEntry('library-refresh-scroll', 'Library refresh scroll')
+    const pendingRefresh = createDeferred<LibraryEntry[]>()
+
+    libraryStoreMocks.addMarkdownDocument.mockResolvedValue(entry)
+    libraryStoreMocks.listEntries
+      .mockResolvedValueOnce([entry])
+      .mockReturnValueOnce(pendingRefresh.promise)
+    libraryStoreMocks.saveReadingPosition.mockImplementation(async position => ({
+      ...position,
+      updatedAt: '2026-08-09T00:00:01.000Z',
+    }))
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+
+    const mounted = mountApp()
+
+    try {
+      dispatchPaste(mounted.host, '# Library refresh scroll')
+      await vi.waitFor(() => expect(readerTitle(mounted.host)).toBe(entry.title))
+
+      click(mounted.host, '[data-testid="library-open-button"]')
+      await vi.waitFor(() => expect(libraryStoreMocks.listEntries).toHaveBeenCalledTimes(2))
+      libraryStoreMocks.saveReadingPosition.mockClear()
+
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      vi.stubGlobal('scrollY', 510)
+      window.dispatchEvent(new Event('scroll'))
+      pendingRefresh.resolve([entry])
+
+      await vi.waitFor(() => expect(libraryStoreMocks.saveReadingPosition).toHaveBeenCalledWith(
+        expect.objectContaining({
+          documentId: entry.id,
+          scrollY: 510,
+          type: 'markdown',
+        }),
+      ))
+    }
+    finally {
+      if (vi.isFakeTimers()) {
+        vi.clearAllTimers()
+        vi.useRealTimers()
+      }
+      pendingRefresh.resolve([entry])
+      await flushSettledWork()
+      mounted.unmount()
+    }
+  })
+
+  test('does not save a delayed Markdown scroll under the next document', async () => {
+    const earlierEntry = createMarkdownEntry('markdown-position-a', 'Markdown position A')
+    const latestEntry = createMarkdownEntry('markdown-position-b', 'Markdown position B')
+    const latestRefreshStarted = createDeferred<void>()
+    const latestRefresh = createDeferred<LibraryEntry[]>()
+
+    libraryStoreMocks.addMarkdownDocument
+      .mockResolvedValueOnce(earlierEntry)
+      .mockResolvedValueOnce(latestEntry)
+    libraryStoreMocks.listEntries
+      .mockResolvedValueOnce([earlierEntry])
+      .mockImplementationOnce(() => {
+        latestRefreshStarted.resolve(undefined)
+        return latestRefresh.promise
+      })
+    libraryStoreMocks.saveReadingPosition.mockImplementation(async position => ({
+      ...position,
+      updatedAt: '2026-08-09T00:00:01.000Z',
+    }))
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+
+    const mounted = mountApp()
+
+    try {
+      dispatchPaste(mounted.host, '# Markdown position A')
+      await vi.waitFor(() => expect(readerTitle(mounted.host)).toBe(earlierEntry.title))
+      await flushSettledWork()
+
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      vi.stubGlobal('scrollY', 240)
+      window.dispatchEvent(new Event('scroll'))
+
+      vi.stubGlobal('scrollY', 8)
+      dispatchPaste(mounted.host, '# Markdown position B')
+      await latestRefreshStarted.promise
+      await nextTick()
+      expect(readerTitle(mounted.host)).toBe(latestEntry.title)
+
+      libraryStoreMocks.saveReadingPosition.mockClear()
+      await vi.advanceTimersByTimeAsync(450)
+
+      expect(libraryStoreMocks.saveReadingPosition).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          documentId: latestEntry.id,
+          type: 'markdown',
+        }),
+      )
+    }
+    finally {
+      if (vi.isFakeTimers()) {
+        vi.clearAllTimers()
+        vi.useRealTimers()
+      }
+      latestRefresh.resolve([earlierEntry, latestEntry])
+      await flushSettledWork()
+      mounted.unmount()
+    }
+  })
+
+  test('preserves a Markdown scroll made while the next import is still pending', async () => {
+    const earlierEntry = createMarkdownEntry('pending-scroll-a', 'Pending scroll A')
+    const latestEntry = createMarkdownEntry('pending-scroll-b', 'Pending scroll B')
+    const latestAdd = createDeferred<LibraryEntry>()
+    const latestRefreshStarted = createDeferred<void>()
+    const latestRefresh = createDeferred<LibraryEntry[]>()
+    const pendingPositionSave = createDeferred<MarkdownReadingPosition>()
+    const pendingPositionSaveStarted = createDeferred<void>()
+
+    libraryStoreMocks.addMarkdownDocument
+      .mockResolvedValueOnce(earlierEntry)
+      .mockReturnValueOnce(latestAdd.promise)
+    libraryStoreMocks.listEntries
+      .mockResolvedValueOnce([earlierEntry])
+      .mockImplementationOnce(() => {
+        latestRefreshStarted.resolve(undefined)
+        return latestRefresh.promise
+      })
+    libraryStoreMocks.saveReadingPosition.mockImplementation(async position => ({
+      ...position,
+      updatedAt: '2026-08-09T00:00:01.000Z',
+    }))
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+
+    const mounted = mountApp()
+
+    try {
+      dispatchPaste(mounted.host, '# Pending scroll A')
+      await vi.waitFor(() => expect(readerTitle(mounted.host)).toBe(earlierEntry.title))
+
+      dispatchPaste(mounted.host, '# Pending scroll B')
+      await vi.waitFor(() => expect(libraryStoreMocks.addMarkdownDocument).toHaveBeenCalledTimes(2))
+      libraryStoreMocks.saveReadingPosition.mockClear()
+      libraryStoreMocks.saveReadingPosition.mockImplementation(async position => {
+        const saved = {
+          ...position,
+          updatedAt: '2026-08-09T00:00:01.000Z',
+        } as MarkdownReadingPosition
+        if (position.documentId === earlierEntry.id && position.scrollY === 420) {
+          pendingPositionSaveStarted.resolve(undefined)
+          return await pendingPositionSave.promise
+        }
+
+        return saved
+      })
+
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      vi.stubGlobal('scrollY', 420)
+      window.dispatchEvent(new Event('scroll'))
+      latestAdd.resolve(latestEntry)
+      await pendingPositionSaveStarted.promise
+
+      vi.stubGlobal('scrollY', 510)
+      window.dispatchEvent(new Event('scroll'))
+      pendingPositionSave.resolve({
+        activeHeadingId: null,
+        documentId: earlierEntry.id,
+        scrollY: 420,
+        type: 'markdown',
+        updatedAt: '2026-08-09T00:00:01.000Z',
+      })
+
+      await vi.waitFor(() => expect(libraryStoreMocks.saveReadingPosition).toHaveBeenCalledWith(
+        expect.objectContaining({
+          documentId: earlierEntry.id,
+          scrollY: 510,
+          type: 'markdown',
+        }),
+      ))
+      await latestRefreshStarted.promise
+      expect(libraryStoreMocks.saveReadingPosition).not.toHaveBeenCalledWith(
+        expect.objectContaining({ documentId: latestEntry.id }),
+      )
+    }
+    finally {
+      if (vi.isFakeTimers()) {
+        vi.clearAllTimers()
+        vi.useRealTimers()
+      }
+      latestAdd.resolve(latestEntry)
+      pendingPositionSave.resolve({
+        activeHeadingId: null,
+        documentId: earlierEntry.id,
+        scrollY: 420,
+        type: 'markdown',
+        updatedAt: '2026-08-09T00:00:01.000Z',
+      })
+      latestRefresh.resolve([earlierEntry, latestEntry])
+      await flushSettledWork()
+      mounted.unmount()
+    }
+  })
+
+  test('invalidates a Markdown scroll created while replacing the active URL document', async () => {
+    const source = {
+      domain: 'example.com',
+      inputUrl: 'https://example.com/position.md',
+      kind: 'url' as const,
+      requestUrl: 'https://example.com/position.md',
+    }
+    const entry = createMarkdownEntry('url-position-owner', 'URL position owner')
+    const updateWrite = createDeferred<LibraryEntry>()
+    entry.source = source
+
+    libraryStoreMocks.listEntries.mockResolvedValue([entry])
+    libraryStoreMocks.openMarkdownDocument
+      .mockResolvedValueOnce(createOpenMarkdownDocument(entry, '# URL position owner\n\nOriginal.'))
+      .mockResolvedValue(createOpenMarkdownDocument(entry, '# URL position owner\n\nUpdated.'))
+    libraryStoreMocks.findMarkdownEntryByUrl.mockResolvedValue(entry)
+    libraryStoreMocks.isMarkdownContentChanged.mockResolvedValue(true)
+    libraryStoreMocks.addMarkdownDocument.mockReturnValue(updateWrite.promise)
+    libraryStoreMocks.saveReadingPosition.mockImplementation(async position => ({
+      ...position,
+      updatedAt: '2026-08-09T00:00:01.000Z',
+    }))
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('# URL position owner\n\nUpdated.', {
+      headers: { 'Content-Type': 'text/markdown' },
+      status: 200,
+    })))
+
+    const mounted = mountApp()
+    const delayedSaves = new Map<number, () => void>()
+    const nativeSetTimeout = window.setTimeout.bind(window)
+    const nativeClearTimeout = window.clearTimeout.bind(window)
+    let nextTimerId = 10_000
+
+    try {
+      await showLibrary(mounted.host)
+      await openLibraryEntry(mounted.host, entry.title, '打开')
+      await vi.waitFor(() => expect(readerBody(mounted.host)).toContain('Original.'))
+
+      vi.spyOn(window, 'setTimeout').mockImplementation((handler, timeout, ...args) => {
+        if (timeout === 450 && typeof handler === 'function') {
+          const id = ++nextTimerId
+          delayedSaves.set(id, () => handler(...args))
+          return id
+        }
+
+        return nativeSetTimeout(handler, timeout, ...args)
+      })
+      vi.spyOn(window, 'clearTimeout').mockImplementation((id) => {
+        if (!delayedSaves.delete(Number(id))) {
+          nativeClearTimeout(id)
+        }
+      })
+
+      dispatchPaste(mounted.host, source.inputUrl)
+      await vi.waitFor(() => expect(
+        mounted.host.querySelector('[data-testid="url-import-conflict"]'),
+      ).not.toBeNull())
+      await clickButtonWithText(mounted.host, '更新到最新')
+      await vi.waitFor(() => expect(libraryStoreMocks.addMarkdownDocument).toHaveBeenCalled())
+
+      libraryStoreMocks.saveReadingPosition.mockClear()
+      vi.stubGlobal('scrollY', 240)
+      window.dispatchEvent(new Event('scroll'))
+      expect(delayedSaves.size).toBe(0)
+
+      updateWrite.resolve(entry)
+      await vi.waitFor(() => expect(readerBody(mounted.host)).toContain('Updated.'))
+
+      const staleCallbacks = [...delayedSaves.values()]
+      delayedSaves.clear()
+      for (const callback of staleCallbacks) {
+        callback()
+      }
+      await flushSettledWork()
+
+      expect(libraryStoreMocks.saveReadingPosition).not.toHaveBeenCalled()
+    }
+    finally {
+      updateWrite.resolve(entry)
+      mounted.unmount()
+    }
+  })
+
+  test.each(['settles', 'is superseded'] as const)(
+    'waits for an active position save before a same-URL replacement %s',
+    async settlement => {
+      const source = {
+        domain: 'example.com',
+        inputUrl: 'https://example.com/settled-position.md',
+        kind: 'url' as const,
+        requestUrl: 'https://example.com/settled-position.md',
+      }
+      const entry = createMarkdownEntry('settled-url-position-owner', 'Settled URL position owner')
+      const contentChanged = createDeferred<boolean>()
+      const positionSave = createDeferred<MarkdownReadingPosition>()
+      const positionSaveStarted = createDeferred<void>()
+      const resumedPositionSave = createDeferred<MarkdownReadingPosition>()
+      const nextRequest = createDeferred<Response>()
+      const updateWrite = createDeferred<LibraryEntry>()
+      entry.source = source
+
+      libraryStoreMocks.listEntries.mockResolvedValue([entry])
+      libraryStoreMocks.openMarkdownDocument.mockResolvedValue(
+        createOpenMarkdownDocument(entry, '# Settled URL position owner\n\nOriginal.'),
+      )
+      libraryStoreMocks.findMarkdownEntryByUrl.mockResolvedValue(entry)
+      libraryStoreMocks.isMarkdownContentChanged.mockReturnValue(contentChanged.promise)
+      libraryStoreMocks.addMarkdownDocument.mockReturnValue(updateWrite.promise)
+      libraryStoreMocks.saveReadingPosition.mockImplementation(async position => ({
+        ...position,
+        updatedAt: '2026-08-09T00:00:01.000Z',
+      }))
+      libraryStoreMocks.close.mockResolvedValue(undefined)
+      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input).includes('next-position.md')) {
+          return await nextRequest.promise
+        }
+
+        return new Response('# Settled URL position owner\n\nUpdated.', {
+          headers: { 'Content-Type': 'text/markdown' },
+          status: 200,
+        })
+      }))
+
+      const mounted = mountApp()
+
+      try {
+        await showLibrary(mounted.host)
+        await openLibraryEntry(mounted.host, entry.title, '打开')
+        await vi.waitFor(() => expect(readerBody(mounted.host)).toContain('Original.'))
+
+        dispatchPaste(mounted.host, source.inputUrl)
+        await vi.waitFor(() => expect(
+          mounted.host.querySelector('[data-testid="url-import-conflict"]'),
+        ).not.toBeNull())
+        await clickButtonWithText(mounted.host, '更新到最新')
+        await vi.waitFor(() => expect(libraryStoreMocks.isMarkdownContentChanged).toHaveBeenCalled())
+
+        let saveCallCount = 0
+        libraryStoreMocks.saveReadingPosition.mockImplementation(async position => {
+          saveCallCount += 1
+          if (saveCallCount === 1) {
+            positionSaveStarted.resolve(undefined)
+            return await positionSave.promise
+          }
+
+          const saved = {
+            ...position,
+            updatedAt: '2026-08-09T00:00:02.000Z',
+          } as MarkdownReadingPosition
+          resumedPositionSave.resolve(saved)
+          return saved
+        })
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+        vi.stubGlobal('scrollY', 240)
+        window.dispatchEvent(new Event('scroll'))
+        await vi.advanceTimersByTimeAsync(450)
+        await positionSaveStarted.promise
+
+        contentChanged.resolve(true)
+        await nextTick()
+        await Promise.resolve()
+        expect(libraryStoreMocks.addMarkdownDocument).not.toHaveBeenCalled()
+
+        if (settlement === 'settles') {
+          positionSave.resolve({
+            activeHeadingId: null,
+            documentId: entry.id,
+            scrollY: 240,
+            type: 'markdown',
+            updatedAt: '2026-08-09T00:00:01.000Z',
+          })
+          await vi.waitFor(() => expect(libraryStoreMocks.addMarkdownDocument).toHaveBeenCalled())
+        }
+        else {
+          dispatchPaste(mounted.host, 'https://example.com/next-position.md')
+          await vi.waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2))
+          await nextTick()
+
+          vi.stubGlobal('scrollY', 510)
+          window.dispatchEvent(new Event('scroll'))
+          await vi.advanceTimersByTimeAsync(450)
+          await expect(resumedPositionSave.promise).resolves.toMatchObject({
+            documentId: entry.id,
+            scrollY: 510,
+            type: 'markdown',
+          })
+          expect(libraryStoreMocks.addMarkdownDocument).not.toHaveBeenCalled()
+        }
+      }
+      finally {
+        if (vi.isFakeTimers()) {
+          vi.clearAllTimers()
+          vi.useRealTimers()
+        }
+        contentChanged.resolve(true)
+        positionSave.resolve({
+          activeHeadingId: null,
+          documentId: entry.id,
+          scrollY: 240,
+          type: 'markdown',
+          updatedAt: '2026-08-09T00:00:01.000Z',
+        })
+        updateWrite.resolve(entry)
+        if (settlement === 'is superseded') {
+          nextRequest.reject(new TypeError('next URL request canceled'))
+        }
+        await flushSettledWork()
+        mounted.unmount()
+      }
+    },
+  )
+
+  test('preserves the latest Markdown scroll when an active URL replacement fails', async () => {
+    const source = {
+      domain: 'example.com',
+      inputUrl: 'https://example.com/failed-position.md',
+      kind: 'url' as const,
+      requestUrl: 'https://example.com/failed-position.md',
+    }
+    const entry = createMarkdownEntry('failed-url-position-owner', 'Failed URL position owner')
+    const updateWrite = createDeferred<LibraryEntry>()
+    entry.source = source
+
+    libraryStoreMocks.listEntries.mockResolvedValue([entry])
+    libraryStoreMocks.openMarkdownDocument.mockResolvedValue(
+      createOpenMarkdownDocument(entry, '# Failed URL position owner\n\nOriginal.'),
+    )
+    libraryStoreMocks.findMarkdownEntryByUrl.mockResolvedValue(entry)
+    libraryStoreMocks.isMarkdownContentChanged.mockResolvedValue(true)
+    libraryStoreMocks.addMarkdownDocument.mockReturnValue(updateWrite.promise)
+    libraryStoreMocks.saveReadingPosition.mockImplementation(async position => ({
+      ...position,
+      updatedAt: '2026-08-09T00:00:01.000Z',
+    }))
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('# Failed URL position owner\n\nUpdated.', {
+      headers: { 'Content-Type': 'text/markdown' },
+      status: 200,
+    })))
+
+    const mounted = mountApp()
+
+    try {
+      await showLibrary(mounted.host)
+      await openLibraryEntry(mounted.host, entry.title, '打开')
+      await vi.waitFor(() => expect(readerBody(mounted.host)).toContain('Original.'))
+
+      dispatchPaste(mounted.host, source.inputUrl)
+      await vi.waitFor(() => expect(
+        mounted.host.querySelector('[data-testid="url-import-conflict"]'),
+      ).not.toBeNull())
+      await clickButtonWithText(mounted.host, '更新到最新')
+      await vi.waitFor(() => expect(libraryStoreMocks.addMarkdownDocument).toHaveBeenCalled())
+
+      libraryStoreMocks.saveReadingPosition.mockClear()
+      vi.stubGlobal('scrollY', 310)
+      window.dispatchEvent(new Event('scroll'))
+      expect(libraryStoreMocks.saveReadingPosition).not.toHaveBeenCalled()
+
+      updateWrite.reject(new Error('URL update failed'))
+      await vi.waitFor(() => expect(mounted.host.textContent).toContain('无法更新文库'))
+      await vi.waitFor(() => expect(libraryStoreMocks.saveReadingPosition).toHaveBeenCalledWith(
+        expect.objectContaining({
+          documentId: entry.id,
+          scrollY: 310,
+          type: 'markdown',
+        }),
+      ))
+    }
+    finally {
+      mounted.unmount()
+    }
+  })
+
+  test('preserves a suspended URL position after opening another library document', async () => {
+    const source = {
+      domain: 'example.com',
+      inputUrl: 'https://example.com/superseded-position.md',
+      kind: 'url' as const,
+      requestUrl: 'https://example.com/superseded-position.md',
+    }
+    const entry = createMarkdownEntry('superseded-url-position-owner', 'Superseded URL position owner')
+    const nextEntry = createMarkdownEntry('superseded-url-position-next', 'Superseded URL position next')
+    const updateWrite = createDeferred<LibraryEntry>()
+    entry.source = source
+
+    libraryStoreMocks.listEntries.mockResolvedValue([entry, nextEntry])
+    libraryStoreMocks.openMarkdownDocument.mockImplementation(async id => id === entry.id
+      ? createOpenMarkdownDocument(entry, '# Superseded URL position owner\n\nOriginal.')
+      : createOpenMarkdownDocument(nextEntry, '# Superseded URL position next'))
+    libraryStoreMocks.findMarkdownEntryByUrl.mockResolvedValue(entry)
+    libraryStoreMocks.isMarkdownContentChanged.mockResolvedValue(true)
+    libraryStoreMocks.addMarkdownDocument.mockReturnValue(updateWrite.promise)
+    libraryStoreMocks.saveReadingPosition.mockImplementation(async position => ({
+      ...position,
+      updatedAt: '2026-08-09T00:00:01.000Z',
+    }))
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('# Superseded URL position owner\n\nUpdated.', {
+      headers: { 'Content-Type': 'text/markdown' },
+      status: 200,
+    })))
+
+    const mounted = mountApp()
+
+    try {
+      await showLibrary(mounted.host)
+      await openLibraryEntry(mounted.host, entry.title, '打开')
+      await vi.waitFor(() => expect(readerBody(mounted.host)).toContain('Original.'))
+
+      dispatchPaste(mounted.host, source.inputUrl)
+      await vi.waitFor(() => expect(
+        mounted.host.querySelector('[data-testid="url-import-conflict"]'),
+      ).not.toBeNull())
+      await clickButtonWithText(mounted.host, '更新到最新')
+      await vi.waitFor(() => expect(libraryStoreMocks.addMarkdownDocument).toHaveBeenCalled())
+
+      libraryStoreMocks.saveReadingPosition.mockClear()
+      vi.stubGlobal('scrollY', 310)
+      window.dispatchEvent(new Event('scroll'))
+
+      await showLibrary(mounted.host)
+      await openLibraryEntry(mounted.host, nextEntry.title, '打开')
+      await vi.waitFor(() => expect(readerTitle(mounted.host)).toBe(nextEntry.title))
+
+      updateWrite.reject(new Error('superseded URL update'))
+      await vi.waitFor(() => expect(libraryStoreMocks.saveReadingPosition).toHaveBeenCalledWith(
+        expect.objectContaining({
+          documentId: entry.id,
+          scrollY: 310,
+          type: 'markdown',
+        }),
+      ))
+    }
+    finally {
+      updateWrite.reject(new Error('superseded URL update'))
+      await flushSettledWork()
+      mounted.unmount()
+    }
+  })
+
+  test('does not save a suspended URL position after the app unmounts', async () => {
+    const source = {
+      domain: 'example.com',
+      inputUrl: 'https://example.com/unmounted-position.md',
+      kind: 'url' as const,
+      requestUrl: 'https://example.com/unmounted-position.md',
+    }
+    const entry = createMarkdownEntry('unmounted-url-position-owner', 'Unmounted URL position owner')
+    const updateWrite = createDeferred<LibraryEntry>()
+    entry.source = source
+
+    libraryStoreMocks.listEntries.mockResolvedValue([entry])
+    libraryStoreMocks.openMarkdownDocument.mockResolvedValue(
+      createOpenMarkdownDocument(entry, '# Unmounted URL position owner\n\nOriginal.'),
+    )
+    libraryStoreMocks.findMarkdownEntryByUrl.mockResolvedValue(entry)
+    libraryStoreMocks.isMarkdownContentChanged.mockResolvedValue(true)
+    libraryStoreMocks.addMarkdownDocument.mockReturnValue(updateWrite.promise)
+    libraryStoreMocks.saveReadingPosition.mockImplementation(async position => ({
+      ...position,
+      updatedAt: '2026-08-09T00:00:01.000Z',
+    }))
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('# Unmounted URL position owner\n\nUpdated.', {
+      headers: { 'Content-Type': 'text/markdown' },
+      status: 200,
+    })))
+
+    const mounted = mountApp()
+
+    try {
+      await showLibrary(mounted.host)
+      await openLibraryEntry(mounted.host, entry.title, '打开')
+      await vi.waitFor(() => expect(readerBody(mounted.host)).toContain('Original.'))
+
+      dispatchPaste(mounted.host, source.inputUrl)
+      await vi.waitFor(() => expect(
+        mounted.host.querySelector('[data-testid="url-import-conflict"]'),
+      ).not.toBeNull())
+      await clickButtonWithText(mounted.host, '更新到最新')
+      await vi.waitFor(() => expect(libraryStoreMocks.addMarkdownDocument).toHaveBeenCalled())
+
+      libraryStoreMocks.saveReadingPosition.mockClear()
+      vi.stubGlobal('scrollY', 310)
+      window.dispatchEvent(new Event('scroll'))
+
+      click(mounted.host, '[data-testid="floating-affordance-button"]')
+      await clickButtonWithText(mounted.host, '清空当前')
+      await vi.waitFor(() => expect(readerTitle(mounted.host)).toBe('miru sample'))
+      mounted.unmount()
+      updateWrite.reject(new Error('unmounted URL update'))
+      await flushSettledWork()
+
+      expect(libraryStoreMocks.saveReadingPosition).not.toHaveBeenCalled()
+    }
+    finally {
+      updateWrite.reject(new Error('unmounted URL update'))
+      await flushSettledWork()
+      mounted.unmount()
+    }
+  })
+
+  test.each(['fails', 'commits'] as const)(
+    'keeps a newer same-document owner when an older URL replacement %s',
+    async settlement => {
+      const source = {
+        domain: 'example.com',
+        inputUrl: 'https://example.com/reactivated-position.md',
+        kind: 'url' as const,
+        requestUrl: 'https://example.com/reactivated-position.md',
+      }
+      const entry = createMarkdownEntry('reactivated-url-position-owner', 'Reactivated URL position owner')
+      const updateWrite = createDeferred<LibraryEntry>()
+      entry.source = source
+
+      libraryStoreMocks.listEntries.mockResolvedValue([entry])
+      libraryStoreMocks.openMarkdownDocument.mockResolvedValue(
+        createOpenMarkdownDocument(entry, '# Reactivated URL position owner\n\nOriginal.'),
+      )
+      libraryStoreMocks.findMarkdownEntryByUrl.mockResolvedValue(entry)
+      libraryStoreMocks.isMarkdownContentChanged.mockResolvedValue(true)
+      libraryStoreMocks.addMarkdownDocument.mockReturnValue(updateWrite.promise)
+      libraryStoreMocks.saveReadingPosition.mockImplementation(async position => ({
+        ...position,
+        updatedAt: '2026-08-09T00:00:01.000Z',
+      }))
+      libraryStoreMocks.close.mockResolvedValue(undefined)
+      vi.stubGlobal('fetch', vi.fn(async () => new Response('# Reactivated URL position owner\n\nUpdated.', {
+        headers: { 'Content-Type': 'text/markdown' },
+        status: 200,
+      })))
+
+      const mounted = mountApp()
+
+      try {
+        await showLibrary(mounted.host)
+        await openLibraryEntry(mounted.host, entry.title, '打开')
+        await vi.waitFor(() => expect(readerBody(mounted.host)).toContain('Original.'))
+
+        dispatchPaste(mounted.host, source.inputUrl)
+        await vi.waitFor(() => expect(
+          mounted.host.querySelector('[data-testid="url-import-conflict"]'),
+        ).not.toBeNull())
+        await clickButtonWithText(mounted.host, '更新到最新')
+        await vi.waitFor(() => expect(libraryStoreMocks.addMarkdownDocument).toHaveBeenCalled())
+
+        vi.stubGlobal('scrollY', 310)
+        window.dispatchEvent(new Event('scroll'))
+        await showLibrary(mounted.host)
+        await openLibraryEntry(mounted.host, entry.title, '打开')
+        await vi.waitFor(() => expect(readerTitle(mounted.host)).toBe(entry.title))
+
+        if (settlement === 'commits') {
+          updateWrite.resolve(entry)
+          await flushSettledWork()
+        }
+
+        libraryStoreMocks.saveReadingPosition.mockClear()
+        vi.stubGlobal('scrollY', 500)
+        await showLibrary(mounted.host)
+        expect(libraryStoreMocks.saveReadingPosition).toHaveBeenCalledWith(
+          expect.objectContaining({
+            documentId: entry.id,
+            scrollY: 500,
+            type: 'markdown',
+          }),
+        )
+
+        if (settlement === 'fails') {
+          updateWrite.reject(new Error('reactivated URL update failed'))
+          await flushSettledWork()
+          expect(libraryStoreMocks.saveReadingPosition).not.toHaveBeenCalledWith(
+            expect.objectContaining({
+              documentId: entry.id,
+              scrollY: 310,
+              type: 'markdown',
+            }),
+          )
+        }
+      }
+      finally {
+        if (settlement === 'commits') {
+          updateWrite.resolve(entry)
+        }
+        else {
+          updateWrite.reject(new Error('reactivated URL update failed'))
+        }
+        await flushSettledWork()
+        mounted.unmount()
+      }
+    },
+  )
+
+  test.each(['sample', 'new-document', 'pdf'] as const)(
+    'does not restore a stale Markdown position after switching to %s',
+    async target => {
+      const earlierEntry = createMarkdownEntry('markdown-restore-a', 'Markdown restore A')
+      const latestEntry = createMarkdownEntry('markdown-restore-b', 'Markdown restore B')
+      const pdfEntry = createPdfEntry('markdown-restore-pdf', 'Markdown restore PDF')
+      const earlierPosition: MarkdownReadingPosition = {
+        activeHeadingId: null,
+        documentId: earlierEntry.id,
+        scrollY: 360,
+        type: 'markdown',
+        updatedAt: '2026-08-09T00:00:00.000Z',
+      }
+      let visibleEntries: LibraryEntry[] = [earlierEntry]
+
+      libraryStoreMocks.listEntries.mockImplementation(async () => visibleEntries)
+      libraryStoreMocks.openMarkdownDocument.mockResolvedValue(
+        createOpenMarkdownDocument(earlierEntry, '# Markdown restore A', earlierPosition),
+      )
+      libraryStoreMocks.addMarkdownDocument.mockImplementation(async () => {
+        visibleEntries = [earlierEntry, latestEntry]
+        return latestEntry
+      })
+      libraryStoreMocks.addPdfDocument.mockImplementation(async () => {
+        visibleEntries = [earlierEntry, pdfEntry]
+        return pdfEntry
+      })
+      libraryStoreMocks.saveReadingPosition.mockImplementation(async position => ({
+        ...position,
+        updatedAt: '2026-08-09T00:00:01.000Z',
+      }))
+      libraryStoreMocks.close.mockResolvedValue(undefined)
+
+      const mounted = mountApp()
+      const frames = new Map<number, FrameRequestCallback>()
+      let nextFrameId = 100
+
+      try {
+        await showLibrary(mounted.host)
+        vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => {
+          const id = ++nextFrameId
+          frames.set(id, callback)
+          return id
+        }))
+        vi.stubGlobal('cancelAnimationFrame', vi.fn((id: number) => {
+          frames.delete(id)
+        }))
+
+        await openLibraryEntry(mounted.host, earlierEntry.title, '打开')
+        await vi.waitFor(() => {
+          expect(readerTitle(mounted.host)).toBe(earlierEntry.title)
+          expect(frames.size).toBeGreaterThanOrEqual(1)
+        })
+
+        if (target === 'sample') {
+          click(mounted.host, '[data-testid="floating-affordance-button"]')
+          await clickButtonWithText(mounted.host, '清空当前')
+          await vi.waitFor(() => expect(readerTitle(mounted.host)).toBe('miru sample'))
+        }
+        else if (target === 'new-document') {
+          dispatchPaste(mounted.host, '# Markdown restore B')
+          await vi.waitFor(() => expect(readerTitle(mounted.host)).toBe(latestEntry.title))
+        }
+        else if (target === 'pdf') {
+          await dispatchFile(mounted.host, new File([Uint8Array.of(1)], 'Markdown restore PDF.pdf', {
+            type: 'application/pdf',
+          }))
+          await vi.waitFor(() => expect(
+            mounted.host.querySelector('[data-testid="pdf-viewer"]'),
+          ).not.toBeNull())
+        }
+        expect(libraryStoreMocks.saveReadingPosition).not.toHaveBeenCalledWith(
+          expect.objectContaining({
+            documentId: earlierEntry.id,
+            scrollY: 0,
+            type: 'markdown',
+          }),
+        )
+
+        vi.mocked(window.scrollTo).mockClear()
+        for (const [id, callback] of [...frames]) {
+          frames.delete(id)
+          callback(0)
+        }
+        await nextTick()
+
+        expect(window.scrollTo).not.toHaveBeenCalled()
+      }
+      finally {
+        mounted.unmount()
+      }
+    },
+  )
+
+  test('retains a pending Markdown restore while visiting the library', async () => {
+    const entry = createMarkdownEntry('library-paused-restore', 'Library paused restore')
+    const pendingLibraryRefresh = createDeferred<LibraryEntry[]>()
+    const position: MarkdownReadingPosition = {
+      activeHeadingId: null,
+      documentId: entry.id,
+      scrollY: 360,
+      type: 'markdown',
+      updatedAt: '2026-08-09T00:00:00.000Z',
+    }
+
+    libraryStoreMocks.listEntries
+      .mockResolvedValueOnce([entry])
+      .mockResolvedValueOnce([entry])
+      .mockReturnValueOnce(pendingLibraryRefresh.promise)
+      .mockResolvedValue([entry])
+    libraryStoreMocks.openMarkdownDocument.mockResolvedValue(
+      createOpenMarkdownDocument(entry, '# Library paused restore', position),
+    )
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+
+    const mounted = mountApp()
+    const frames = new Map<number, FrameRequestCallback>()
+    let nextFrameId = 150
+
+    try {
+      await showLibrary(mounted.host)
+      vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => {
+        const id = ++nextFrameId
+        frames.set(id, callback)
+        return id
+      }))
+      vi.stubGlobal('cancelAnimationFrame', vi.fn((id: number) => {
+        frames.delete(id)
+      }))
+
+      await openLibraryEntry(mounted.host, entry.title, '打开')
+      await vi.waitFor(() => {
+        expect(frames.size).toBeGreaterThanOrEqual(1)
+        expect(libraryStoreMocks.listEntries).toHaveBeenCalledTimes(2)
+      })
+
+      libraryStoreMocks.saveReadingPosition.mockClear()
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      window.dispatchEvent(new Event('scroll'))
+      await vi.advanceTimersByTimeAsync(450)
+      expect(libraryStoreMocks.saveReadingPosition).not.toHaveBeenCalled()
+      vi.useRealTimers()
+
+      click(mounted.host, '[data-testid="library-open-button"]')
+      await vi.waitFor(() => expect(libraryStoreMocks.listEntries).toHaveBeenCalledTimes(3))
+
+      vi.mocked(window.scrollTo).mockClear()
+      for (const [id, callback] of [...frames]) {
+        frames.delete(id)
+        callback(0)
+      }
+      await nextTick()
+      expect(window.scrollTo).not.toHaveBeenCalled()
+
+      pendingLibraryRefresh.resolve([entry])
+      await vi.waitFor(() => expect(
+        mounted.host.querySelector('[data-testid="library-view"]'),
+      ).not.toBeNull())
+
+      click(mounted.host, '[data-testid="library-open-button"]')
+      await vi.waitFor(() => {
+        expect(mounted.host.querySelector('[data-testid="library-view"]')).toBeNull()
+        expect(frames.size).toBeGreaterThanOrEqual(1)
+      })
+      for (const [id, callback] of [...frames]) {
+        frames.delete(id)
+        callback(0)
+      }
+      await nextTick()
+
+      expect(window.scrollTo).toHaveBeenCalledWith({
+        behavior: 'auto',
+        top: position.scrollY,
+      })
+    }
+    finally {
+      if (vi.isFakeTimers()) {
+        vi.clearAllTimers()
+        vi.useRealTimers()
+      }
+      pendingLibraryRefresh.resolve([entry])
+      mounted.unmount()
+    }
+  })
+
+  test.each([
+    ['an unlocked surface', false],
+    ['a locked mobile surface', true],
+  ] as const)('keeps a pending Markdown restore valid during unresolved URL input on %s', async (
+    _surface,
+    locksPage,
+  ) => {
+    const entry = createMarkdownEntry('pending-restore-input', 'Pending restore input')
+    const position: MarkdownReadingPosition = {
+      activeHeadingId: null,
+      documentId: entry.id,
+      scrollY: 360,
+      type: 'markdown',
+      updatedAt: '2026-08-09T00:00:00.000Z',
+    }
+    const request = createDeferred<Response>()
+
+    libraryStoreMocks.listEntries.mockResolvedValue([entry])
+    libraryStoreMocks.openMarkdownDocument.mockResolvedValue(
+      createOpenMarkdownDocument(entry, '# Pending restore input', position),
+    )
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+    const fetchMock = vi.fn(() => request.promise)
+    vi.stubGlobal('fetch', fetchMock)
+
+    const mounted = mountApp()
+    const frames = new Map<number, FrameRequestCallback>()
+    let nextFrameId = 200
+
+    try {
+      await showLibrary(mounted.host)
+      vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => {
+        const id = ++nextFrameId
+        frames.set(id, callback)
+        return id
+      }))
+      vi.stubGlobal('cancelAnimationFrame', vi.fn((id: number) => {
+        frames.delete(id)
+      }))
+
+      await openLibraryEntry(mounted.host, entry.title, '打开')
+      await vi.waitFor(() => expect(frames.size).toBeGreaterThanOrEqual(1))
+
+      if (locksPage) {
+        vi.stubGlobal('matchMedia', (media: string): MediaQueryList => ({
+          addEventListener: vi.fn(),
+          addListener: vi.fn(),
+          dispatchEvent: vi.fn(() => true),
+          matches: media === '(max-width: 640px)',
+          media,
+          onchange: null,
+          removeEventListener: vi.fn(),
+          removeListener: vi.fn(),
+        }))
+      }
+
+      dispatchPaste(mounted.host, 'https://example.com/pending-restore.md')
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled())
+      if (locksPage) {
+        await vi.waitFor(() => expect(document.body.style.position).toBe('fixed'))
+      }
+
+      vi.mocked(window.scrollTo).mockClear()
+      for (const [id, callback] of [...frames]) {
+        frames.delete(id)
+        callback(0)
+      }
+      await nextTick()
+
+      if (locksPage) {
+        expect(document.body.style.top).toBe(`-${position.scrollY}px`)
+        expect(window.scrollTo).not.toHaveBeenCalled()
+        click(mounted.host, '[data-testid="command-scrim"]')
+        await vi.waitFor(() => expect(document.body.style.position).not.toBe('fixed'))
+        expect(window.scrollTo).toHaveBeenLastCalledWith({
+          behavior: 'auto',
+          top: position.scrollY,
+        })
+      }
+      else {
+        expect(window.scrollTo).toHaveBeenCalledWith({
+          behavior: 'auto',
+          top: position.scrollY,
+        })
+      }
+    }
+    finally {
+      request.reject(new TypeError('URL request failed'))
+      await flushSettledWork()
+      mounted.unmount()
+    }
+  })
+
+  test('does not restore a Markdown position after the app unmounts', async () => {
+    const entry = createMarkdownEntry('unmounted-restore', 'Unmounted restore')
+    const position: MarkdownReadingPosition = {
+      activeHeadingId: null,
+      documentId: entry.id,
+      scrollY: 360,
+      type: 'markdown',
+      updatedAt: '2026-08-09T00:00:00.000Z',
+    }
+
+    libraryStoreMocks.listEntries.mockResolvedValue([entry])
+    libraryStoreMocks.openMarkdownDocument.mockResolvedValue(
+      createOpenMarkdownDocument(entry, '# Unmounted restore', position),
+    )
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+
+    const mounted = mountApp()
+    const frames = new Map<number, FrameRequestCallback>()
+    let nextFrameId = 300
+
+    try {
+      await showLibrary(mounted.host)
+      vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => {
+        const id = ++nextFrameId
+        frames.set(id, callback)
+        return id
+      }))
+      vi.stubGlobal('cancelAnimationFrame', vi.fn((id: number) => {
+        frames.delete(id)
+      }))
+
+      await openLibraryEntry(mounted.host, entry.title, '打开')
+      await vi.waitFor(() => expect(frames.size).toBeGreaterThanOrEqual(1))
+
+      vi.mocked(window.scrollTo).mockClear()
+      mounted.unmount()
+      for (const [id, callback] of [...frames]) {
+        frames.delete(id)
+        callback(0)
+      }
+      await nextTick()
+
+      expect(window.scrollTo).not.toHaveBeenCalled()
     }
     finally {
       mounted.unmount()
@@ -1586,11 +2635,12 @@ function createPdfEntry(id: string, title: string): LibraryEntry {
 function createOpenMarkdownDocument(
   entry: LibraryEntry,
   markdown: string,
+  position: MarkdownReadingPosition | null = null,
 ): OpenMarkdownDocumentResult {
   return {
     entry,
     markdown,
-    position: null,
+    position,
   }
 }
 
