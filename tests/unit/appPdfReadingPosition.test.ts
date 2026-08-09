@@ -8,6 +8,7 @@ import sampleMarkdown from '@/content/sample.md?raw'
 import { createLibraryStore, deleteLibraryDatabase } from '@/features/library/libraryStore'
 import type {
   LibraryEntry,
+  LibrarySortMode,
   OpenMarkdownDocumentResult,
   OpenPdfDocumentResult,
   PdfReadingPosition,
@@ -242,6 +243,79 @@ describe('App document activation and PDF reading position ownership', () => {
     }
   })
 
+  test('keeps an imported Markdown document active when the library refresh fails', async () => {
+    const entry = createMarkdownEntry('markdown-refresh-failure', 'Markdown refresh failure')
+
+    libraryStoreMocks.addMarkdownDocument.mockResolvedValue(entry)
+    libraryStoreMocks.listEntries
+      .mockRejectedValueOnce(new Error('library refresh failed'))
+      .mockResolvedValue([entry])
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+
+    const mounted = mountApp()
+
+    try {
+      dispatchPaste(mounted.host, '# Markdown refresh failure')
+      await vi.waitFor(() => expect(readerTitle(mounted.host)).toBe(entry.title))
+      await vi.waitFor(() => {
+        expect(mounted.host.querySelector('[data-testid="floating-affordance-menu"]')).toBeNull()
+        expect(mounted.host.querySelector('.app-shell__live-status')?.textContent).toContain('文档已加载')
+      })
+      await flushSettledWork()
+
+      expect(readerBody(mounted.host)).toBe('# Markdown refresh failure')
+      expect(mounted.host.querySelector('[data-testid="floating-affordance-menu"]')).toBeNull()
+      expect(mounted.host.textContent).not.toContain('无法加入文库。当前文档没有被替换')
+
+      await showLibrary(mounted.host)
+      await vi.waitFor(() => {
+        expect(libraryStoreMocks.listEntries).toHaveBeenCalledTimes(2)
+        expect(hasLibraryEntry(mounted.host, entry.title)).toBe(true)
+        expect(libraryViewStatus(mounted.host)).toBeUndefined()
+      })
+    }
+    finally {
+      mounted.unmount()
+    }
+  })
+
+  test('keeps an imported PDF active when the library refresh fails', async () => {
+    const entry = createPdfEntry('pdf-refresh-failure', 'PDF refresh failure')
+
+    libraryStoreMocks.addPdfDocument.mockResolvedValue(entry)
+    libraryStoreMocks.listEntries
+      .mockRejectedValueOnce(new Error('library refresh failed'))
+      .mockResolvedValue([entry])
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+
+    const mounted = mountApp()
+
+    try {
+      await dispatchFile(mounted.host, new File([Uint8Array.of(1)], 'PDF refresh failure.pdf', {
+        type: 'application/pdf',
+      }))
+      await vi.waitFor(() => expect(libraryStoreMocks.addPdfDocument).toHaveBeenCalled())
+      await vi.waitFor(() => {
+        expect(mounted.host.querySelector('[data-testid="pdf-viewer"]')).not.toBeNull()
+        expect(mounted.host.querySelector('.app-shell__live-status')?.textContent).toContain('PDF 已加入文库')
+      })
+      await flushSettledWork()
+
+      expect(mounted.host.querySelector('[data-testid="floating-affordance-menu"]')).toBeNull()
+      expect(mounted.host.textContent).not.toContain('无法加入 PDF。当前文档没有被替换')
+
+      await showLibrary(mounted.host)
+      await vi.waitFor(() => {
+        expect(libraryStoreMocks.listEntries).toHaveBeenCalledTimes(2)
+        expect(hasLibraryEntry(mounted.host, entry.title)).toBe(true)
+        expect(libraryViewStatus(mounted.host)).toBeUndefined()
+      })
+    }
+    finally {
+      mounted.unmount()
+    }
+  })
+
   test('keeps a later library selection active when an earlier paste finishes last', async () => {
     const earlierEntry = createMarkdownEntry('earlier-paste', 'Earlier Paste')
     const latestEntry = createMarkdownEntry('latest-library', 'Latest Library')
@@ -276,12 +350,14 @@ describe('App document activation and PDF reading position ownership', () => {
     }
   })
 
-  test('reconciles a pending durable import after entering the library', async () => {
+  test('recovers when pending import reconciliation cannot refresh the library', async () => {
     const pendingEntry = createMarkdownEntry('pending-library-import', 'Pending library import')
     const pendingAdd = createDeferred<LibraryEntry>()
-    let visibleEntries: LibraryEntry[] = []
 
-    libraryStoreMocks.listEntries.mockImplementation(async () => visibleEntries)
+    libraryStoreMocks.listEntries
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce(new Error('library refresh failed'))
+      .mockResolvedValue([pendingEntry])
     libraryStoreMocks.addMarkdownDocument.mockReturnValue(pendingAdd.promise)
     libraryStoreMocks.close.mockResolvedValue(undefined)
 
@@ -294,12 +370,21 @@ describe('App document activation and PDF reading position ownership', () => {
       await showLibrary(mounted.host)
       expect(mounted.host.querySelectorAll('[data-testid="library-entry"]')).toHaveLength(0)
 
-      visibleEntries = [pendingEntry]
       pendingAdd.resolve(pendingEntry)
       await vi.waitFor(() => {
-        expect(mounted.host.textContent).toContain(pendingEntry.title)
         expect(libraryStoreMocks.listEntries).toHaveBeenCalledTimes(2)
+        expect(libraryViewStatus(mounted.host)).toContain('文库暂时无法刷新')
       })
+
+      expect(mounted.host.querySelectorAll('[data-testid="library-entry"]')).toHaveLength(0)
+
+      changeLibrarySort(mounted.host, 'title')
+
+      await vi.waitFor(() => {
+        expect(libraryStoreMocks.listEntries).toHaveBeenCalledTimes(3)
+        expect(mounted.host.textContent).toContain(pendingEntry.title)
+      })
+      expect(mounted.host.querySelector('[data-testid="library-view"] [role="status"]')).toBeNull()
     }
     finally {
       mounted.unmount()
@@ -427,6 +512,124 @@ describe('App document activation and PDF reading position ownership', () => {
       expect(mounted.host.querySelector('[data-testid="library-view"]')).toBeNull()
       expect(readerTitle(mounted.host)).toBe('miru sample')
       expect(readerBody(mounted.host)).toBe(sampleMarkdown)
+    }
+    finally {
+      mounted.unmount()
+    }
+  })
+
+  test('keeps the last library snapshot when refresh fails and recovers on retry', async () => {
+    const snapshotEntry = createMarkdownEntry('snapshot-entry', 'Snapshot entry')
+    const recoveredEntry = createMarkdownEntry('recovered-entry', 'Recovered entry')
+
+    libraryStoreMocks.listEntries
+      .mockResolvedValueOnce([snapshotEntry])
+      .mockRejectedValueOnce(new Error('library refresh failed'))
+      .mockResolvedValue([snapshotEntry, recoveredEntry])
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+
+    const mounted = mountApp()
+
+    try {
+      await showLibrary(mounted.host)
+      expect(mounted.host.textContent).toContain(snapshotEntry.title)
+
+      click(mounted.host, '[data-testid="library-open-button"]')
+      await vi.waitFor(() => expect(
+        mounted.host.querySelector('[data-testid="library-view"]'),
+      ).toBeNull())
+
+      click(mounted.host, '[data-testid="library-open-button"]')
+      await vi.waitFor(() => expect(libraryStoreMocks.listEntries).toHaveBeenCalledTimes(2))
+      await vi.waitFor(() => expect(
+        mounted.host.querySelector('[data-testid="library-view"]'),
+      ).not.toBeNull())
+
+      expect(mounted.host.textContent).toContain(snapshotEntry.title)
+      expect(mounted.host.textContent).not.toContain(recoveredEntry.title)
+      expect(libraryViewStatus(mounted.host)).toContain('文库暂时无法刷新')
+
+      changeLibrarySort(mounted.host, 'title')
+
+      await vi.waitFor(() => expect(mounted.host.textContent).toContain(recoveredEntry.title))
+      expect(mounted.host.querySelector('[data-testid="library-view"] [role="status"]')).toBeNull()
+    }
+    finally {
+      mounted.unmount()
+    }
+  })
+
+  test('does not apply an older library snapshot after a newer refresh fails', async () => {
+    const initialEntry = createMarkdownEntry('initial-refresh-entry', 'Initial refresh entry')
+    const staleEntry = createMarkdownEntry('stale-refresh-entry', 'Stale refresh entry')
+    const recoveredEntry = createMarkdownEntry('latest-refresh-entry', 'Latest refresh entry')
+    const olderRefresh = createDeferred<LibraryEntry[]>()
+
+    libraryStoreMocks.listEntries
+      .mockResolvedValueOnce([initialEntry])
+      .mockReturnValueOnce(olderRefresh.promise)
+      .mockRejectedValueOnce(new Error('newer library refresh failed'))
+      .mockResolvedValue([recoveredEntry])
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+
+    const mounted = mountApp()
+
+    try {
+      await showLibrary(mounted.host)
+
+      changeLibrarySort(mounted.host, 'title')
+      await vi.waitFor(() => expect(libraryStoreMocks.listEntries).toHaveBeenCalledTimes(2))
+
+      changeLibrarySort(mounted.host, 'last-opened')
+      await vi.waitFor(() => expect(libraryViewStatus(mounted.host)).toContain('文库暂时无法刷新'))
+
+      olderRefresh.resolve([staleEntry])
+      await flushSettledWork()
+
+      expect(mounted.host.textContent).toContain(initialEntry.title)
+      expect(mounted.host.textContent).not.toContain(staleEntry.title)
+      expect(libraryViewStatus(mounted.host)).toContain('文库暂时无法刷新')
+
+      changeLibrarySort(mounted.host, 'title')
+      await vi.waitFor(() => expect(mounted.host.textContent).toContain(recoveredEntry.title))
+      expect(mounted.host.querySelector('[data-testid="library-view"] [role="status"]')).toBeNull()
+    }
+    finally {
+      mounted.unmount()
+    }
+  })
+
+  test('does not restore an older refresh error after a newer snapshot is applied', async () => {
+    const initialEntry = createMarkdownEntry('initial-before-success', 'Initial before success')
+    const latestEntry = createMarkdownEntry('latest-success-entry', 'Latest success entry')
+    const olderRefresh = createDeferred<LibraryEntry[]>()
+
+    libraryStoreMocks.listEntries
+      .mockResolvedValueOnce([initialEntry])
+      .mockReturnValueOnce(olderRefresh.promise)
+      .mockResolvedValue([latestEntry])
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+
+    const mounted = mountApp()
+
+    try {
+      await showLibrary(mounted.host)
+
+      changeLibrarySort(mounted.host, 'title')
+      await vi.waitFor(() => expect(libraryStoreMocks.listEntries).toHaveBeenCalledTimes(2))
+
+      changeLibrarySort(mounted.host, 'last-opened')
+      await vi.waitFor(() => {
+        expect(hasLibraryEntry(mounted.host, latestEntry.title)).toBe(true)
+        expect(libraryViewStatus(mounted.host)).toBeUndefined()
+      })
+
+      olderRefresh.reject(new Error('older library refresh failed'))
+      await flushSettledWork()
+
+      expect(hasLibraryEntry(mounted.host, latestEntry.title)).toBe(true)
+      expect(hasLibraryEntry(mounted.host, initialEntry.title)).toBe(false)
+      expect(libraryViewStatus(mounted.host)).toBeUndefined()
     }
     finally {
       mounted.unmount()
@@ -1252,6 +1455,26 @@ function readerTitle(host: HTMLElement): string | undefined {
 
 function readerBody(host: HTMLElement): string | undefined {
   return host.querySelector('[data-testid="reader-document-body"]')?.textContent ?? undefined
+}
+
+function libraryViewStatus(host: HTMLElement): string | undefined {
+  return host.querySelector('[data-testid="library-view"] [role="status"]')?.textContent ?? undefined
+}
+
+function hasLibraryEntry(host: HTMLElement, title: string): boolean {
+  return [...host.querySelectorAll<HTMLElement>('[data-testid="library-entry"]')]
+    .some(entry => entry.textContent?.includes(title))
+}
+
+function changeLibrarySort(host: HTMLElement, mode: LibrarySortMode): void {
+  const sort = host.querySelector<HTMLSelectElement>('[data-testid="library-sort"]')
+  expect(sort).not.toBeNull()
+  if (!sort) {
+    return
+  }
+
+  sort.value = mode
+  sort.dispatchEvent(new Event('change', { bubbles: true }))
 }
 
 function markedLibraryEntryIds(): string[] {
