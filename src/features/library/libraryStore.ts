@@ -72,6 +72,16 @@ interface AddLibraryDocumentOptions extends LibraryMutationOptions {
   markOpened?: boolean
 }
 
+interface UrlStorageBudgetSnapshot {
+  estimate: StorageEstimate
+  canonicalEntryId: string | null
+  canonicalByteSize: number
+}
+
+type UrlMarkdownUpsertResult =
+  | { status: 'committed', entry: LibraryEntry }
+  | { status: 'retry-storage', canonicalEntry: LibraryEntry | null }
+
 export class LibraryQuotaExceededError extends Error {
   constructor(message = 'Library storage quota exceeded') {
     super(message)
@@ -128,33 +138,37 @@ export function createLibraryStore(options: LibraryStoreOptions = {}) {
   ): Promise<LibraryEntry> {
     const byteSize = byteSizeOfText(input.markdown)
     const contentHash = hashText(input.markdown)
-    const existingEntries = input.source.kind === 'url'
-      ? await findMarkdownEntriesByUrl(input.source)
-      : []
+    if (input.source.kind === 'url') {
+      const preflightEntries = await findMarkdownEntriesByUrl(input.source)
+      const preflightEntry = selectCanonicalUrlEntry(preflightEntries)
+      let storageBudget = preflightEntry === null || byteSize > preflightEntry.byteSize
+        ? createUrlStorageBudgetSnapshot(await estimateStorage(), preflightEntry)
+        : null
 
-    if (existingEntries.length > 0) {
-      return await updateExistingMarkdownDocument(input, existingEntries, byteSize, contentHash, mutation)
+      while (true) {
+        const result = await commitUrlMarkdownUpsert(
+          input,
+          input.source,
+          byteSize,
+          contentHash,
+          preflightEntries.length > 0,
+          storageBudget,
+          mutation,
+        )
+        if (result.status === 'committed') {
+          return result.entry
+        }
+
+        storageBudget = createUrlStorageBudgetSnapshot(
+          await estimateStorage(),
+          result.canonicalEntry,
+        )
+      }
     }
 
     await ensureStorageBudget(byteSize)
 
-    const id = createId()
-    const timestamp = now()
-    const title = normalizeTitle(input.title ?? deriveMarkdownTitle(input.markdown, input.label, input.source))
-    const entry: LibraryEntry = {
-      id,
-      type: 'markdown',
-      title,
-      sortTitle: normalizeSortTitle(title),
-      source: input.source,
-      createdAt: timestamp,
-      updatedAt: timestamp,
-      lastOpenedAt: mutation.markOpened === false ? null : timestamp,
-      pinned: false,
-      byteSize,
-      contentHash,
-      schemaVersion: 1,
-    }
+    const entry = createMarkdownEntry(input, byteSize, contentHash, mutation)
 
     const db = await getDb()
     throwIfAborted(mutation.signal)
@@ -163,7 +177,7 @@ export function createLibraryStore(options: LibraryStoreOptions = {}) {
     try {
       await Promise.all([
         tx.objectStore('entries').add(entry),
-        tx.objectStore('markdownBodies').add({ documentId: id, markdown: input.markdown }),
+        tx.objectStore('markdownBodies').add({ documentId: entry.id, markdown: input.markdown }),
         tx.done,
       ])
     }
@@ -184,27 +198,41 @@ export function createLibraryStore(options: LibraryStoreOptions = {}) {
     return body?.markdown !== markdown
   }
 
-  async function updateExistingMarkdownDocument(
+  function createMarkdownEntry(
     input: AddMarkdownDocumentInput,
-    matchingEntries: LibraryEntry[],
     byteSize: number,
     contentHash: string,
     mutation: AddLibraryDocumentOptions,
-  ): Promise<LibraryEntry> {
-    const existingEntry = selectCanonicalUrlEntry(matchingEntries)
-
-    if (!existingEntry) {
-      throw new LibraryEntryNotFoundError('url-match')
+  ): LibraryEntry {
+    const id = createId()
+    const timestamp = now()
+    const title = normalizeTitle(input.title ?? deriveMarkdownTitle(input.markdown, input.label, input.source))
+    return {
+      id,
+      type: 'markdown',
+      title,
+      sortTitle: normalizeSortTitle(title),
+      source: input.source,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      lastOpenedAt: mutation.markOpened === false ? null : timestamp,
+      pinned: false,
+      byteSize,
+      contentHash,
+      schemaVersion: 1,
     }
+  }
 
+  async function commitUrlMarkdownUpsert(
+    input: AddMarkdownDocumentInput,
+    source: UrlLibrarySource,
+    byteSize: number,
+    contentHash: string,
+    preflightHadMatch: boolean,
+    storageBudget: UrlStorageBudgetSnapshot | null,
+    mutation: AddLibraryDocumentOptions,
+  ): Promise<UrlMarkdownUpsertResult> {
     const db = await getDb()
-    const additionalBytes = Math.max(0, byteSize - existingEntry.byteSize)
-    if (additionalBytes > 0) {
-      await ensureStorageBudget(additionalBytes)
-    }
-
-    const duplicateEntries = matchingEntries.filter(entry => entry.id !== existingEntry.id)
-
     throwIfAborted(mutation.signal)
     const tx = db.transaction(['entries', 'markdownBodies', 'positions'], 'readwrite')
     const unbindAbort = bindAbortSignal(tx, mutation.signal)
@@ -213,12 +241,46 @@ export function createLibraryStore(options: LibraryStoreOptions = {}) {
     const positionsStore = tx.objectStore('positions')
 
     try {
-      const [currentEntry, currentBody] = await Promise.all([
-        entriesStore.get(existingEntry.id),
-        markdownBodiesStore.get(existingEntry.id),
-      ])
-      if (!currentEntry || currentEntry.type !== 'markdown' || !currentBody) {
-        throw new LibraryEntryNotFoundError(existingEntry.id)
+      const matchingEntries = filterMarkdownEntriesByUrl(await entriesStore.getAll(), source)
+      const currentEntry = selectCanonicalUrlEntry(matchingEntries)
+
+      if (!currentEntry) {
+        if (preflightHadMatch) {
+          throw new LibraryEntryNotFoundError('url-match')
+        }
+        if (!storageBudget || storageBudget.canonicalEntryId !== null) {
+          tx.abort()
+          await tx.done.catch(() => undefined)
+          return { status: 'retry-storage', canonicalEntry: null }
+        }
+
+        assertStorageBudget(storageBudget.estimate, byteSize)
+        const entry = createMarkdownEntry(input, byteSize, contentHash, mutation)
+        await Promise.all([
+          entriesStore.add(entry),
+          markdownBodiesStore.add({ documentId: entry.id, markdown: input.markdown }),
+          tx.done,
+        ])
+        return { status: 'committed', entry }
+      }
+
+      const currentBody = await markdownBodiesStore.get(currentEntry.id)
+      if (!currentBody) {
+        throw new LibraryEntryNotFoundError(currentEntry.id)
+      }
+
+      const additionalBytes = Math.max(0, byteSize - currentEntry.byteSize)
+      if (additionalBytes > 0) {
+        if (
+          !storageBudget
+          || storageBudget.canonicalEntryId !== currentEntry.id
+          || storageBudget.canonicalByteSize !== currentEntry.byteSize
+        ) {
+          tx.abort()
+          await tx.done.catch(() => undefined)
+          return { status: 'retry-storage', canonicalEntry: currentEntry }
+        }
+        assertStorageBudget(storageBudget.estimate, additionalBytes)
       }
 
       const contentChanged = currentBody.markdown !== input.markdown
@@ -234,6 +296,7 @@ export function createLibraryStore(options: LibraryStoreOptions = {}) {
         byteSize,
         contentHash,
       }
+      const duplicateEntries = matchingEntries.filter(entry => entry.id !== currentEntry.id)
       const operations: Promise<unknown>[] = [
         entriesStore.put(nextEntry),
         markdownBodiesStore.put({ documentId: currentEntry.id, markdown: input.markdown }),
@@ -249,7 +312,7 @@ export function createLibraryStore(options: LibraryStoreOptions = {}) {
       }
 
       await Promise.all([...operations, tx.done])
-      return nextEntry
+      return { status: 'committed', entry: nextEntry }
     }
     catch (reason) {
       await tx.done.catch(() => undefined)
@@ -500,27 +563,19 @@ export function createLibraryStore(options: LibraryStoreOptions = {}) {
 
   async function findMarkdownEntriesByUrl(source: UrlLibrarySource): Promise<LibraryEntry[]> {
     const db = await getDb()
-    const entries = await db.getAll('entries')
-    return entries.filter(entry =>
-      entry.type === 'markdown'
-      && entry.source.kind === 'url'
-      && (
-        entry.source.inputUrl === source.inputUrl
-        || entry.source.requestUrl === source.requestUrl
-      ),
-    )
+    return filterMarkdownEntriesByUrl(await db.getAll('entries'), source)
   }
 
   async function ensureStorageBudget(incomingBytes: number): Promise<void> {
-    const estimate = await estimateStorage()
+    assertStorageBudget(await estimateStorage(), incomingBytes)
+  }
 
-    if (estimate.quota === undefined || estimate.usage === undefined) {
-      return
-    }
-
-    const remaining = estimate.quota - estimate.usage
-    if (remaining - incomingBytes < storageSafetyMarginBytes) {
-      throw new LibraryQuotaExceededError()
+  function assertStorageBudget(estimate: StorageEstimate, incomingBytes: number): void {
+    if (estimate.quota !== undefined && estimate.usage !== undefined) {
+      const remaining = estimate.quota - estimate.usage
+      if (remaining - incomingBytes < storageSafetyMarginBytes) {
+        throw new LibraryQuotaExceededError()
+      }
     }
   }
 
@@ -571,6 +626,28 @@ export function sortLibraryEntries(entries: LibraryEntry[], sortMode: LibrarySor
 
     return compareLastOpenedDesc(left, right)
   })
+}
+
+function filterMarkdownEntriesByUrl(entries: LibraryEntry[], source: UrlLibrarySource): LibraryEntry[] {
+  return entries.filter(entry =>
+    entry.type === 'markdown'
+    && entry.source.kind === 'url'
+    && (
+      entry.source.inputUrl === source.inputUrl
+      || entry.source.requestUrl === source.requestUrl
+    ),
+  )
+}
+
+function createUrlStorageBudgetSnapshot(
+  estimate: StorageEstimate,
+  canonicalEntry: LibraryEntry | null,
+): UrlStorageBudgetSnapshot {
+  return {
+    estimate,
+    canonicalEntryId: canonicalEntry?.id ?? null,
+    canonicalByteSize: canonicalEntry?.byteSize ?? 0,
+  }
 }
 
 function compareDateDesc(left: string, right: string): number {
