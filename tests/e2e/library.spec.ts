@@ -3,6 +3,7 @@ import {
   isWideViewport,
   openBookshelfEntry,
   pasteText,
+  waitForReaderReady,
 } from './support/reader'
 
 test('adds pasted markdown to the local library and reopens it from the bookshelf', async ({ page }) => {
@@ -111,7 +112,7 @@ test('restores local library markdown scroll position when reopening a document'
     '',
     Array.from({ length: 70 }, (_, index) => `Paragraph ${index + 1}.`).join('\n\n'),
   ].join('\n'))
-  await expect(page.getByRole('heading', { name: 'Long local doc' })).toBeVisible()
+  await waitForReaderReady(page, 'Long local doc')
 
   await page.evaluate(() => window.scrollTo(0, 1200))
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(800)

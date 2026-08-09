@@ -276,6 +276,68 @@ describe('App document activation and PDF reading position ownership', () => {
     }
   })
 
+  test('reconciles a pending durable import after entering the library', async () => {
+    const pendingEntry = createMarkdownEntry('pending-library-import', 'Pending library import')
+    const pendingAdd = createDeferred<LibraryEntry>()
+    let visibleEntries: LibraryEntry[] = []
+
+    libraryStoreMocks.listEntries.mockImplementation(async () => visibleEntries)
+    libraryStoreMocks.addMarkdownDocument.mockReturnValue(pendingAdd.promise)
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+
+    const mounted = mountApp()
+
+    try {
+      dispatchPaste(mounted.host, '# Pending library import')
+      await vi.waitFor(() => expect(libraryStoreMocks.addMarkdownDocument).toHaveBeenCalled())
+
+      await showLibrary(mounted.host)
+      expect(mounted.host.querySelectorAll('[data-testid="library-entry"]')).toHaveLength(0)
+
+      visibleEntries = [pendingEntry]
+      pendingAdd.resolve(pendingEntry)
+      await vi.waitFor(() => {
+        expect(mounted.host.textContent).toContain(pendingEntry.title)
+        expect(libraryStoreMocks.listEntries).toHaveBeenCalledTimes(2)
+      })
+    }
+    finally {
+      mounted.unmount()
+    }
+  })
+
+  test('reconciles a pending durable PDF import after entering the library', async () => {
+    const pendingEntry = createPdfEntry('pending-library-pdf', 'Pending library PDF')
+    const pendingAdd = createDeferred<LibraryEntry>()
+    let visibleEntries: LibraryEntry[] = []
+
+    libraryStoreMocks.listEntries.mockImplementation(async () => visibleEntries)
+    libraryStoreMocks.addPdfDocument.mockReturnValue(pendingAdd.promise)
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+
+    const mounted = mountApp()
+
+    try {
+      await dispatchFile(mounted.host, new File([Uint8Array.of(1)], 'Pending library PDF.pdf', {
+        type: 'application/pdf',
+      }))
+      await vi.waitFor(() => expect(libraryStoreMocks.addPdfDocument).toHaveBeenCalled())
+
+      await showLibrary(mounted.host)
+      expect(mounted.host.querySelectorAll('[data-testid="library-entry"]')).toHaveLength(0)
+
+      visibleEntries = [pendingEntry]
+      pendingAdd.resolve(pendingEntry)
+      await vi.waitFor(() => {
+        expect(mounted.host.textContent).toContain(pendingEntry.title)
+        expect(libraryStoreMocks.listEntries).toHaveBeenCalledTimes(2)
+      })
+    }
+    finally {
+      mounted.unmount()
+    }
+  })
+
   test('keeps an unrelated pending import durable when a library entry is deleted', async () => {
     const existingEntry = createMarkdownEntry('existing-delete', 'Existing delete')
     const pendingEntry = createMarkdownEntry('pending-import', 'Pending import')
@@ -1168,6 +1230,20 @@ function dispatchPaste(host: HTMLElement, markdown: string): void {
     },
   })
   host.querySelector('main')?.dispatchEvent(event)
+}
+
+async function dispatchFile(host: HTMLElement, file: File): Promise<void> {
+  click(host, '[data-testid="floating-affordance-button"]')
+  let input: HTMLInputElement | null = null
+  await vi.waitFor(() => {
+    input = host.querySelector<HTMLInputElement>('input[type="file"]')
+    expect(input).not.toBeNull()
+  })
+  Object.defineProperty(input, 'files', {
+    configurable: true,
+    value: [file],
+  })
+  input?.dispatchEvent(new Event('change', { bubbles: true }))
 }
 
 function readerTitle(host: HTMLElement): string | undefined {
