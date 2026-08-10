@@ -6,6 +6,14 @@ import {
   waitForReaderReady,
 } from './support/reader'
 
+interface LibraryReadFaultWindow extends Window {
+  __miruMarkdownReadFault?: {
+    armed: boolean
+    failureCount: number
+    restore: () => void
+  }
+}
+
 test('adds pasted markdown to the local library and reopens it from the bookshelf', async ({ page }) => {
   await page.goto('/')
 
@@ -36,6 +44,75 @@ test('adds pasted markdown to the local library and reopens it from the bookshel
   await expect(page.getByRole('heading', { name: 'Library doc' })).toBeVisible()
   await expect(page.getByText('Saved locally.')).toBeVisible()
   await expect(page.locator('.reader-surface')).toBeFocused()
+})
+
+test('keeps a Markdown entry retryable after a transient body read failure', async ({ page }) => {
+  await page.addInitScript(() => {
+    const target = window as LibraryReadFaultWindow
+    const originalGet = IDBObjectStore.prototype.get
+    const faultState = {
+      armed: false,
+      failureCount: 0,
+      restore: () => {
+        IDBObjectStore.prototype.get = originalGet
+      },
+    }
+
+    IDBObjectStore.prototype.get = function (query: IDBValidKey | IDBKeyRange) {
+      if (faultState.armed && this.name === 'markdownBodies') {
+        faultState.armed = false
+        faultState.failureCount += 1
+        throw new DOMException('Injected Markdown body read failure', 'UnknownError')
+      }
+
+      return originalGet.call(this, query)
+    }
+    target.__miruMarkdownReadFault = faultState
+  })
+  await page.goto('/')
+
+  await pasteText(page, '# Retry local document\n\nStill available after a transient failure.')
+  await waitForReaderReady(page, 'Retry local document')
+  await page.getByTestId('library-open-button').click()
+
+  const libraryView = page.getByTestId('library-view')
+  const entry = page.getByTestId('library-entry').filter({ hasText: 'Retry local document' })
+  const consoleErrors: string[] = []
+  const pageErrors: string[] = []
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      consoleErrors.push(message.text())
+    }
+  })
+  page.on('pageerror', error => pageErrors.push(error.message))
+
+  await expect(libraryView).toBeVisible()
+  await expect(entry).toBeVisible()
+  await page.evaluate(() => {
+    const state = (window as LibraryReadFaultWindow).__miruMarkdownReadFault
+    if (!state) {
+      throw new Error('Markdown read fault hook was not installed')
+    }
+    state.armed = true
+  })
+  await openBookshelfEntry(entry, 'Retry local document')
+
+  await expect(libraryView).toBeVisible()
+  await expect(entry).toBeVisible()
+  await expect(libraryView.getByRole('status')).toContainText('暂时无法打开')
+  await expect(libraryView.getByRole('status')).toContainText('请稍后重试')
+  await expect.poll(() => page.evaluate(() => (
+    (window as LibraryReadFaultWindow).__miruMarkdownReadFault?.failureCount ?? 0
+  ))).toBe(1)
+
+  await page.evaluate(() => {
+    (window as LibraryReadFaultWindow).__miruMarkdownReadFault?.restore()
+  })
+  await openBookshelfEntry(entry, 'Retry local document')
+  await waitForReaderReady(page, 'Retry local document')
+  await expect(page.getByText('Still available after a transient failure.')).toBeVisible()
+  expect(consoleErrors).toEqual([])
+  expect(pageErrors).toEqual([])
 })
 
 test('renames, pins, and deletes local library markdown entries from the bookshelf', async ({ page }) => {

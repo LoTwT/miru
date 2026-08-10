@@ -244,6 +244,449 @@ describe('App document activation and PDF reading position ownership', () => {
     }
   })
 
+  test.each(['markdown', 'pdf'] as const)(
+    'keeps a %s library entry available for retry after its body read fails',
+    async entryType => {
+      const entry = entryType === 'markdown'
+        ? createMarkdownEntry('retry-markdown-read', 'Retry Markdown read')
+        : createPdfEntry('retry-pdf-read', 'Retry PDF read')
+      const readError = new Error(`${entryType} body read failed`)
+      const appErrors: unknown[] = []
+
+      libraryStoreMocks.listEntries.mockResolvedValue([entry])
+      if (entryType === 'markdown') {
+        libraryStoreMocks.openMarkdownDocument
+          .mockRejectedValueOnce(readError)
+          .mockResolvedValue(createOpenMarkdownDocument(entry, '# Retry Markdown read\n\nRecovered.'))
+      }
+      else {
+        libraryStoreMocks.openPdfDocument
+          .mockRejectedValueOnce(readError)
+          .mockResolvedValue(createOpenPdfDocument(entry))
+      }
+      libraryStoreMocks.close.mockResolvedValue(undefined)
+
+      const mounted = mountApp(error => appErrors.push(error))
+
+      try {
+        await showLibrary(mounted.host)
+        await openLibraryEntry(mounted.host, entry.title, entryType === 'markdown' ? '打开' : '看原件')
+        await vi.waitFor(() => expect(
+          entryType === 'markdown'
+            ? libraryStoreMocks.openMarkdownDocument
+            : libraryStoreMocks.openPdfDocument,
+        ).toHaveBeenCalledTimes(1))
+        await flushSettledWork()
+
+        expect(mounted.host.querySelector('[data-testid="library-view"]')).not.toBeNull()
+        expect(hasLibraryEntry(mounted.host, entry.title)).toBe(true)
+        expect(libraryViewStatus(mounted.host)).toContain('暂时无法打开')
+        expect(libraryViewStatus(mounted.host)).toContain('请稍后重试')
+        expect(libraryStoreMocks.markOpened).not.toHaveBeenCalled()
+        expect(appErrors).toEqual([])
+
+        await openLibraryEntry(mounted.host, entry.title, entryType === 'markdown' ? '打开' : '看原件')
+        if (entryType === 'markdown') {
+          await vi.waitFor(() => {
+            expect(readerTitle(mounted.host)).toBe(entry.title)
+            expect(readerBody(mounted.host)).toContain('Recovered.')
+          })
+        }
+        else {
+          await vi.waitFor(() => {
+            expect(mounted.host.querySelector('[data-testid="pdf-viewer"]')).not.toBeNull()
+            expect(mounted.host.textContent).toContain(entry.title)
+          })
+        }
+
+        expect(appErrors).toEqual([])
+      }
+      finally {
+        mounted.unmount()
+      }
+    },
+  )
+
+  test.each(['markdown', 'pdf'] as const)(
+    'opens a %s library entry when only its recent-open metadata update fails',
+    async entryType => {
+      const entry = entryType === 'markdown'
+        ? createMarkdownEntry('metadata-markdown-read', 'Metadata Markdown read')
+        : createPdfEntry('metadata-pdf-read', 'Metadata PDF read')
+      const appErrors: unknown[] = []
+
+      libraryStoreMocks.listEntries.mockResolvedValue([entry])
+      libraryStoreMocks.markOpened.mockRejectedValueOnce(new Error('recent-open metadata update failed'))
+      if (entryType === 'markdown') {
+        libraryStoreMocks.openMarkdownDocument.mockResolvedValue(
+          createOpenMarkdownDocument(entry, '# Metadata Markdown read\n\nReadable.'),
+        )
+      }
+      else {
+        libraryStoreMocks.openPdfDocument.mockResolvedValue(createOpenPdfDocument(entry))
+      }
+      libraryStoreMocks.close.mockResolvedValue(undefined)
+
+      const mounted = mountApp(error => appErrors.push(error))
+
+      try {
+        await showLibrary(mounted.host)
+        await openLibraryEntry(mounted.host, entry.title, entryType === 'markdown' ? '打开' : '看原件')
+        await vi.waitFor(() => expect(libraryStoreMocks.markOpened).toHaveBeenCalledWith(
+          entry.id,
+          expect.objectContaining({ signal: expect.any(AbortSignal) }),
+        ))
+
+        if (entryType === 'markdown') {
+          await vi.waitFor(() => {
+            expect(readerTitle(mounted.host)).toBe(entry.title)
+            expect(readerBody(mounted.host)).toContain('Readable.')
+          })
+        }
+        else {
+          await vi.waitFor(() => {
+            expect(mounted.host.querySelector('[data-testid="pdf-viewer"]')).not.toBeNull()
+            expect(mounted.host.textContent).toContain(entry.title)
+          })
+        }
+
+        await vi.waitFor(() => expect(
+          mounted.host.querySelector('.app-shell__live-status')?.textContent,
+        ).toContain('最近打开时间暂时无法更新'))
+        expect(mounted.host.querySelector('[data-testid="library-view"]')).toBeNull()
+        expect(appErrors).toEqual([])
+      }
+      finally {
+        mounted.unmount()
+      }
+    },
+  )
+
+  test('ignores a stale library read failure after a newer document activates', async () => {
+    const earlierEntry = createMarkdownEntry('stale-read-earlier', 'Stale read earlier')
+    const latestEntry = createMarkdownEntry('stale-read-latest', 'Stale read latest')
+    const earlierRead = createDeferred<OpenMarkdownDocumentResult | null>()
+    const appErrors: unknown[] = []
+
+    libraryStoreMocks.listEntries.mockResolvedValue([earlierEntry, latestEntry])
+    libraryStoreMocks.openMarkdownDocument.mockImplementation(id => id === earlierEntry.id
+      ? earlierRead.promise
+      : Promise.resolve(createOpenMarkdownDocument(latestEntry, '# Stale read latest\n\nCurrent.')))
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+
+    const mounted = mountApp(error => appErrors.push(error))
+
+    try {
+      await showLibrary(mounted.host)
+      await openLibraryEntry(mounted.host, earlierEntry.title, '打开')
+      await vi.waitFor(() => expect(libraryStoreMocks.openMarkdownDocument).toHaveBeenCalledWith(
+        earlierEntry.id,
+        expect.anything(),
+      ))
+
+      await openLibraryEntry(mounted.host, latestEntry.title, '打开')
+      await vi.waitFor(() => {
+        expect(readerTitle(mounted.host)).toBe(latestEntry.title)
+        expect(readerBody(mounted.host)).toContain('Current.')
+      })
+
+      earlierRead.reject(new Error('stale body read failed'))
+      await flushSettledWork()
+
+      expect(readerTitle(mounted.host)).toBe(latestEntry.title)
+      expect(readerBody(mounted.host)).toContain('Current.')
+      expect(markedLibraryEntryIds()).toContain(latestEntry.id)
+      expect(markedLibraryEntryIds()).not.toContain(earlierEntry.id)
+      expect(appErrors).toEqual([])
+    }
+    finally {
+      earlierRead.resolve(null)
+      mounted.unmount()
+    }
+  })
+
+  test('keeps an existing URL conflict retryable after its library read fails', async () => {
+    const source = {
+      domain: 'example.com',
+      inputUrl: 'https://example.com/retry-existing.md',
+      kind: 'url' as const,
+      requestUrl: 'https://example.com/retry-existing.md',
+    }
+    const entry = createMarkdownEntry('retry-existing-url', 'Retry existing URL')
+    const appErrors: unknown[] = []
+    entry.source = source
+
+    libraryStoreMocks.findMarkdownEntryByUrl.mockResolvedValue(entry)
+    libraryStoreMocks.listEntries.mockResolvedValue([entry])
+    libraryStoreMocks.openMarkdownDocument
+      .mockRejectedValueOnce(new Error('existing URL body read failed'))
+      .mockResolvedValue(createOpenMarkdownDocument(entry, '# Retry existing URL\n\nRecovered existing body.'))
+    libraryStoreMocks.markOpened.mockRejectedValueOnce(new Error('existing URL metadata update failed'))
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('# Retry existing URL\n\nFetched body.', {
+      headers: { 'Content-Type': 'text/markdown' },
+      status: 200,
+    })))
+
+    const mounted = mountApp(error => appErrors.push(error))
+
+    try {
+      dispatchPaste(mounted.host, source.inputUrl)
+      await vi.waitFor(() => expect(
+        mounted.host.querySelector('[data-testid="url-import-conflict"]'),
+      ).not.toBeNull())
+
+      await clickButtonWithText(mounted.host, '打开已有')
+      await vi.waitFor(() => expect(libraryStoreMocks.openMarkdownDocument).toHaveBeenCalledTimes(1))
+      await vi.waitFor(() => {
+        expect(mounted.host.querySelector('[data-testid="url-import-conflict"]')).not.toBeNull()
+        expect(
+          mounted.host.querySelector('[data-testid="floating-affordance-menu"] [role="status"]')?.textContent,
+        ).toContain('暂时无法打开')
+      })
+      expect(appErrors).toEqual([])
+
+      await clickButtonWithText(mounted.host, '打开已有')
+      await vi.waitFor(() => {
+        expect(readerTitle(mounted.host)).toBe(entry.title)
+        expect(readerBody(mounted.host)).toContain('Recovered existing body.')
+      })
+      expect(libraryStoreMocks.openMarkdownDocument).toHaveBeenCalledTimes(2)
+      expect(mounted.host.querySelector('.app-shell__live-status')?.textContent)
+        .toContain('最近打开时间暂时无法更新')
+      expect(appErrors).toEqual([])
+    }
+    finally {
+      mounted.unmount()
+    }
+  })
+
+  test('does not restore an existing URL conflict after its library entry is removed', async () => {
+    const source = {
+      domain: 'example.com',
+      inputUrl: 'https://example.com/missing-existing.md',
+      kind: 'url' as const,
+      requestUrl: 'https://example.com/missing-existing.md',
+    }
+    const entry = createMarkdownEntry('missing-existing-url', 'Missing existing URL')
+    const appErrors: unknown[] = []
+    entry.source = source
+
+    libraryStoreMocks.findMarkdownEntryByUrl.mockResolvedValue(entry)
+    libraryStoreMocks.listEntries.mockResolvedValue([])
+    libraryStoreMocks.openMarkdownDocument.mockResolvedValue(null)
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('# Missing existing URL\n\nFetched body.', {
+      headers: { 'Content-Type': 'text/markdown' },
+      status: 200,
+    })))
+
+    const mounted = mountApp(error => appErrors.push(error))
+
+    try {
+      dispatchPaste(mounted.host, source.inputUrl)
+      await vi.waitFor(() => expect(
+        mounted.host.querySelector('[data-testid="url-import-conflict"]'),
+      ).not.toBeNull())
+
+      await clickButtonWithText(mounted.host, '打开已有')
+      await vi.waitFor(() => expect(libraryStoreMocks.openMarkdownDocument).toHaveBeenCalledOnce())
+      await vi.waitFor(() => expect(
+        mounted.host.querySelector('[data-testid="floating-affordance-menu"] [role="status"]')?.textContent,
+      ).toContain('已经不在文库中'))
+
+      expect(mounted.host.querySelector('[data-testid="url-import-conflict"]')).toBeNull()
+      expect(
+        mounted.host.querySelector('[data-testid="floating-affordance-menu"] [role="status"]')?.textContent,
+      ).not.toContain('暂时无法打开')
+      expect(appErrors).toEqual([])
+    }
+    finally {
+      mounted.unmount()
+    }
+  })
+
+  test('keeps an unchanged URL update retryable after its committed body read fails', async () => {
+    const source = {
+      domain: 'example.com',
+      inputUrl: 'https://example.com/retry-unchanged.md',
+      kind: 'url' as const,
+      requestUrl: 'https://example.com/retry-unchanged.md',
+    }
+    const entry = createMarkdownEntry('retry-unchanged-url', 'Retry unchanged URL')
+    const appErrors: unknown[] = []
+    entry.source = source
+
+    libraryStoreMocks.findMarkdownEntryByUrl.mockResolvedValue(entry)
+    libraryStoreMocks.isMarkdownContentChanged.mockResolvedValue(false)
+    libraryStoreMocks.addMarkdownDocument.mockResolvedValue(entry)
+    libraryStoreMocks.listEntries.mockResolvedValue([entry])
+    libraryStoreMocks.openMarkdownDocument
+      .mockRejectedValueOnce(new Error('unchanged URL body read failed'))
+      .mockResolvedValue(createOpenMarkdownDocument(entry, '# Retry unchanged URL\n\nRecovered unchanged body.'))
+    libraryStoreMocks.markOpened.mockRejectedValueOnce(new Error('unchanged URL metadata update failed'))
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('# Retry unchanged URL\n\nSame fetched body.', {
+      headers: { 'Content-Type': 'text/markdown' },
+      status: 200,
+    })))
+
+    const mounted = mountApp(error => appErrors.push(error))
+
+    try {
+      dispatchPaste(mounted.host, source.inputUrl)
+      await vi.waitFor(() => expect(
+        mounted.host.querySelector('[data-testid="url-import-conflict"]'),
+      ).not.toBeNull())
+
+      await clickButtonWithText(mounted.host, '更新到最新')
+      await vi.waitFor(() => expect(libraryStoreMocks.openMarkdownDocument).toHaveBeenCalledTimes(1))
+      await vi.waitFor(() => {
+        expect(mounted.host.querySelector('[data-testid="url-import-conflict"]')).not.toBeNull()
+        expect(
+          mounted.host.querySelector('[data-testid="floating-affordance-menu"] [role="status"]')?.textContent,
+        ).toContain('暂时无法打开')
+      })
+      expect(libraryStoreMocks.addMarkdownDocument).toHaveBeenCalledTimes(1)
+      expect(appErrors).toEqual([])
+
+      await clickButtonWithText(mounted.host, '更新到最新')
+      await vi.waitFor(() => {
+        expect(readerTitle(mounted.host)).toBe(entry.title)
+        expect(readerBody(mounted.host)).toContain('Recovered unchanged body.')
+      })
+      expect(libraryStoreMocks.addMarkdownDocument).toHaveBeenCalledTimes(2)
+      expect(libraryStoreMocks.openMarkdownDocument).toHaveBeenCalledTimes(2)
+      expect(mounted.host.querySelector('.app-shell__live-status')?.textContent)
+        .toContain('最近打开时间暂时无法更新')
+      expect(appErrors).toEqual([])
+    }
+    finally {
+      mounted.unmount()
+    }
+  })
+
+  test('does not restore an unchanged URL conflict after its updated entry is removed', async () => {
+    const source = {
+      domain: 'example.com',
+      inputUrl: 'https://example.com/missing-unchanged.md',
+      kind: 'url' as const,
+      requestUrl: 'https://example.com/missing-unchanged.md',
+    }
+    const entry = createMarkdownEntry('missing-unchanged-url', 'Missing unchanged URL')
+    const appErrors: unknown[] = []
+    entry.source = source
+
+    libraryStoreMocks.findMarkdownEntryByUrl.mockResolvedValue(entry)
+    libraryStoreMocks.isMarkdownContentChanged.mockResolvedValue(false)
+    libraryStoreMocks.addMarkdownDocument.mockResolvedValue(entry)
+    libraryStoreMocks.listEntries.mockResolvedValue([])
+    libraryStoreMocks.openMarkdownDocument.mockResolvedValue(null)
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('# Missing unchanged URL\n\nSame fetched body.', {
+      headers: { 'Content-Type': 'text/markdown' },
+      status: 200,
+    })))
+
+    const mounted = mountApp(error => appErrors.push(error))
+
+    try {
+      dispatchPaste(mounted.host, source.inputUrl)
+      await vi.waitFor(() => expect(
+        mounted.host.querySelector('[data-testid="url-import-conflict"]'),
+      ).not.toBeNull())
+
+      await clickButtonWithText(mounted.host, '更新到最新')
+      await vi.waitFor(() => expect(libraryStoreMocks.openMarkdownDocument).toHaveBeenCalledOnce())
+      await vi.waitFor(() => expect(
+        mounted.host.querySelector('[data-testid="floating-affordance-menu"] [role="status"]')?.textContent,
+      ).toContain('已经不在文库中'))
+
+      expect(mounted.host.querySelector('[data-testid="url-import-conflict"]')).toBeNull()
+      expect(
+        mounted.host.querySelector('[data-testid="floating-affordance-menu"] [role="status"]')?.textContent,
+      ).not.toContain('暂时无法打开')
+      expect(libraryStoreMocks.addMarkdownDocument).toHaveBeenCalledOnce()
+      expect(appErrors).toEqual([])
+    }
+    finally {
+      mounted.unmount()
+    }
+  })
+
+  test('activates changed URL content without rereading the committed library body', async () => {
+    const source = {
+      domain: 'example.com',
+      inputUrl: 'https://example.com/updated-in-memory.md',
+      kind: 'url' as const,
+      requestUrl: 'https://example.com/updated-in-memory.md',
+    }
+    const entry = createMarkdownEntry('updated-in-memory-url', 'Updated in-memory URL')
+    const appErrors: unknown[] = []
+    entry.source = source
+
+    libraryStoreMocks.listEntries.mockResolvedValue([entry])
+    libraryStoreMocks.openMarkdownDocument
+      .mockResolvedValueOnce(createOpenMarkdownDocument(entry, '# Updated in-memory URL\n\nOriginal body.'))
+      .mockRejectedValue(new Error('committed body reread failed'))
+    libraryStoreMocks.findMarkdownEntryByUrl.mockResolvedValue(entry)
+    libraryStoreMocks.isMarkdownContentChanged.mockResolvedValue(true)
+    libraryStoreMocks.addMarkdownDocument.mockResolvedValue(entry)
+    libraryStoreMocks.saveReadingPosition.mockImplementation(async position => ({
+      ...position,
+      updatedAt: '2026-08-09T00:00:01.000Z',
+    }))
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('# Updated in-memory URL\n\nUpdated body.', {
+      headers: { 'Content-Type': 'text/markdown' },
+      status: 200,
+    })))
+
+    const mounted = mountApp(error => appErrors.push(error))
+
+    try {
+      await showLibrary(mounted.host)
+      await openLibraryEntry(mounted.host, entry.title, '打开')
+      await vi.waitFor(() => expect(readerBody(mounted.host)).toContain('Original body.'))
+      libraryStoreMocks.markOpened.mockRejectedValueOnce(new Error('changed URL metadata update failed'))
+
+      dispatchPaste(mounted.host, source.inputUrl)
+      await vi.waitFor(() => expect(
+        mounted.host.querySelector('[data-testid="url-import-conflict"]'),
+      ).not.toBeNull())
+      await clickButtonWithText(mounted.host, '更新到最新')
+      await vi.waitFor(() => {
+        expect(readerTitle(mounted.host)).toBe(entry.title)
+        expect(readerBody(mounted.host)).toContain('Updated body.')
+      })
+
+      expect(libraryStoreMocks.openMarkdownDocument).toHaveBeenCalledTimes(1)
+      expect(mounted.host.querySelector('.app-shell__live-status')?.textContent)
+        .toContain('最近打开时间暂时无法更新')
+      expect(appErrors).toEqual([])
+
+      libraryStoreMocks.saveReadingPosition.mockClear()
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      vi.stubGlobal('scrollY', 360)
+      window.dispatchEvent(new Event('scroll'))
+      await vi.advanceTimersByTimeAsync(450)
+      await vi.waitFor(() => expect(libraryStoreMocks.saveReadingPosition).toHaveBeenCalledWith(
+        expect.objectContaining({
+          documentId: entry.id,
+          scrollY: 360,
+          type: 'markdown',
+        }),
+      ))
+    }
+    finally {
+      if (vi.isFakeTimers()) {
+        vi.clearAllTimers()
+        vi.useRealTimers()
+      }
+      mounted.unmount()
+    }
+  })
+
   test('keeps an imported Markdown document active when the library refresh fails', async () => {
     const entry = createMarkdownEntry('markdown-refresh-failure', 'Markdown refresh failure')
 
@@ -316,6 +759,94 @@ describe('App document activation and PDF reading position ownership', () => {
       mounted.unmount()
     }
   })
+
+  test.each(['markdown', 'pdf'] as const)(
+    'keeps the metadata warning after an imported %s document activates',
+    async entryType => {
+      const entry = entryType === 'markdown'
+        ? createMarkdownEntry('markdown-metadata-failure', 'Markdown metadata failure')
+        : createPdfEntry('pdf-metadata-failure', 'PDF metadata failure')
+
+      if (entryType === 'markdown') {
+        libraryStoreMocks.addMarkdownDocument.mockResolvedValue(entry)
+      }
+      else {
+        libraryStoreMocks.addPdfDocument.mockResolvedValue(entry)
+      }
+      libraryStoreMocks.listEntries.mockResolvedValue([entry])
+      libraryStoreMocks.markOpened.mockRejectedValueOnce(new Error(`${entryType} metadata update failed`))
+      libraryStoreMocks.close.mockResolvedValue(undefined)
+
+      const mounted = mountApp()
+
+      try {
+        if (entryType === 'markdown') {
+          dispatchPaste(mounted.host, '# Markdown metadata failure')
+          await vi.waitFor(() => expect(readerTitle(mounted.host)).toBe(entry.title))
+        }
+        else {
+          await dispatchFile(mounted.host, new File([Uint8Array.of(1)], 'PDF metadata failure.pdf', {
+            type: 'application/pdf',
+          }))
+          await vi.waitFor(() => expect(mounted.host.querySelector('[data-testid="pdf-viewer"]')).not.toBeNull())
+        }
+        await vi.waitFor(() => expect(
+          mounted.host.querySelector('.app-shell__live-status')?.textContent,
+        ).toContain('最近打开时间暂时无法更新'))
+
+        expect(mounted.host.textContent).toContain(entry.title)
+        expect(mounted.host.querySelector('[data-testid="floating-affordance-menu"]')).toBeNull()
+      }
+      finally {
+        mounted.unmount()
+      }
+    },
+  )
+
+  test.each(['markdown', 'pdf'] as const)(
+    'keeps the input surface recoverable when an imported %s entry is removed before activation',
+    async entryType => {
+      const entry = entryType === 'markdown'
+        ? createMarkdownEntry('removed-imported-markdown', 'Removed imported Markdown')
+        : createPdfEntry('removed-imported-pdf', 'Removed imported PDF')
+      const appErrors: unknown[] = []
+
+      if (entryType === 'markdown') {
+        libraryStoreMocks.addMarkdownDocument.mockResolvedValue(entry)
+      }
+      else {
+        libraryStoreMocks.addPdfDocument.mockResolvedValue(entry)
+      }
+      libraryStoreMocks.markOpened.mockResolvedValueOnce(null)
+      libraryStoreMocks.listEntries.mockResolvedValue([])
+      libraryStoreMocks.close.mockResolvedValue(undefined)
+
+      const mounted = mountApp(error => appErrors.push(error))
+
+      try {
+        if (entryType === 'markdown') {
+          dispatchPaste(mounted.host, '# Removed imported Markdown')
+        }
+        else {
+          await dispatchFile(mounted.host, new File([Uint8Array.of(1)], 'Removed imported PDF.pdf', {
+            type: 'application/pdf',
+          }))
+        }
+
+        await vi.waitFor(() => expect(libraryStoreMocks.markOpened).toHaveBeenCalledOnce())
+        await vi.waitFor(() => expect(
+          mounted.host.querySelector('[data-testid="floating-affordance-menu"] [role="status"]')?.textContent,
+        ).toContain('已经不在文库中'))
+
+        expect(readerTitle(mounted.host)).toBe('miru sample')
+        expect(mounted.host.querySelector('[data-testid="url-import-conflict"]')).toBeNull()
+        expect(appErrors).toEqual([])
+      }
+      finally {
+        mounted.unmount()
+      }
+    },
+  )
 
   test('keeps a later library selection active when an earlier paste finishes last', async () => {
     const earlierEntry = createMarkdownEntry('earlier-paste', 'Earlier Paste')
@@ -2550,11 +3081,14 @@ async function withLibraryStore(
   }
 }
 
-function mountApp() {
+function mountApp(onError?: (error: unknown) => void) {
   const host = document.createElement('div')
   document.body.append(host)
   const app = createApp(App)
   let isMounted = true
+  if (onError) {
+    app.config.errorHandler = error => onError(error)
+  }
   app.mount(host)
 
   return {
