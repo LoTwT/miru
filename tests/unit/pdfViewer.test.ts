@@ -6,10 +6,15 @@ import type { LibraryEntry } from '@/features/library/types'
 
 const pdfJsMocks = vi.hoisted(() => ({
   getDocument: vi.fn(),
+  setWorkerSrc: vi.fn(),
 }))
 
 vi.mock('pdfjs-dist', () => ({
-  GlobalWorkerOptions: { workerSrc: '' },
+  GlobalWorkerOptions: {
+    set workerSrc(value: string) {
+      pdfJsMocks.setWorkerSrc(value)
+    },
+  },
   TextLayer: class {},
   getDocument: pdfJsMocks.getDocument,
   setLayerDimensions: vi.fn(),
@@ -22,9 +27,60 @@ vi.mock('pdfjs-dist/build/pdf.worker.mjs?url', () => ({
 describe('PdfViewer loading lifecycle', () => {
   afterEach(() => {
     pdfJsMocks.getDocument.mockReset()
+    pdfJsMocks.setWorkerSrc.mockReset()
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
     Reflect.deleteProperty(HTMLElement.prototype, 'scrollTo')
+  })
+
+  test('offers a page reload when the PDF runtime resources fail to initialize', async () => {
+    pdfJsMocks.setWorkerSrc.mockImplementationOnce(() => {
+      throw new Error('runtime chunk failed')
+    })
+    stubPdfViewerRuntime()
+    const viewer = mountPdfViewer(
+      new Blob([Uint8Array.of(2)], { type: 'application/pdf' }),
+      createPdfEntry('resource-failure', 'Resource failure'),
+    )
+
+    try {
+      await vi.waitFor(() => {
+        expect(viewer.host.querySelector('[role="alert"]')?.textContent)
+          .toContain('PDF 阅读器资源暂时无法加载')
+      })
+
+      expect(viewer.host.textContent).toContain('重新加载页面')
+      expect(viewer.host.textContent).not.toContain('这个 PDF 打不开')
+      expect(pdfJsMocks.getDocument).not.toHaveBeenCalled()
+    }
+    finally {
+      viewer.unmount()
+    }
+  })
+
+  test('offers a page reload when the PDF worker resource fails to initialize', async () => {
+    pdfJsMocks.getDocument.mockImplementation(() => ({
+      destroy: vi.fn().mockResolvedValue(undefined),
+      promise: Promise.reject(new Error('Setting up fake worker failed: Failed to fetch dynamically imported module')),
+    }))
+    stubPdfViewerRuntime()
+    const viewer = mountPdfViewer(
+      new Blob([Uint8Array.of(2)], { type: 'application/pdf' }),
+      createPdfEntry('worker-failure', 'Worker failure'),
+    )
+
+    try {
+      await vi.waitFor(() => {
+        expect(viewer.host.querySelector('[role="alert"]')?.textContent)
+          .toContain('PDF 阅读器资源暂时无法加载')
+      })
+
+      expect(viewer.host.textContent).toContain('重新加载页面')
+      expect(viewer.host.textContent).not.toContain('这个 PDF 打不开')
+    }
+    finally {
+      viewer.unmount()
+    }
   })
 
   test('keeps the latest PDF visible when an earlier blob read finishes later', async () => {
@@ -124,6 +180,38 @@ describe('PdfViewer loading lifecycle', () => {
     }
     finally {
       viewer.unmount()
+    }
+  })
+
+  test('offers a page reload when the previous PDF render cannot be cleaned up', async () => {
+    const cleanupError = new Error('render cleanup failed')
+    const render = createDeferred<void>()
+    const initialBlob = new Blob([Uint8Array.of(2)], { type: 'application/pdf' })
+    const nextBlob = new Blob([Uint8Array.of(3)], { type: 'application/pdf' })
+    pdfJsMocks.getDocument.mockReturnValueOnce(createPdfLoadingTask(2, () => {
+      throw cleanupError
+    }, render.promise))
+    stubPdfViewerRuntime()
+    const viewer = mountPdfViewer(initialBlob, createPdfEntry('cleanup-a', 'Cleanup A'))
+
+    try {
+      await vi.waitFor(() => expect(viewer.host.textContent).toContain('1 / 2'))
+
+      viewer.entry.value = createPdfEntry('cleanup-b', 'Cleanup B')
+      viewer.blob.value = nextBlob
+      await nextTick()
+      await vi.waitFor(() => {
+        expect(viewer.host.querySelector('[role="alert"]')?.textContent)
+          .toContain('PDF 阅读器资源暂时无法加载')
+      })
+
+      expect(viewer.host.textContent).toContain('重新加载页面')
+      expect(viewer.host.textContent).not.toContain('这个 PDF 打不开')
+      expect(pdfJsMocks.getDocument).toHaveBeenCalledOnce()
+    }
+    finally {
+      viewer.unmount()
+      render.resolve(undefined)
     }
   })
 
@@ -278,8 +366,12 @@ function createPdfEntry(id: string, title: string): LibraryEntry {
   }
 }
 
-function createPdfLoadingTask(numPages: number) {
-  const page = createPdfPage()
+function createPdfLoadingTask(
+  numPages: number,
+  cancelRender: () => void = () => {},
+  renderPromise: Promise<void> = Promise.resolve(),
+) {
+  const page = createPdfPage(cancelRender, renderPromise)
   const loadingTask = {
     destroy: vi.fn().mockResolvedValue(undefined),
     promise: Promise.resolve<unknown>(undefined),
@@ -293,10 +385,13 @@ function createPdfLoadingTask(numPages: number) {
   return loadingTask
 }
 
-function createPdfPage() {
+function createPdfPage(
+  cancelRender: () => void = () => {},
+  renderPromise: Promise<void> = Promise.resolve(),
+) {
   const renderTask = {
-    cancel: vi.fn(),
-    promise: Promise.resolve(),
+    cancel: vi.fn(cancelRender),
+    promise: renderPromise,
   }
   return {
     getViewport: ({ scale }: { scale: number }) => ({

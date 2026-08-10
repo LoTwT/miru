@@ -34,12 +34,35 @@ type AppMode = 'reader' | 'library' | 'pdf'
 type CommandSurfaceId = 'actions' | 'outline' | 'settings'
 
 const libraryRefreshErrorMessage = '文库暂时无法刷新。已保留当前列表，请稍后重试。'
+const pdfViewerUnavailableMessage = 'PDF 已保存在文库，但阅读器资源暂时无法加载。请重新加载页面后从文库打开。'
+const pdfRuntimeUnavailableMessage = 'PDF 阅读器资源暂时无法加载。请重新加载页面后从文库打开。'
+const importedPdfRuntimeUnavailableMessage = 'PDF 已加入文库，但阅读器资源暂时无法加载。请重新加载页面后从文库打开。'
+
+type PdfDocumentLoadOutcome = 'document-error' | 'ready' | 'resource-error' | 'stale'
+
+interface MountedPdfViewer {
+  loadCompletion: Promise<PdfDocumentLoadOutcome>
+  status: 'mounted'
+}
+
+interface PdfLoadMonitorOptions {
+  metadataPersisted: boolean
+  pendingStatus?: string
+  readyStatus?: string
+  resourceMessage?: string
+}
+
+type PdfViewerMountResult =
+  | MountedPdfViewer
+  | { status: 'stale' }
+  | { status: 'viewer-unavailable' }
 
 interface PdfViewerHandle {
   clearSearch: (options?: { emitState?: boolean }) => void
   focus: () => void
   goToPage: (page: number) => void
   goToSearchMatch: (delta: number) => void
+  waitForLoad: () => Promise<PdfDocumentLoadOutcome>
 }
 
 interface ActivePdfDocument {
@@ -58,8 +81,9 @@ interface OpenLibraryEntryOptions {
 }
 
 type OpenLibraryEntryResult =
-  | { metadataPersisted: boolean, status: 'opened' }
-  | { status: 'missing' | 'read-failed' | 'stale' }
+  | { documentType: 'markdown', metadataPersisted: boolean, status: 'opened' }
+  | { documentType: 'pdf', loadCompletion: Promise<PdfDocumentLoadOutcome>, metadataPersisted: boolean, status: 'opened' }
+  | { status: 'missing' | 'read-failed' | 'stale' | 'viewer-unavailable' }
 
 interface MarkLibraryEntryOpenedResult {
   entry: LibraryEntry | null
@@ -403,9 +427,33 @@ async function returnToActiveDocument(): Promise<void> {
 
   const pdfDocument = activePdfDocument.value
   if (pdfDocument) {
-    activatePdfDocument(pdfDocument)
+    const preparation = await preparePdfViewer(operation)
+    if (preparation === 'stale') {
+      return
+    }
+    if (preparation === 'unavailable') {
+      libraryStatus.value = pdfViewerUnavailableMessage
+      return
+    }
+    const currentPdfDocument = activePdfDocument.value
+    if (!currentPdfDocument || currentPdfDocument.entry.id !== pdfDocument.entry.id) {
+      await showReader(operation)
+      return
+    }
+
+    activatePdfDocument(currentPdfDocument)
     appMode.value = 'pdf'
-    await focusPdfViewerWhenReady(operation)
+    const viewer = await focusPdfViewerWhenReady(operation)
+    if (viewer.status === 'viewer-unavailable' && operation.isCurrent()) {
+      appMode.value = 'library'
+      libraryStatus.value = pdfViewerUnavailableMessage
+      focusLibraryView()
+    }
+    else if (viewer.status === 'mounted') {
+      monitorPdfLoadCompletion(viewer.loadCompletion, pdfDocument.entry.id, operation, {
+        metadataPersisted: true,
+      })
+    }
     return
   }
 
@@ -1183,13 +1231,38 @@ async function loadIncomingPdf(file: File, operation: DocumentInputOperation): P
       return
     }
 
+    if (activationResult.status === 'viewer-unavailable') {
+      libraryStatus.value = pdfViewerUnavailableMessage
+      inputMenuStatus.value = pdfViewerUnavailableMessage
+      liveStatus.value = pdfViewerUnavailableMessage
+      openSurface('actions')
+      return
+    }
+
     if (activationResult.status !== 'opened') {
       return
     }
 
-    liveStatus.value = activationResult.metadataPersisted
+    const pendingStatus = activationResult.metadataPersisted
+      ? 'PDF 已保存到文库，正在打开。'
+      : 'PDF 已保存到文库，正在打开；最近打开时间暂时无法更新。'
+    const readyStatus = activationResult.metadataPersisted
       ? 'PDF 已加入文库'
       : 'PDF 已加入文库，但最近打开时间暂时无法更新。'
+    liveStatus.value = pendingStatus
+    if (activationResult.documentType === 'pdf') {
+      monitorPdfLoadCompletion(
+        activationResult.loadCompletion,
+        entry.id,
+        operation,
+        {
+          metadataPersisted: activationResult.metadataPersisted,
+          pendingStatus,
+          readyStatus,
+          resourceMessage: importedPdfRuntimeUnavailableMessage,
+        },
+      )
+    }
   }
   catch (reason) {
     if (!operation.isCurrent()) {
@@ -1251,7 +1324,7 @@ async function activateNewMarkdownEntry(
 
   await onDocumentLoaded(documentState.source, operation)
   return operation.isCurrent()
-    ? { metadataPersisted: markResult.metadataPersisted, status: 'opened' }
+    ? { documentType: 'markdown', metadataPersisted: markResult.metadataPersisted, status: 'opened' }
     : { status: 'stale' }
 }
 
@@ -1262,6 +1335,15 @@ async function activateNewPdfEntry(
 ): Promise<OpenLibraryEntryResult> {
   if (!operation.isCurrent()) {
     return { status: 'stale' }
+  }
+
+  const preparation = await preparePdfViewer(operation)
+  if (preparation === 'stale') {
+    return { status: 'stale' }
+  }
+  if (preparation === 'unavailable') {
+    await refreshLibraryEntries(operation)
+    return operation.isCurrent() ? { status: 'viewer-unavailable' } : { status: 'stale' }
   }
 
   const markResult = await markLibraryEntryOpened(entry, operation)
@@ -1296,10 +1378,20 @@ async function activateNewPdfEntry(
     return { status: 'stale' }
   }
 
-  await focusPdfViewerWhenReady(operation)
-  return operation.isCurrent()
-    ? { metadataPersisted: markResult.metadataPersisted, status: 'opened' }
-    : { status: 'stale' }
+  const viewer = await focusPdfViewerWhenReady(operation)
+  if (!operation.isCurrent() || viewer.status === 'stale') {
+    return { status: 'stale' }
+  }
+  if (viewer.status === 'viewer-unavailable') {
+    return { status: 'viewer-unavailable' }
+  }
+
+  return {
+    documentType: 'pdf',
+    loadCompletion: viewer.loadCompletion,
+    metadataPersisted: markResult.metadataPersisted,
+    status: 'opened',
+  }
 }
 
 async function openLibraryEntry(
@@ -1340,6 +1432,15 @@ async function openLibraryEntry(
       return operation.isCurrent() ? { status: 'missing' } : { status: 'stale' }
     }
 
+    const preparation = await preparePdfViewer(operation)
+    if (preparation === 'stale') {
+      return { status: 'stale' }
+    }
+    if (preparation === 'unavailable') {
+      libraryStatus.value = pdfViewerUnavailableMessage
+      return { status: 'viewer-unavailable' }
+    }
+
     const markResult = await markLibraryEntryOpened(opened.entry, operation)
     if (!markResult || !operation.isCurrent()) {
       return { status: 'stale' }
@@ -1366,18 +1467,30 @@ async function openLibraryEntry(
     })
     appMode.value = 'pdf'
 
+    const viewer = await focusPdfViewerWhenReady(operation)
+    if (!operation.isCurrent() || viewer.status === 'stale') {
+      return { status: 'stale' }
+    }
+    if (viewer.status === 'viewer-unavailable') {
+      liveStatus.value = pdfViewerUnavailableMessage
+      return { status: 'viewer-unavailable' }
+    }
+
     if (!markResult.metadataPersisted) {
       liveStatus.value = '文档已打开，但最近打开时间暂时无法更新。'
     }
-
-    await focusPdfViewerWhenReady(operation)
-    if (!operation.isCurrent()) {
-      return { status: 'stale' }
-    }
+    monitorPdfLoadCompletion(viewer.loadCompletion, markedEntry.id, operation, {
+      metadataPersisted: markResult.metadataPersisted,
+    })
 
     await refreshLibraryEntries(operation)
     return operation.isCurrent()
-      ? { metadataPersisted: markResult.metadataPersisted, status: 'opened' }
+      ? {
+          documentType: 'pdf',
+          loadCompletion: viewer.loadCompletion,
+          metadataPersisted: markResult.metadataPersisted,
+          status: 'opened',
+        }
       : { status: 'stale' }
   }
 
@@ -1444,7 +1557,7 @@ async function openLibraryEntry(
   restorePendingPositionIfReady()
   await refreshLibraryEntries(operation)
   return operation.isCurrent()
-    ? { metadataPersisted: markResult.metadataPersisted, status: 'opened' }
+    ? { documentType: 'markdown', metadataPersisted: markResult.metadataPersisted, status: 'opened' }
     : { status: 'stale' }
 }
 
@@ -1859,9 +1972,11 @@ function focusLibraryView(): void {
   })
 }
 
-async function focusPdfViewerWhenReady(operation?: DocumentInputOperation): Promise<void> {
+async function preparePdfViewer(
+  operation?: DocumentInputOperation,
+): Promise<'ready' | 'stale' | 'unavailable'> {
   if (operation && !operation.isCurrent()) {
-    return
+    return 'stale'
   }
 
   try {
@@ -1869,29 +1984,82 @@ async function focusPdfViewerWhenReady(operation?: DocumentInputOperation): Prom
   }
   catch {
     if (operation && !operation.isCurrent()) {
-      return
+      return 'stale'
     }
 
-    liveStatus.value = 'PDF 阅读器暂时无法加载，请重试。'
-    return
+    return 'unavailable'
+  }
+
+  return operation && !operation.isCurrent() ? 'stale' : 'ready'
+}
+
+async function focusPdfViewerWhenReady(
+  operation?: DocumentInputOperation,
+): Promise<PdfViewerMountResult> {
+  const preparation = await preparePdfViewer(operation)
+  if (preparation === 'stale') {
+    return { status: 'stale' }
+  }
+  if (preparation === 'unavailable') {
+    return { status: 'viewer-unavailable' }
   }
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
     await nextTick()
     if (operation && !operation.isCurrent()) {
-      return
+      return { status: 'stale' }
     }
 
     if (pdfViewerRef.value) {
       pdfViewerRef.value.focus()
-      return
+      return operation && !operation.isCurrent()
+        ? { status: 'stale' }
+        : { loadCompletion: pdfViewerRef.value.waitForLoad(), status: 'mounted' }
     }
 
     await new Promise<void>(resolve => window.requestAnimationFrame(() => resolve()))
     if (operation && !operation.isCurrent()) {
-      return
+      return { status: 'stale' }
     }
   }
+
+  return { status: 'viewer-unavailable' }
+}
+
+function monitorPdfLoadCompletion(
+  loadCompletion: Promise<PdfDocumentLoadOutcome>,
+  documentId: string,
+  operation: DocumentInputOperation,
+  options: PdfLoadMonitorOptions,
+): void {
+  const announceResourceFailure = () => {
+    if (!operation.isCurrent() || activePdfDocument.value?.entry.id !== documentId) {
+      return
+    }
+
+    const message = options.resourceMessage ?? pdfRuntimeUnavailableMessage
+    liveStatus.value = options.metadataPersisted
+      ? message
+      : `${message} 最近打开时间也暂时无法更新。`
+  }
+
+  void loadCompletion.then((outcome) => {
+    if (outcome === 'resource-error') {
+      announceResourceFailure()
+      return
+    }
+
+    if (
+      (outcome === 'ready' || outcome === 'document-error')
+      && options.pendingStatus
+      && options.readyStatus
+      && operation.isCurrent()
+      && activePdfDocument.value?.entry.id === documentId
+      && liveStatus.value === options.pendingStatus
+    ) {
+      liveStatus.value = options.readyStatus
+    }
+  }).catch(announceResourceFailure)
 }
 </script>
 
