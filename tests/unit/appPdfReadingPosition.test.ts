@@ -2836,6 +2836,10 @@ describe('App document activation and PDF reading position ownership', () => {
       click(mounted.host, '[data-testid="library-open-button"]')
       await vi.waitFor(() => expect(mounted.host.querySelector('[data-testid="library-view"]')).not.toBeNull())
       click(mounted.host, '[data-testid="library-open-button"]')
+      staleSave.resolve({
+        ...stalePosition,
+        updatedAt: '2026-08-09T00:00:03.000Z',
+      })
       await vi.waitFor(() => {
         expect(mounted.host.textContent).toContain(entry.title)
         expect(blobRead).toHaveBeenCalledTimes(2)
@@ -2849,12 +2853,6 @@ describe('App document activation and PDF reading position ownership', () => {
           target: { pageNumber: 3 },
         }),
       ])
-
-      staleSave.resolve({
-        ...stalePosition,
-        updatedAt: '2026-08-09T00:00:03.000Z',
-      })
-      await flushSettledWork()
     }
     finally {
       mounted.unmount()

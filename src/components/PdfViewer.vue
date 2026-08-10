@@ -22,6 +22,8 @@ import type { PDFDocumentLoadingTask, PDFDocumentProxy, PDFPageProxy, RenderTask
 
 type PdfScaleMode = PdfReadingLocation['scaleMode']
 type PdfViewMode = PdfReadingLocation['viewMode']
+type PdfDocumentLoadOutcome = 'document-error' | 'ready' | 'resource-error' | 'stale'
+type PdfLoadState = Exclude<PdfDocumentLoadOutcome, 'stale'> | 'loading'
 type PdfRenderState = 'idle' | 'rendering' | 'ready' | 'error'
 type PdfPageViewport = ReturnType<PDFPageProxy['getViewport']>
 type PdfTextContent = Awaited<ReturnType<PDFPageProxy['getTextContent']>>
@@ -86,7 +88,7 @@ const viewMode = shallowRef<PdfViewMode>(props.position?.viewMode ?? 'paged')
 const scaleMode = shallowRef<PdfScaleMode>(props.position?.scaleMode ?? 'fit-width')
 const customScale = shallowRef(props.position?.scale ?? 1)
 const renderedScale = shallowRef(1)
-const loadState = shallowRef<'loading' | 'ready' | 'error'>('loading')
+const loadState = shallowRef<PdfLoadState>('loading')
 const renderState = shallowRef<'idle' | 'rendering' | 'error'>('idle')
 const errorMessage = shallowRef('')
 const pageSlots = shallowRef<PdfPageSlot[]>([])
@@ -133,6 +135,7 @@ const pdfLoadingTaskDestructions = new WeakMap<PDFDocumentLoadingTask, Promise<v
 let pagedTextLayer: PdfTextLayer | null = null
 let pendingPagedTextLayer: PdfTextLayer | null = null
 let searchSequence = 0
+let activeDocumentLoad: Promise<PdfDocumentLoadOutcome> | null = null
 
 const isReady = computed(() => loadState.value === 'ready' && totalPages.value > 0)
 const canGoToPreviousPage = computed(() => isReady.value && pageNumber.value > 1)
@@ -173,30 +176,60 @@ function focus(): void {
   rootRef.value?.focus()
 }
 
-defineExpose({ clearSearch, focus, goToPage, goToSearchMatch })
+function startPdfDocumentLoad(): Promise<PdfDocumentLoadOutcome> {
+  const load = loadPdfDocument()
+  activeDocumentLoad = load
+  return load
+}
 
-async function loadPdfDocument(): Promise<void> {
+function waitForLoad(): Promise<PdfDocumentLoadOutcome> {
+  return activeDocumentLoad ?? Promise.resolve('stale')
+}
+
+defineExpose({ clearSearch, focus, goToPage, goToSearchMatch, waitForLoad })
+
+async function loadPdfDocument(): Promise<PdfDocumentLoadOutcome> {
   const generation = ++documentLoadGeneration
   const blob = props.blob
   loadState.value = 'loading'
   renderState.value = 'idle'
   errorMessage.value = ''
   totalPages.value = 0
-  await cleanupPdfDocument()
+  try {
+    await cleanupPdfDocument()
+  }
+  catch {
+    if (!isDocumentLoadCurrent(generation)) {
+      return 'stale'
+    }
+
+    return setPdfResourceLoadError()
+  }
   if (!isDocumentLoadCurrent(generation)) {
-    return
+    return 'stale'
+  }
+
+  let pdfjs: Awaited<ReturnType<typeof loadPdfJs>>
+  try {
+    pdfjs = await loadPdfJs()
+  }
+  catch {
+    if (!isDocumentLoadCurrent(generation)) {
+      return 'stale'
+    }
+
+    return setPdfResourceLoadError()
   }
 
   let task: PDFDocumentLoadingTask | null = null
   try {
-    const pdfjs = await loadPdfJs()
     if (!isDocumentLoadCurrent(generation)) {
-      return
+      return 'stale'
     }
 
     const data = new Uint8Array(await blob.arrayBuffer())
     if (!isDocumentLoadCurrent(generation)) {
-      return
+      return 'stale'
     }
 
     task = pdfjs.getDocument({ data })
@@ -204,7 +237,7 @@ async function loadPdfDocument(): Promise<void> {
     const document = await task.promise
     if (!isDocumentLoadCurrent(generation) || loadingTask !== task) {
       await destroyPdfLoadingTask(task)
-      return
+      return 'stale'
     }
 
     loadingTask = null
@@ -214,22 +247,23 @@ async function loadPdfDocument(): Promise<void> {
     loadState.value = 'ready'
     await nextTick()
     if (!isDocumentLoadCurrent(generation) || pdfDocument !== document) {
-      return
+      return 'stale'
     }
 
     await renderActiveView({ anchorPage: pageNumber.value })
     if (!isDocumentLoadCurrent(generation) || pdfDocument !== document) {
-      return
+      return 'stale'
     }
 
     if (props.searchQuery.trim()) {
       await runPdfSearch(props.searchQuery)
     }
     if (!isDocumentLoadCurrent(generation) || pdfDocument !== document) {
-      return
+      return 'stale'
     }
 
     emitPosition()
+    return 'ready'
   }
   catch (reason) {
     if (task && loadingTask === task) {
@@ -239,17 +273,31 @@ async function loadPdfDocument(): Promise<void> {
       await destroyPdfLoadingTask(task)
     }
     if (!isDocumentLoadCurrent(generation)) {
-      return
+      return 'stale'
     }
 
     cancelProgrammaticScrollNavigation()
     if (isPdfCancellation(reason)) {
-      return
+      return 'stale'
+    }
+    if (isPdfResourceLoadFailure(reason)) {
+      return setPdfResourceLoadError()
     }
 
-    loadState.value = 'error'
+    loadState.value = 'document-error'
     errorMessage.value = '这个 PDF 打不开。文件可能已损坏, 或浏览器无法解析它。'
+    return 'document-error'
   }
+}
+
+function setPdfResourceLoadError(): 'resource-error' {
+  loadState.value = 'resource-error'
+  errorMessage.value = 'PDF 阅读器资源暂时无法加载。请重新加载页面后从文库重新打开。'
+  return 'resource-error'
+}
+
+function isPdfResourceLoadFailure(reason: unknown): boolean {
+  return reason instanceof Error && reason.message.includes('Setting up fake worker failed')
 }
 
 async function loadPdfJs() {
@@ -1289,7 +1337,11 @@ function handlePdfKeydown(event: KeyboardEvent): void {
 }
 
 function retry(): void {
-  void loadPdfDocument()
+  void startPdfDocumentLoad()
+}
+
+function reloadPage(): void {
+  window.location.reload()
 }
 
 function setViewMode(nextMode: PdfViewMode): void {
@@ -2118,7 +2170,7 @@ watch(() => props.blob, () => {
   viewMode.value = props.position?.viewMode ?? 'paged'
   scaleMode.value = props.position?.scaleMode ?? 'fit-width'
   customScale.value = props.position?.scale ?? 1
-  void loadPdfDocument()
+  void startPdfDocumentLoad()
 })
 
 watch(() => props.searchQuery, () => {
@@ -2169,7 +2221,7 @@ onMounted(() => {
     resizeObserver.observe(pageStageRef.value)
   }
 
-  void loadPdfDocument()
+  void startPdfDocumentLoad()
 })
 
 onUnmounted(() => {
@@ -2179,7 +2231,7 @@ onUnmounted(() => {
   }
   cancelProgrammaticScrollNavigation()
   resizeObserver?.disconnect()
-  void cleanupPdfDocument()
+  void cleanupPdfDocument().catch(() => undefined)
 })
 </script>
 
@@ -2265,10 +2317,17 @@ onUnmounted(() => {
           正在打开 PDF…
         </div>
 
-        <div v-else-if="loadState === 'error'" class="pdf-viewer__state pdf-viewer__state--error" role="alert">
+        <div
+          v-else-if="loadState === 'document-error' || loadState === 'resource-error'"
+          class="pdf-viewer__state pdf-viewer__state--error"
+          role="alert"
+        >
           <p>{{ errorMessage }}</p>
-          <button type="button" @click="retry">
+          <button v-if="loadState === 'document-error'" type="button" @click="retry">
             再试一次
+          </button>
+          <button v-else type="button" @click="reloadPage">
+            重新加载页面
           </button>
         </div>
 

@@ -502,6 +502,161 @@ test('supports continuous scroll mode for local PDFs with bounded rendered pages
   await expect(page.getByText(expectedPage)).toBeVisible()
 })
 
+test.describe('PDF resource load recovery', () => {
+  test.use({ serviceWorkers: 'block' })
+
+test('keeps an imported PDF recoverable when the PDF viewer chunk fails to load', async ({ page }) => {
+  const viewerChunkPattern = /\/assets\/PdfViewer-[^/?]+\.js(?:\?.*)?$/
+  let viewerChunkRequests = 0
+  await page.route(viewerChunkPattern, async (route) => {
+    viewerChunkRequests += 1
+    await route.abort('failed')
+  })
+  await page.goto('/')
+
+  await openFileThroughFloatingMenu(page, {
+    name: 'Viewer resource recovery.pdf',
+    mimeType: 'application/pdf',
+    buffer: createSimplePdfBuffer('Viewer resource recovery'),
+  })
+
+  const inputMenu = page.getByTestId('floating-affordance-menu')
+  await expect(inputMenu).toBeVisible()
+  await expect(inputMenu.getByRole('status')).toContainText('PDF 已保存在文库')
+  await expect(inputMenu.getByRole('status')).toContainText('重新加载页面')
+  await expect(page.getByTestId('pdf-viewer')).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'miru' })).toBeVisible()
+  await expect(page.locator('.app-shell__live-status')).not.toContainText('PDF 已加入文库')
+  expect(viewerChunkRequests).toBeGreaterThan(0)
+
+  await inputMenu.getByRole('button', { name: '关闭文档操作' }).click()
+  await page.getByTestId('library-open-button').click()
+  const entry = page.getByTestId('library-entry').filter({ hasText: 'Viewer resource recovery' })
+  await expect(entry).toBeVisible()
+  await openBookshelfEntry(entry, 'Viewer resource recovery')
+
+  const libraryView = page.getByTestId('library-view')
+  await expect(libraryView).toBeVisible()
+  await expect(libraryView.getByRole('status')).toContainText('PDF 已保存在文库')
+  await expect(libraryView.getByRole('status')).toContainText('重新加载页面')
+
+  await page.unroute(viewerChunkPattern)
+  const pdfRuntimePattern = /\/assets\/pdf-[^/?]+\.js(?:\?.*)?$/
+  let shouldFailRuntimeLoad = true
+  let pdfRuntimeRequests = 0
+  await page.route(pdfRuntimePattern, async (route) => {
+    pdfRuntimeRequests += 1
+    if (shouldFailRuntimeLoad) {
+      await route.abort('failed')
+      return
+    }
+
+    await route.continue()
+  })
+  await page.reload()
+  await page.getByTestId('library-open-button').click()
+  const recoveredEntry = page.getByTestId('library-entry').filter({ hasText: 'Viewer resource recovery' })
+  await openBookshelfEntry(recoveredEntry, 'Viewer resource recovery')
+
+  const viewer = page.getByTestId('pdf-viewer')
+  await expect(viewer.getByRole('alert')).toContainText('PDF 阅读器资源暂时无法加载')
+  await expect(page.locator('.app-shell__live-status')).toContainText('PDF 阅读器资源暂时无法加载')
+  await expect(page.locator('.app-shell__live-status')).not.toContainText('PDF 已加入文库')
+  expect(pdfRuntimeRequests).toBeGreaterThan(0)
+
+  shouldFailRuntimeLoad = false
+  await Promise.all([
+    page.waitForEvent('load'),
+    viewer.getByRole('button', { name: '重新加载页面' }).click(),
+  ])
+  await page.getByTestId('library-open-button').click()
+  const reloadRecoveredEntry = page.getByTestId('library-entry').filter({ hasText: 'Viewer resource recovery' })
+  await openBookshelfEntry(reloadRecoveredEntry, 'Viewer resource recovery')
+  await expect(page.getByTestId('pdf-viewer-canvas')).toBeVisible()
+})
+
+test('reloads the page after the pdf.js runtime chunk fails to load', async ({ page }) => {
+  const pdfRuntimePattern = /\/assets\/pdf-[^/?]+\.js(?:\?.*)?$/
+  let pdfRuntimeRequests = 0
+  await page.route(pdfRuntimePattern, async (route) => {
+    pdfRuntimeRequests += 1
+    if (pdfRuntimeRequests === 1) {
+      await route.abort('failed')
+      return
+    }
+
+    await route.continue()
+  })
+  await page.goto('/')
+
+  await openFileThroughFloatingMenu(page, {
+    name: 'Runtime resource recovery.pdf',
+    mimeType: 'application/pdf',
+    buffer: createSimplePdfBuffer('Runtime resource recovery'),
+  })
+
+  const viewer = page.getByTestId('pdf-viewer')
+  await expect(viewer).toBeVisible()
+  await expect(viewer.getByRole('alert')).toContainText('PDF 阅读器资源暂时无法加载')
+  await expect(viewer.getByRole('alert')).toContainText('重新加载页面')
+  await expect(viewer.getByText('这个 PDF 打不开')).toHaveCount(0)
+  await expect(viewer.getByRole('button', { name: '再试一次' })).toHaveCount(0)
+  await expect(page.locator('.app-shell__live-status')).toContainText('PDF 已加入文库，但阅读器资源暂时无法加载')
+  await expect(viewer.getByRole('button', { name: '重新加载页面' })).toBeVisible()
+  expect(pdfRuntimeRequests).toBeGreaterThan(0)
+
+  await Promise.all([
+    page.waitForEvent('load'),
+    viewer.getByRole('button', { name: '重新加载页面' }).click(),
+  ])
+  await page.getByTestId('library-open-button').click()
+  const entry = page.getByTestId('library-entry').filter({ hasText: 'Runtime resource recovery' })
+  await openBookshelfEntry(entry, 'Runtime resource recovery')
+  await expect(page.getByTestId('pdf-viewer-canvas')).toBeVisible()
+})
+
+test('reloads the page after the PDF worker resource fails to load', async ({ page }) => {
+  const pdfWorkerPattern = /\/assets\/pdf\.worker-[^/?]+\.mjs(?:\?.*)?$/
+  let shouldFailWorkerLoad = true
+  let pdfWorkerRequests = 0
+  await page.route(pdfWorkerPattern, async (route) => {
+    pdfWorkerRequests += 1
+    if (shouldFailWorkerLoad) {
+      await route.abort('failed')
+      return
+    }
+
+    await route.continue()
+  })
+  await page.goto('/')
+
+  await openFileThroughFloatingMenu(page, {
+    name: 'Worker resource recovery.pdf',
+    mimeType: 'application/pdf',
+    buffer: createSimplePdfBuffer('Worker resource recovery'),
+  })
+
+  const viewer = page.getByTestId('pdf-viewer')
+  await expect(viewer).toBeVisible()
+  await expect(viewer.getByRole('alert')).toContainText('PDF 阅读器资源暂时无法加载')
+  await expect(viewer.getByText('这个 PDF 打不开')).toHaveCount(0)
+  await expect(viewer.getByRole('button', { name: '重新加载页面' })).toBeVisible()
+  await expect(page.locator('.app-shell__live-status')).toContainText('PDF 已加入文库，但阅读器资源暂时无法加载')
+  expect(pdfWorkerRequests).toBeGreaterThan(0)
+
+  shouldFailWorkerLoad = false
+  await Promise.all([
+    page.waitForEvent('load'),
+    viewer.getByRole('button', { name: '重新加载页面' }).click(),
+  ])
+  await page.getByTestId('library-open-button').click()
+  const entry = page.getByTestId('library-entry').filter({ hasText: 'Worker resource recovery' })
+  await openBookshelfEntry(entry, 'Worker resource recovery')
+  await expect(page.getByTestId('pdf-viewer-canvas')).toBeVisible()
+})
+
+})
+
 test('reports local PDFs without searchable text instead of showing a silent zero result', async ({ page }) => {
   await page.goto('/')
 
