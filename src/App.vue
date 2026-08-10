@@ -55,7 +55,15 @@ interface OperationGuard extends DocumentInputOperation {
 
 interface OpenLibraryEntryOptions {
   operation?: OperationGuard
-  skipSave?: boolean
+}
+
+type OpenLibraryEntryResult =
+  | { metadataPersisted: boolean, status: 'opened' }
+  | { status: 'missing' | 'read-failed' | 'stale' }
+
+interface MarkLibraryEntryOpenedResult {
+  entry: LibraryEntry | null
+  metadataPersisted: boolean
 }
 
 const loadLibraryView = () => import('@/components/LibraryView.vue')
@@ -966,7 +974,14 @@ async function loadIncomingDocument(document: ReaderDocument, operation: Documen
       return
     }
 
-    await activateNewMarkdownEntry(entry, document.markdown, operation)
+    const activationResult = await activateNewMarkdownEntry(entry, document.markdown, operation)
+    if (activationResult.status === 'opened' && !activationResult.metadataPersisted) {
+      liveStatus.value = '文档已加入文库，但最近打开时间暂时无法更新。'
+    }
+    else if (activationResult.status === 'missing' && operation.isCurrent()) {
+      inputMenuStatus.value = '这篇文档已经不在文库中。'
+      openSurface('actions')
+    }
   }
   catch (reason) {
     if (!operation.isCurrent()) {
@@ -993,10 +1008,22 @@ async function openPendingUrlImport(): Promise<void> {
 
   const operation = beginDocumentActivation()
   pendingUrlImport.value = null
+  inputMenuStatus.value = ''
   closeSurface()
-  const opened = await openLibraryEntry(pending.entry, { operation })
-  if (opened) {
-    liveStatus.value = '已打开文库中的已有文档'
+  const openResult = await openLibraryEntry(pending.entry, { operation })
+  if (openResult.status === 'opened') {
+    liveStatus.value = openResult.metadataPersisted
+      ? '已打开文库中的已有文档'
+      : '已打开文库中的已有文档，但最近打开时间暂时无法更新。'
+  }
+  else if (openResult.status === 'read-failed' && operation.isCurrent()) {
+    pendingUrlImport.value = pending
+    inputMenuStatus.value = '暂时无法打开文库中的已有文档，请稍后重试。'
+    openSurface('actions')
+  }
+  else if (openResult.status === 'missing' && operation.isCurrent()) {
+    inputMenuStatus.value = '这篇文档已经不在文库中。'
+    openSurface('actions')
   }
 }
 
@@ -1008,6 +1035,7 @@ async function updatePendingUrlImport(): Promise<void> {
 
   const operation = beginDocumentActivation()
   pendingUrlImport.value = null
+  inputMenuStatus.value = ''
   const source = pending.document.librarySource ?? createFallbackLibrarySource(pending.document)
 
   if (source.kind !== 'url') {
@@ -1070,17 +1098,29 @@ async function updatePendingUrlImport(): Promise<void> {
       return
     }
 
-    const opened = await openLibraryEntry(updated, {
-      operation,
-      skipSave: contentChanged && activeLibraryEntryId.value === updated.id,
-    })
+    const openResult = contentChanged
+      ? await activateNewMarkdownEntry(updated, pending.document.markdown, operation)
+      : await openLibraryEntry(updated, { operation })
 
-    if (opened) {
-      liveStatus.value = !bookmarksPersisted
-        ? '内容已更新，但书签变更暂时无法保存到本机。'
-        : contentChanged
-          ? '已更新到最新, 阅读位置和书签已重置'
-          : '内容没有变化, 已打开已有文档'
+    if (openResult.status === 'opened') {
+      liveStatus.value = !bookmarksPersisted && !openResult.metadataPersisted
+        ? '内容已更新并打开，但书签和最近打开时间暂时无法保存到本机。'
+        : !bookmarksPersisted
+          ? '内容已更新，但书签变更暂时无法保存到本机。'
+          : !openResult.metadataPersisted
+            ? '文档已打开，但最近打开时间暂时无法更新。'
+            : contentChanged
+              ? '已更新到最新, 阅读位置和书签已重置'
+              : '内容没有变化, 已打开已有文档'
+    }
+    else if (openResult.status === 'read-failed' && operation.isCurrent()) {
+      pendingUrlImport.value = pending
+      inputMenuStatus.value = '文库中的已有文档暂时无法打开，请稍后重试。'
+      openSurface('actions')
+    }
+    else if (openResult.status === 'missing' && operation.isCurrent()) {
+      inputMenuStatus.value = '这篇文档已经不在文库中。'
+      openSurface('actions')
     }
   }
   catch (reason) {
@@ -1132,12 +1172,24 @@ async function loadIncomingPdf(file: File, operation: DocumentInputOperation): P
       return
     }
 
-    await activateNewPdfEntry(entry, pdfBlob, operation)
+    const activationResult = await activateNewPdfEntry(entry, pdfBlob, operation)
     if (!operation.isCurrent()) {
       return
     }
 
-    liveStatus.value = 'PDF 已加入文库'
+    if (activationResult.status === 'missing') {
+      inputMenuStatus.value = '这个 PDF 已经不在文库中。'
+      openSurface('actions')
+      return
+    }
+
+    if (activationResult.status !== 'opened') {
+      return
+    }
+
+    liveStatus.value = activationResult.metadataPersisted
+      ? 'PDF 已加入文库'
+      : 'PDF 已加入文库，但最近打开时间暂时无法更新。'
   }
   catch (reason) {
     if (!operation.isCurrent()) {
@@ -1161,19 +1213,26 @@ async function activateNewMarkdownEntry(
   entry: LibraryEntry,
   markdown: string,
   operation: DocumentInputOperation,
-): Promise<void> {
+): Promise<OpenLibraryEntryResult> {
   if (!operation.isCurrent()) {
-    return
+    return { status: 'stale' }
   }
 
-  const markedEntry = await markImportedLibraryEntryOpened(entry, operation)
-  if (!operation.isCurrent() || !markedEntry) {
-    return
+  const markResult = await markLibraryEntryOpened(entry, operation)
+  if (!markResult || !operation.isCurrent()) {
+    return { status: 'stale' }
+  }
+
+  const markedEntry = markResult.entry
+  if (!markedEntry) {
+    libraryStatus.value = '这篇文档已经不在文库中。'
+    await refreshLibraryEntries(operation)
+    return operation.isCurrent() ? { status: 'missing' } : { status: 'stale' }
   }
 
   await flushPendingActiveReadingPosition()
   if (!operation.isCurrent()) {
-    return
+    return { status: 'stale' }
   }
 
   activeLibraryEntryId.value = markedEntry.id
@@ -1187,29 +1246,39 @@ async function activateNewMarkdownEntry(
 
   await refreshLibraryEntries(operation)
   if (!operation.isCurrent()) {
-    return
+    return { status: 'stale' }
   }
 
   await onDocumentLoaded(documentState.source, operation)
+  return operation.isCurrent()
+    ? { metadataPersisted: markResult.metadataPersisted, status: 'opened' }
+    : { status: 'stale' }
 }
 
 async function activateNewPdfEntry(
   entry: LibraryEntry,
   blob: Blob,
   operation: DocumentInputOperation,
-): Promise<void> {
+): Promise<OpenLibraryEntryResult> {
   if (!operation.isCurrent()) {
-    return
+    return { status: 'stale' }
   }
 
-  const markedEntry = await markImportedLibraryEntryOpened(entry, operation)
-  if (!operation.isCurrent() || !markedEntry) {
-    return
+  const markResult = await markLibraryEntryOpened(entry, operation)
+  if (!markResult || !operation.isCurrent()) {
+    return { status: 'stale' }
+  }
+
+  const markedEntry = markResult.entry
+  if (!markedEntry) {
+    libraryStatus.value = '这个 PDF 已经不在文库中。'
+    await refreshLibraryEntries(operation)
+    return operation.isCurrent() ? { status: 'missing' } : { status: 'stale' }
   }
 
   await flushPendingActiveReadingPosition()
   if (!operation.isCurrent()) {
-    return
+    return { status: 'stale' }
   }
 
   activeLibraryEntryId.value = markedEntry.id
@@ -1224,54 +1293,68 @@ async function activateNewPdfEntry(
 
   await refreshLibraryEntries(operation)
   if (!operation.isCurrent()) {
-    return
+    return { status: 'stale' }
   }
 
   await focusPdfViewerWhenReady(operation)
+  return operation.isCurrent()
+    ? { metadataPersisted: markResult.metadataPersisted, status: 'opened' }
+    : { status: 'stale' }
 }
 
-async function openLibraryEntry(entry: LibraryEntry, options: OpenLibraryEntryOptions = {}): Promise<boolean> {
+async function openLibraryEntry(
+  entry: LibraryEntry,
+  options: OpenLibraryEntryOptions = {},
+): Promise<OpenLibraryEntryResult> {
   const operation = options.operation ?? beginDocumentActivation()
   if (!operation.isCurrent()) {
-    return false
+    return { status: 'stale' }
   }
 
   libraryStatus.value = ''
   closeFindBar({ restoreFocus: false })
 
   if (entry.type === 'pdf') {
-    if (!options.skipSave) {
-      await preserveActiveReadingPosition()
-      if (!operation.isCurrent()) {
-        return false
-      }
-    }
-    const opened = await libraryStore.openPdfDocument(entry.id, { markOpened: false })
-
+    await preserveActiveReadingPosition()
     if (!operation.isCurrent()) {
-      return false
+      return { status: 'stale' }
     }
+    const readResult = await readLibraryEntry(
+      () => libraryStore.openPdfDocument(entry.id, { markOpened: false }),
+      operation,
+      '暂时无法打开这个 PDF，请稍后重试。',
+    )
+
+    if (!readResult) {
+      return operation.isCurrent() ? { status: 'read-failed' } : { status: 'stale' }
+    }
+    if (!operation.isCurrent()) {
+      return { status: 'stale' }
+    }
+
+    const opened = readResult.value
 
     if (!opened) {
       libraryStatus.value = '这个 PDF 已经不在文库中。'
       await refreshLibraryEntries(operation)
-      return false
+      return operation.isCurrent() ? { status: 'missing' } : { status: 'stale' }
     }
 
-    const markedEntry = await markLibraryEntryOpened(opened.entry.id, operation)
-    if (!operation.isCurrent()) {
-      return false
+    const markResult = await markLibraryEntryOpened(opened.entry, operation)
+    if (!markResult || !operation.isCurrent()) {
+      return { status: 'stale' }
     }
 
+    const markedEntry = markResult.entry
     if (!markedEntry) {
       libraryStatus.value = '这个 PDF 已经不在文库中。'
       await refreshLibraryEntries(operation)
-      return false
+      return operation.isCurrent() ? { status: 'missing' } : { status: 'stale' }
     }
 
     await flushPendingActiveReadingPosition()
     if (!operation.isCurrent()) {
-      return false
+      return { status: 'stale' }
     }
 
     activeLibraryEntryId.value = markedEntry.id
@@ -1283,49 +1366,61 @@ async function openLibraryEntry(entry: LibraryEntry, options: OpenLibraryEntryOp
     })
     appMode.value = 'pdf'
 
+    if (!markResult.metadataPersisted) {
+      liveStatus.value = '文档已打开，但最近打开时间暂时无法更新。'
+    }
+
     await focusPdfViewerWhenReady(operation)
     if (!operation.isCurrent()) {
-      return false
+      return { status: 'stale' }
     }
 
     await refreshLibraryEntries(operation)
     return operation.isCurrent()
+      ? { metadataPersisted: markResult.metadataPersisted, status: 'opened' }
+      : { status: 'stale' }
   }
 
-  if (!options.skipSave) {
-    await preserveActiveReadingPosition()
-    if (!operation.isCurrent()) {
-      return false
-    }
-  }
-  const opened = await libraryStore.openMarkdownDocument(entry.id, { markOpened: false })
-
+  await preserveActiveReadingPosition()
   if (!operation.isCurrent()) {
-    return false
+    return { status: 'stale' }
   }
+  const readResult = await readLibraryEntry(
+    () => libraryStore.openMarkdownDocument(entry.id, { markOpened: false }),
+    operation,
+    '暂时无法打开这篇文档，请稍后重试。',
+  )
+
+  if (!readResult) {
+    return operation.isCurrent() ? { status: 'read-failed' } : { status: 'stale' }
+  }
+  if (!operation.isCurrent()) {
+    return { status: 'stale' }
+  }
+
+  const opened = readResult.value
 
   if (!opened) {
     libraryStatus.value = '这篇文档已经不在文库中。'
     await refreshLibraryEntries(operation)
-    return false
+    return operation.isCurrent() ? { status: 'missing' } : { status: 'stale' }
   }
 
-  const markedEntry = await markLibraryEntryOpened(opened.entry.id, operation)
-  if (!operation.isCurrent()) {
-    return false
+  const markResult = await markLibraryEntryOpened(opened.entry, operation)
+  if (!markResult || !operation.isCurrent()) {
+    return { status: 'stale' }
   }
 
+  const markedEntry = markResult.entry
   if (!markedEntry) {
     libraryStatus.value = '这篇文档已经不在文库中。'
     await refreshLibraryEntries(operation)
-    return false
+    return operation.isCurrent() ? { status: 'missing' } : { status: 'stale' }
   }
 
-  if (!options.skipSave) {
-    await flushPendingActiveReadingPosition()
-    if (!operation.isCurrent()) {
-      return false
-    }
+  await flushPendingActiveReadingPosition()
+  if (!operation.isCurrent()) {
+    return { status: 'stale' }
   }
 
   activeLibraryEntryId.value = markedEntry.id
@@ -1339,44 +1434,56 @@ async function openLibraryEntry(entry: LibraryEntry, options: OpenLibraryEntryOp
 
   await onDocumentLoaded(documentState.source, operation)
   if (!operation.isCurrent()) {
-    return false
+    return { status: 'stale' }
+  }
+
+  if (!markResult.metadataPersisted) {
+    liveStatus.value = '文档已打开，但最近打开时间暂时无法更新。'
   }
 
   restorePendingPositionIfReady()
   await refreshLibraryEntries(operation)
   return operation.isCurrent()
+    ? { metadataPersisted: markResult.metadataPersisted, status: 'opened' }
+    : { status: 'stale' }
+}
+
+async function readLibraryEntry<T>(
+  read: () => Promise<T>,
+  operation: DocumentInputOperation,
+  errorMessage: string,
+): Promise<{ value: T } | null> {
+  try {
+    return { value: await read() }
+  }
+  catch {
+    if (operation.isCurrent()) {
+      libraryStatus.value = errorMessage
+    }
+
+    return null
+  }
 }
 
 async function markLibraryEntryOpened(
-  id: string,
-  operation: DocumentInputOperation,
-): Promise<LibraryEntry | null> {
-  try {
-    return await libraryStore.markOpened(id, { signal: operation.signal })
-  }
-  catch (reason) {
-    if (!operation.isCurrent()) {
-      return null
-    }
-
-    throw reason
-  }
-}
-
-async function markImportedLibraryEntryOpened(
   entry: LibraryEntry,
   operation: DocumentInputOperation,
-): Promise<LibraryEntry | null> {
+): Promise<MarkLibraryEntryOpenedResult | null> {
   try {
-    return await libraryStore.markOpened(entry.id, { signal: operation.signal })
+    return {
+      entry: await libraryStore.markOpened(entry.id, { signal: operation.signal }),
+      metadataPersisted: true,
+    }
   }
   catch {
     if (!operation.isCurrent()) {
       return null
     }
 
-    liveStatus.value = '文档已加入文库，但最近打开时间暂时无法更新。'
-    return entry
+    return {
+      entry,
+      metadataPersisted: false,
+    }
   }
 }
 
