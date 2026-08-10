@@ -52,6 +52,12 @@ interface PdfTextLayerRenderOptions {
   viewport: PdfPageViewport
 }
 
+interface PdfSearchContext {
+  document: PDFDocumentProxy
+  normalizedQuery: string
+  sequence: number
+}
+
 const props = defineProps<{
   blob: Blob
   entry: LibraryEntry
@@ -98,7 +104,7 @@ const scrollModeStatus = shallowRef<'idle' | 'measuring' | 'error'>('idle')
 const sideControlTop = shallowRef('50%')
 const searchMatches = shallowRef<PdfSearchMatch[]>([])
 const activeSearchIndex = shallowRef(-1)
-const searchStatus = shallowRef<'idle' | 'extracting' | 'no-text'>('idle')
+const searchStatus = shallowRef<'error' | 'idle' | 'extracting' | 'no-text'>('idle')
 const searchIndexedPages = shallowRef(0)
 
 let loadingTask: PDFDocumentLoadingTask | null = null
@@ -491,6 +497,7 @@ function clearSearch(options: { emitState?: boolean } = {}): void {
 async function runPdfSearch(query = props.searchQuery): Promise<void> {
   const normalizedQuery = query.trim()
   const sequence = ++searchSequence
+  const document = pdfDocument
   const matches: PdfSearchMatch[] = []
   searchMatches.value = matches
   searchMatchesByPage.clear()
@@ -498,7 +505,7 @@ async function runPdfSearch(query = props.searchQuery): Promise<void> {
   searchIndexedPages.value = 0
   clearTextLayers()
 
-  if (!normalizedQuery || !pdfDocument || loadState.value !== 'ready') {
+  if (!normalizedQuery || !document || loadState.value !== 'ready') {
     searchStatus.value = 'idle'
     emitSearchState()
     return
@@ -513,8 +520,19 @@ async function runPdfSearch(query = props.searchQuery): Promise<void> {
   let sliceStartedAt = performance.now()
 
   for (let page = 1; page <= totalPages.value; page += 1) {
-    const pageText = await getCachedPageText(page)
-    if (sequence !== searchSequence) {
+    let pageText: PdfSearchPageIndex
+    try {
+      pageText = await getCachedPageText(page)
+    }
+    catch {
+      if (!isPdfSearchCurrent(sequence, normalizedQuery, document)) {
+        return
+      }
+
+      reportPdfSearchExtractionError()
+      return
+    }
+    if (!isPdfSearchCurrent(sequence, normalizedQuery, document)) {
       return
     }
 
@@ -541,13 +559,13 @@ async function runPdfSearch(query = props.searchQuery): Promise<void> {
     if (shouldYield && page < totalPages.value) {
       await yieldPdfSearchWork()
       sliceStartedAt = performance.now()
-      if (sequence !== searchSequence) {
+      if (!isPdfSearchCurrent(sequence, normalizedQuery, document)) {
         return
       }
     }
   }
 
-  if (sequence !== searchSequence) {
+  if (!isPdfSearchCurrent(sequence, normalizedQuery, document)) {
     return
   }
 
@@ -577,6 +595,50 @@ async function runPdfSearch(query = props.searchQuery): Promise<void> {
     clearTextLayers()
     emitSearchState()
   }
+}
+
+function isPdfSearchCurrent(
+  sequence: number,
+  normalizedQuery: string,
+  document: PDFDocumentProxy,
+): boolean {
+  return sequence === searchSequence
+    && normalizedQuery === props.searchQuery.trim()
+    && document === pdfDocument
+    && loadState.value === 'ready'
+}
+
+function reportPdfSearchExtractionError(): void {
+  searchMatches.value = []
+  searchMatchesByPage.clear()
+  activeSearchIndex.value = -1
+  searchIndexedPages.value = 0
+  searchStatus.value = 'error'
+  clearTextLayers()
+  emitSearchState()
+}
+
+function shouldRenderPdfSearchTextLayer(): boolean {
+  return searchStatus.value !== 'error' && props.searchQuery.trim().length > 0
+}
+
+function capturePdfSearchContext(): PdfSearchContext | null {
+  const document = pdfDocument
+  const normalizedQuery = props.searchQuery.trim()
+  if (!document || !normalizedQuery || !shouldRenderPdfSearchTextLayer()) {
+    return null
+  }
+
+  return {
+    document,
+    normalizedQuery,
+    sequence: searchSequence,
+  }
+}
+
+function isPdfSearchContextCurrent(context: PdfSearchContext): boolean {
+  return shouldRenderPdfSearchTextLayer()
+    && isPdfSearchCurrent(context.sequence, context.normalizedQuery, context.document)
 }
 
 function publishPdfSearchProgress(
@@ -889,6 +951,16 @@ function emitSearchState(): void {
     return
   }
 
+  if (searchStatus.value === 'error') {
+    emit('searchChange', {
+      activeIndex: -1,
+      announcement: 'PDF 搜索文本读取失败, 请重试。',
+      statusText: '搜索文本读取失败, 请重试',
+      total: 0,
+    })
+    return
+  }
+
   const activeMatch = searchMatches.value[activeSearchIndex.value]
   emit('searchChange', {
     activeIndex: activeSearchIndex.value,
@@ -951,7 +1023,7 @@ async function renderCurrentPage(): Promise<void> {
     await renderTask.promise
 
     if (sequence === renderSequence) {
-      if (props.searchQuery.trim()) {
+      if (shouldRenderPdfSearchTextLayer()) {
         await renderPagedTextLayer(viewport, sequence)
       }
       else {
@@ -985,16 +1057,17 @@ async function renderCurrentPage(): Promise<void> {
 
 async function renderPagedTextLayer(viewport: PdfPageViewport, sequence: number): Promise<void> {
   const container = textLayerRef.value
-  if (!container || sequence !== renderSequence) {
+  const searchContext = capturePdfSearchContext()
+  if (!container || !searchContext || sequence !== renderSequence) {
     return
   }
 
   const page = pageNumber.value
   const isCurrent = (): boolean => (
     sequence === renderSequence
+    && isPdfSearchContextCurrent(searchContext)
     && loadState.value === 'ready'
     && viewMode.value === 'paged'
-    && props.searchQuery.trim().length > 0
     && textLayerRef.value === container
     && pageNumber.value === page
   )
@@ -1029,7 +1102,7 @@ async function renderPagedTextLayer(viewport: PdfPageViewport, sequence: number)
       pendingPagedTextLayer = null
     }
     if (!isPdfCancellation(reason) && isCurrent()) {
-      throw reason
+      reportPdfSearchExtractionError()
     }
   }
 }
@@ -1038,7 +1111,8 @@ async function renderScrollTextLayer(pageNumberToRender: number, viewport: PdfPa
   const generation = scrollRenderGeneration
   const pdf = pdfDocument
   const container = scrollTextLayerElements.get(pageNumberToRender)
-  if (!pdf || !container || !isScrollTextLayerRenderCurrent({
+  const searchContext = capturePdfSearchContext()
+  if (!pdf || !container || !searchContext || !isPdfSearchContextCurrent(searchContext) || !isScrollTextLayerRenderCurrent({
     container,
     generation,
     page: pageNumberToRender,
@@ -1049,13 +1123,16 @@ async function renderScrollTextLayer(pageNumberToRender: number, viewport: PdfPa
 
   clearScrollTextLayer(pageNumberToRender)
   const sequence = scrollTextRenderSequences.get(pageNumberToRender) ?? 0
-  const isCurrent = (): boolean => isScrollTextLayerRenderCurrent({
-    container,
-    generation,
-    page: pageNumberToRender,
-    pdf,
-    sequence,
-  })
+  const isCurrent = (): boolean => (
+    isPdfSearchContextCurrent(searchContext)
+    && isScrollTextLayerRenderCurrent({
+      container,
+      generation,
+      page: pageNumberToRender,
+      pdf,
+      sequence,
+    })
+  )
   let createdLayer: PdfTextLayer | null = null
 
   try {
@@ -1086,7 +1163,7 @@ async function renderScrollTextLayer(pageNumberToRender: number, viewport: PdfPa
       pendingScrollTextLayers.delete(pageNumberToRender)
     }
     if (!isPdfCancellation(reason) && isCurrent()) {
-      throw reason
+      reportPdfSearchExtractionError()
     }
   }
 }
@@ -1103,7 +1180,7 @@ function isScrollTextLayerRenderCurrent(options: {
     && loadState.value === 'ready'
     && viewMode.value === 'scroll'
     && scrollModeStatus.value === 'idle'
-    && props.searchQuery.trim().length > 0
+    && shouldRenderPdfSearchTextLayer()
     && bufferedScrollPages.value.has(options.page)
     && scrollTextLayerElements.get(options.page) === options.container
     && (options.sequence === undefined || scrollTextRenderSequences.get(options.page) === options.sequence)
@@ -1515,7 +1592,7 @@ function setScrollTextLayerElement(page: number, element: unknown): void {
     }
     scrollTextLayerElements.set(page, element)
     void nextTick(() => {
-      if (props.searchQuery.trim() && shouldRenderScrollPage(page)) {
+      if (shouldRenderPdfSearchTextLayer() && shouldRenderScrollPage(page)) {
         void ensureScrollTextLayer(page)
       }
     })
@@ -1891,7 +1968,7 @@ async function performScrollPageRender(page: number): Promise<void> {
     if (page === pageNumber.value) {
       renderedScale.value = slot.scale
     }
-    if (props.searchQuery.trim()) {
+    if (shouldRenderPdfSearchTextLayer()) {
       await ensureScrollTextLayer(page)
     }
     return
@@ -1972,7 +2049,7 @@ async function performScrollPageRender(page: number): Promise<void> {
       && bufferedScrollPages.value.has(page)
       && scrollCanvasElements.get(page) === canvas
     ) {
-      if (props.searchQuery.trim()) {
+      if (shouldRenderPdfSearchTextLayer()) {
         await renderScrollTextLayer(page, viewport)
       }
       else {
