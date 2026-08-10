@@ -544,6 +544,70 @@ describe('App document activation and PDF reading position ownership', () => {
     }
   })
 
+  test('enters the library when preserving the active Markdown position fails', async () => {
+    const currentEntry = createMarkdownEntry('library-save-failure', 'Library save failure')
+
+    libraryStoreMocks.addMarkdownDocument.mockResolvedValue(currentEntry)
+    libraryStoreMocks.listEntries.mockResolvedValue([currentEntry])
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+
+    const mounted = mountApp()
+
+    try {
+      dispatchPaste(mounted.host, '# Library save failure')
+      await vi.waitFor(() => expect(readerTitle(mounted.host)).toBe(currentEntry.title))
+      await flushSettledWork()
+      libraryStoreMocks.saveReadingPosition.mockRejectedValueOnce(new Error('position save failed'))
+
+      await showLibrary(mounted.host)
+
+      expect(libraryStoreMocks.saveReadingPosition).toHaveBeenCalledWith(expect.objectContaining({
+        documentId: currentEntry.id,
+        type: 'markdown',
+      }))
+      expect(hasLibraryEntry(mounted.host, currentEntry.title)).toBe(true)
+    }
+    finally {
+      mounted.unmount()
+    }
+  })
+
+  test('activates the next Markdown document when preserving the current position fails', async () => {
+    const currentEntry = createMarkdownEntry('import-save-failure-current', 'Import save failure current')
+    const nextEntry = createMarkdownEntry('import-save-failure-next', 'Import save failure next')
+
+    libraryStoreMocks.addMarkdownDocument
+      .mockResolvedValueOnce(currentEntry)
+      .mockResolvedValueOnce(nextEntry)
+    libraryStoreMocks.listEntries
+      .mockResolvedValueOnce([currentEntry])
+      .mockResolvedValue([currentEntry, nextEntry])
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+
+    const mounted = mountApp()
+
+    try {
+      dispatchPaste(mounted.host, '# Import save failure current')
+      await vi.waitFor(() => expect(readerTitle(mounted.host)).toBe(currentEntry.title))
+      await flushSettledWork()
+      libraryStoreMocks.saveReadingPosition.mockRejectedValueOnce(new Error('position save failed'))
+
+      dispatchPaste(mounted.host, '# Import save failure next')
+
+      await vi.waitFor(() => expect(readerTitle(mounted.host)).toBe(nextEntry.title))
+      expect(readerBody(mounted.host)).toBe('# Import save failure next')
+      expect(libraryStoreMocks.addMarkdownDocument).toHaveBeenCalledTimes(2)
+      expect(libraryStoreMocks.saveReadingPosition).toHaveBeenCalledWith(expect.objectContaining({
+        documentId: currentEntry.id,
+        type: 'markdown',
+      }))
+      expect(mounted.host.querySelector('[data-testid="floating-affordance-menu"]')).toBeNull()
+    }
+    finally {
+      mounted.unmount()
+    }
+  })
+
   test('preserves a Markdown scroll made while the library is still refreshing', async () => {
     const entry = createMarkdownEntry('library-refresh-scroll', 'Library refresh scroll')
     const pendingRefresh = createDeferred<LibraryEntry[]>()

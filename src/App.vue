@@ -181,7 +181,6 @@ const {
   restorePendingIfReady: restorePendingPositionIfReady,
   resumeRestore: resumeMarkdownPositionRestore,
   resumeSuspension: resumeMarkdownPositionOwner,
-  saveActive: saveActiveReadingPosition,
   setPendingRestore: setPendingMarkdownRestore,
   settleSaves: settleMarkdownPositionSaves,
   suspend: suspendMarkdownPositionOwner,
@@ -349,7 +348,7 @@ async function showLibrary(): Promise<void> {
   closeSurface()
   closeFindBar({ restoreFocus: false })
   const currentScrollY = getCurrentScrollY()
-  await saveActiveReadingPosition({ scrollY: currentScrollY })
+  await preserveActiveReadingPosition({ scrollY: currentScrollY })
   if (!operation.isCurrent()) {
     return
   }
@@ -947,7 +946,7 @@ async function loadIncomingDocument(document: ReaderDocument, operation: Documen
       return
     }
 
-    await saveActiveReadingPosition()
+    await preserveActiveReadingPosition()
     if (!operation.isCurrent()) {
       return
     }
@@ -1018,7 +1017,7 @@ async function updatePendingUrlImport(): Promise<void> {
     closeSurface()
 
     if (activeLibraryEntryId.value) {
-      await saveActiveReadingPosition()
+      await preserveActiveReadingPosition()
       if (!operation.isCurrent()) {
         return
       }
@@ -1108,7 +1107,7 @@ async function loadIncomingPdf(file: File, operation: DocumentInputOperation): P
   closeFindBar({ restoreFocus: false })
 
   try {
-    await saveActiveReadingPosition()
+    await preserveActiveReadingPosition()
     if (!operation.isCurrent()) {
       return
     }
@@ -1240,7 +1239,7 @@ async function openLibraryEntry(entry: LibraryEntry, options: OpenLibraryEntryOp
 
   if (entry.type === 'pdf') {
     if (!options.skipSave) {
-      await saveActiveReadingPosition()
+      await preserveActiveReadingPosition()
       if (!operation.isCurrent()) {
         return false
       }
@@ -1292,7 +1291,7 @@ async function openLibraryEntry(entry: LibraryEntry, options: OpenLibraryEntryOp
   }
 
   if (!options.skipSave) {
-    await saveActiveReadingPosition()
+    await preserveActiveReadingPosition()
     if (!operation.isCurrent()) {
       return false
     }
