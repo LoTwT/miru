@@ -27,7 +27,7 @@ export interface MarkdownPositionOwnerSuspension {
 
 interface PendingMarkdownRestore {
   owner: MarkdownPositionOwner
-  position: MarkdownReadingPosition
+  position: MarkdownReadingLocation
   scheduled: boolean
 }
 
@@ -198,6 +198,25 @@ export function useMarkdownPositionOwnership(options: MarkdownPositionOwnershipO
 
     pause.owner.restorePause = null
     restorePendingIfReady()
+  }
+
+  function retainActivePositionForRestore(
+    pause: MarkdownPositionRestorePause | null,
+    positionOptions: { scrollY?: number } = {},
+  ): void {
+    if (
+      !pause
+      || activeOwner !== pause.owner
+      || pause.owner.restorePause !== pause.token
+      || pendingRestore?.owner === pause.owner
+    ) {
+      return
+    }
+
+    const position = createPosition(pause.owner, positionOptions)
+    if (position) {
+      pendingRestore = { owner: pause.owner, position, scheduled: false }
+    }
   }
 
   function suspend(documentId: string): MarkdownPositionOwnerSuspension | null {
@@ -415,6 +434,7 @@ export function useMarkdownPositionOwnership(options: MarkdownPositionOwnershipO
     onScroll,
     pauseRestore,
     preserveActive,
+    retainActivePositionForRestore,
     restorePendingIfReady,
     resumeRestore,
     resumeSuspension,

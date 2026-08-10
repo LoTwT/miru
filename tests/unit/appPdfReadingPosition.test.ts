@@ -644,6 +644,20 @@ describe('App document activation and PDF reading position ownership', () => {
           type: 'markdown',
         }),
       ))
+      await vi.waitFor(() => expect(
+        mounted.host.querySelector('[data-testid="library-view"]'),
+      ).not.toBeNull())
+
+      vi.stubGlobal('scrollY', 0)
+      vi.mocked(window.scrollTo).mockClear()
+      click(mounted.host, '[data-testid="library-open-button"]')
+      await vi.waitFor(() => expect(
+        mounted.host.querySelector('[data-testid="library-view"]'),
+      ).toBeNull())
+      await vi.waitFor(() => expect(window.scrollTo).toHaveBeenCalledWith({
+        behavior: 'auto',
+        top: 510,
+      }))
     }
     finally {
       if (vi.isFakeTimers()) {
@@ -1397,6 +1411,50 @@ describe('App document activation and PDF reading position ownership', () => {
       }
     },
   )
+
+  test('restores the active library Markdown position when returning from the library', async () => {
+    const entry = createMarkdownEntry('library-return-position', 'Library return position')
+
+    libraryStoreMocks.addMarkdownDocument.mockResolvedValue(entry)
+    libraryStoreMocks.listEntries.mockResolvedValue([entry])
+    libraryStoreMocks.saveReadingPosition.mockImplementation(async position => ({
+      ...position,
+      updatedAt: '2026-08-10T00:00:00.000Z',
+    }))
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+
+    const mounted = mountApp()
+
+    try {
+      dispatchPaste(mounted.host, '# Library return position')
+      await vi.waitFor(() => expect(readerTitle(mounted.host)).toBe(entry.title))
+      await flushSettledWork()
+
+      vi.stubGlobal('scrollY', 640)
+      await showLibrary(mounted.host)
+      expect(libraryStoreMocks.saveReadingPosition).toHaveBeenCalledWith(expect.objectContaining({
+        documentId: entry.id,
+        scrollY: 640,
+        type: 'markdown',
+      }))
+
+      vi.stubGlobal('scrollY', 0)
+      vi.mocked(window.scrollTo).mockClear()
+      click(mounted.host, '[data-testid="library-open-button"]')
+      await vi.waitFor(() => {
+        expect(mounted.host.querySelector('[data-testid="library-view"]')).toBeNull()
+        expect(readerTitle(mounted.host)).toBe(entry.title)
+      })
+
+      await vi.waitFor(() => expect(window.scrollTo).toHaveBeenCalledWith({
+        behavior: 'auto',
+        top: 640,
+      }))
+    }
+    finally {
+      mounted.unmount()
+    }
+  })
 
   test('retains a pending Markdown restore while visiting the library', async () => {
     const entry = createMarkdownEntry('library-paused-restore', 'Library paused restore')

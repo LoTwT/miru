@@ -178,6 +178,7 @@ const {
   onScroll: saveMarkdownPositionOnScroll,
   pauseRestore: pauseMarkdownPositionRestore,
   preserveActive: preserveActiveReadingPosition,
+  retainActivePositionForRestore: retainActiveMarkdownPositionForRestore,
   restorePendingIfReady: restorePendingPositionIfReady,
   resumeRestore: resumeMarkdownPositionRestore,
   resumeSuspension: resumeMarkdownPositionOwner,
@@ -345,16 +346,16 @@ function resetToSample(): void {
 async function showLibrary(): Promise<void> {
   const operation = beginDocumentActivation()
   preloadLibraryView()
-  closeSurface()
-  closeFindBar({ restoreFocus: false })
   const currentScrollY = getCurrentScrollY()
-  await preserveActiveReadingPosition({ scrollY: currentScrollY })
-  if (!operation.isCurrent()) {
-    return
-  }
-
   const restorePause = pauseMarkdownPositionRestore()
   try {
+    closeSurface()
+    closeFindBar({ restoreFocus: false })
+    await preserveActiveReadingPosition({ scrollY: currentScrollY })
+    if (!operation.isCurrent()) {
+      return
+    }
+
     libraryStatus.value = ''
     await refreshLibraryEntries(operation)
     if (!operation.isCurrent()) {
@@ -366,6 +367,7 @@ async function showLibrary(): Promise<void> {
       return
     }
 
+    retainActiveMarkdownPositionForRestore(restorePause, { scrollY: getCurrentScrollY() })
     appMode.value = 'library'
     window.scrollTo({ top: 0, behavior: 'auto' })
   }

@@ -126,6 +126,31 @@ test('restores local library markdown scroll position when reopening a document'
   await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(800)
 })
 
+test('restores the active library Markdown position when returning from the bookshelf', async ({ page }) => {
+  await page.goto('/')
+
+  await pasteText(page, createLongMarkdown('Library return position'))
+  await waitForReaderReady(page, 'Library return position')
+
+  const expectedScrollY = await page.evaluate(async () => {
+    const didScroll = new Promise<void>((resolve) => {
+      window.addEventListener('scroll', () => resolve(), { once: true })
+    })
+    window.scrollTo({ top: 1200, behavior: 'auto' })
+    await didScroll
+    return Math.round(window.scrollY)
+  })
+  expect(expectedScrollY).toBeGreaterThan(800)
+
+  await page.getByTestId('library-open-button').click()
+  await expect(page.getByTestId('library-view')).toBeVisible()
+  await expect.poll(() => page.evaluate(() => Math.round(window.scrollY))).toBe(0)
+
+  await page.getByRole('button', { name: '返回阅读', exact: true }).click()
+  await waitForReaderReady(page, 'Library return position')
+  await expect.poll(() => page.evaluate(() => Math.round(window.scrollY))).toBe(expectedScrollY)
+})
+
 test('keeps a pending Markdown position owned by its source document during rapid import', async ({ page }) => {
   const clockStart = new Date('2026-08-09T00:00:00.000Z')
 
