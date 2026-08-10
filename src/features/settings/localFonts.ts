@@ -121,6 +121,11 @@ export function createLocalFontStore(options: LocalFontStoreOptions = {}) {
     }
 
     const opening = openDB<LocalFontsDatabase>(dbName, localFontsDatabaseVersion, {
+      terminated() {
+        if (dbPromise === opening) {
+          dbPromise = null
+        }
+      },
       upgrade(db, oldVersion, _newVersion, transaction) {
         if (oldVersion < 1) {
           const fonts = db.createObjectStore('fonts', { keyPath: 'id' })

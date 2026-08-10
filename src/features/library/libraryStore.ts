@@ -110,6 +110,11 @@ export function createLibraryStore(options: LibraryStoreOptions = {}) {
     }
 
     const opening = openDB<LibraryDatabase>(dbName, libraryDatabaseVersion, {
+      terminated() {
+        if (dbPromise === opening) {
+          dbPromise = null
+        }
+      },
       upgrade(db) {
         const entries = db.createObjectStore('entries', { keyPath: 'id' })
         entries.createIndex('type', 'type')

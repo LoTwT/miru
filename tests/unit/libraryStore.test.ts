@@ -2,8 +2,9 @@ import 'fake-indexeddb/auto'
 
 import { Blob as NodeBlob } from 'node:buffer'
 
+import { forceCloseDatabase } from 'fake-indexeddb'
 import { openDB } from 'idb'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   createLibraryStore,
@@ -115,6 +116,34 @@ describe('local library store', () => {
     }
     finally {
       await store.close().catch(() => undefined)
+    }
+  })
+
+  it('reopens the same store after its IndexedDB connection is terminated', async () => {
+    const store = createTestStore()
+    const openSpy = vi.spyOn(indexedDB, 'open')
+
+    try {
+      const entry = await store.addMarkdownDocument({
+        markdown: '# Survives termination',
+        source: { kind: 'paste' },
+      })
+      expect(openSpy).toHaveBeenCalledTimes(1)
+      const firstOpenRequest = openSpy.mock.results[0]?.value
+      expect(firstOpenRequest).toBeDefined()
+
+      forceCloseDatabase(
+        firstOpenRequest!.result as unknown as Parameters<typeof forceCloseDatabase>[0],
+      )
+
+      await expect(store.openMarkdownDocument(entry.id, { markOpened: false })).resolves.toMatchObject({
+        entry: { id: entry.id },
+        markdown: '# Survives termination',
+      })
+      expect(openSpy).toHaveBeenCalledTimes(2)
+    }
+    finally {
+      openSpy.mockRestore()
     }
   })
 

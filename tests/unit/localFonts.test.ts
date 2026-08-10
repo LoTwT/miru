@@ -2,6 +2,7 @@ import 'fake-indexeddb/auto'
 
 import { Blob as NodeBlob, File as NodeFile } from 'node:buffer'
 
+import { forceCloseDatabase } from 'fake-indexeddb'
 import { openDB } from 'idb'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -91,6 +92,37 @@ describe('local font store', () => {
     }
     finally {
       await store.close().catch(() => undefined)
+    }
+  })
+
+  it('reopens the same store after its IndexedDB connection is terminated', async () => {
+    const store = createTestStore()
+    const openSpy = vi.spyOn(indexedDB, 'open')
+
+    try {
+      const record = await store.addFont({
+        file: createFontBlob('survives-termination'),
+        fileName: 'Survives Termination.woff2',
+        mimeType: 'font/woff2',
+        name: 'Survives Termination',
+      })
+      expect(openSpy).toHaveBeenCalledTimes(1)
+      const firstOpenRequest = openSpy.mock.results[0]?.value
+      expect(firstOpenRequest).toBeDefined()
+
+      forceCloseDatabase(
+        firstOpenRequest!.result as unknown as Parameters<typeof forceCloseDatabase>[0],
+      )
+
+      await expect(store.getFont(record.id)).resolves.toMatchObject({
+        id: record.id,
+        name: 'Survives Termination',
+        blob: expect.anything(),
+      })
+      expect(openSpy).toHaveBeenCalledTimes(2)
+    }
+    finally {
+      openSpy.mockRestore()
     }
   })
 
