@@ -6,6 +6,7 @@ import type { LibraryEntry } from '@/features/library/types'
 
 const pdfJsMocks = vi.hoisted(() => ({
   getDocument: vi.fn(),
+  renderTextLayer: vi.fn(),
   setWorkerSrc: vi.fn(),
 }))
 
@@ -25,7 +26,9 @@ vi.mock('pdfjs-dist', () => ({
   },
   TextLayer: class {
     cancel = vi.fn()
-    render = vi.fn().mockResolvedValue(undefined)
+    render = vi.fn(async () => {
+      await pdfJsMocks.renderTextLayer()
+    })
     textDivs: HTMLElement[] = []
   },
   getDocument: pdfJsMocks.getDocument,
@@ -38,6 +41,7 @@ vi.mock('pdfjs-dist/build/pdf.worker.mjs?url', () => ({
 
 afterEach(() => {
   pdfJsMocks.getDocument.mockReset()
+  pdfJsMocks.renderTextLayer.mockReset()
   pdfJsMocks.setWorkerSrc.mockReset()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
@@ -385,6 +389,69 @@ describe('PdfViewer search extraction', () => {
       expect(viewer.host.textContent).not.toContain('这一页暂时无法显示')
       expect(latestSearchState(viewer.searchStates).statusText)
         .toBe('搜索文本读取失败, 请重试')
+    }
+    finally {
+      viewer.unmount()
+    }
+  })
+
+  test('keeps a current text-layer failure after the remaining pages finish indexing', async () => {
+    const secondPageText = createDeferred<ReturnType<typeof createPdfTextContent>>()
+    const textLayerRender = createDeferred<void>()
+    pdfJsMocks.renderTextLayer.mockImplementationOnce(() => textLayerRender.promise)
+    const firstPage = {
+      ...createPdfPage(),
+      getTextContent: vi.fn().mockResolvedValue(createPdfTextContent('needle on the first page')),
+    }
+    const secondPage = {
+      ...createPdfPage(),
+      getTextContent: vi.fn(() => secondPageText.promise),
+    }
+    const loadingTask = {
+      destroy: vi.fn().mockResolvedValue(undefined),
+      promise: Promise.resolve<unknown>(undefined),
+    }
+    const pdfDocument = {
+      getPage: vi.fn((page: number) => Promise.resolve(page === 1 ? firstPage : secondPage)),
+      loadingTask,
+      numPages: 2,
+    }
+    loadingTask.promise = Promise.resolve(pdfDocument)
+    pdfJsMocks.getDocument.mockReturnValue(loadingTask)
+    stubPdfViewerRuntime()
+    const viewer = mountPdfViewer(
+      new Blob([Uint8Array.of(2)], { type: 'application/pdf' }),
+      createPdfEntry('search-current-layer-error', 'Search current layer error'),
+    )
+
+    try {
+      await vi.waitFor(() => expect(viewer.host.textContent).toContain('1 / 2'))
+
+      viewer.searchQuery.value = 'needle'
+      await nextTick()
+      await vi.waitFor(() => {
+        expect(secondPage.getTextContent).toHaveBeenCalledOnce()
+        expect(pdfJsMocks.renderTextLayer).toHaveBeenCalledOnce()
+      })
+
+      textLayerRender.reject(new Error('current text-layer failed'))
+      await vi.waitFor(() => {
+        expect(latestSearchState(viewer.searchStates).statusText)
+          .toBe('搜索文本读取失败, 请重试')
+      })
+
+      secondPageText.resolve(createPdfTextContent('second page text'))
+      await flushSettledWork()
+
+      expect(latestSearchState(viewer.searchStates)).toEqual({
+        activeIndex: -1,
+        announcement: 'PDF 搜索文本读取失败, 请重试。',
+        statusText: '搜索文本读取失败, 请重试',
+        total: 0,
+      })
+      expect(viewer.host.querySelector('[role="alert"]')).toBeNull()
+      expect(viewer.host.textContent).toContain('1 / 2')
+      expect(pdfJsMocks.renderTextLayer).toHaveBeenCalledOnce()
     }
     finally {
       viewer.unmount()

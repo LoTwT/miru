@@ -609,6 +609,7 @@ function isPdfSearchCurrent(
 }
 
 function reportPdfSearchExtractionError(): void {
+  searchSequence += 1
   searchMatches.value = []
   searchMatchesByPage.clear()
   activeSearchIndex.value = -1
