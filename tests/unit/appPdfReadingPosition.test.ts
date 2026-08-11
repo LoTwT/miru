@@ -2338,6 +2338,235 @@ describe('App document activation and PDF reading position ownership', () => {
     }
   })
 
+  test.each([
+    {
+      action: 'rename',
+      errorStatus: '重命名暂时无法保存。当前标题已保留，请稍后重试。',
+    },
+    {
+      action: 'pin',
+      errorStatus: '置顶状态暂时无法更新。当前列表已保留，请稍后重试。',
+    },
+    {
+      action: 'delete',
+      errorStatus: '暂时无法删除这篇文档。当前内容已保留，请稍后重试。',
+    },
+    {
+      action: 'clear',
+      errorStatus: '暂时无法清空文库。当前内容已保留，请稍后重试。',
+    },
+  ] as const)(
+    'keeps a library entry retryable when the $action mutation fails',
+    async ({ action, errorStatus }) => {
+      const entry = createMarkdownEntry(`mutation-${action}`, `Mutation ${action}`)
+      const recoveredTitle = 'Recovered mutation title'
+      const recoveredEntry: LibraryEntry = action === 'rename'
+        ? {
+            ...entry,
+            sortTitle: recoveredTitle.toLocaleLowerCase(),
+            title: recoveredTitle,
+          }
+        : {
+            ...entry,
+            pinned: action === 'pin',
+          }
+      const appErrors: unknown[] = []
+      let visibleEntries = [entry]
+
+      libraryStoreMocks.listEntries.mockImplementation(async () => visibleEntries)
+      if (action === 'rename' || action === 'pin') {
+        libraryStoreMocks.updateEntry
+          .mockRejectedValueOnce(new Error(`${action} failed`))
+          .mockImplementationOnce(async () => {
+            visibleEntries = [recoveredEntry]
+            return recoveredEntry
+          })
+      }
+      else if (action === 'delete') {
+        libraryStoreMocks.deleteEntry
+          .mockRejectedValueOnce(new Error('delete failed'))
+          .mockImplementationOnce(async () => {
+            visibleEntries = []
+          })
+      }
+      else {
+        libraryStoreMocks.clearLibrary
+          .mockRejectedValueOnce(new Error('clear failed'))
+          .mockImplementationOnce(async () => {
+            visibleEntries = []
+          })
+      }
+      libraryStoreMocks.close.mockResolvedValue(undefined)
+
+      const mounted = mountApp(error => appErrors.push(error))
+
+      try {
+        await showLibrary(mounted.host)
+        await performLibraryMutation(mounted.host, action, entry.title, recoveredTitle)
+        const mutationMock = libraryMutationMock(action)
+        await vi.waitFor(() => expect(mutationMock).toHaveBeenCalledOnce())
+        await flushSettledWork()
+
+        if (action === 'rename') {
+          expect(libraryStoreMocks.updateEntry).toHaveBeenCalledWith(entry.id, { title: recoveredTitle })
+        }
+        else if (action === 'pin') {
+          expect(libraryStoreMocks.updateEntry).toHaveBeenCalledWith(entry.id, { pinned: true })
+        }
+        else if (action === 'delete') {
+          expect(libraryStoreMocks.deleteEntry).toHaveBeenCalledWith(entry.id)
+        }
+        else {
+          expect(libraryStoreMocks.clearLibrary).toHaveBeenCalledWith()
+        }
+        expect(hasLibraryEntry(mounted.host, entry.title)).toBe(true)
+        if (action === 'pin') {
+          expect(hasLibraryEntryAction(mounted.host, entry.title, '置顶')).toBe(true)
+        }
+        expect(libraryViewStatus(mounted.host)).toBe(errorStatus)
+        expect(libraryStoreMocks.listEntries).toHaveBeenCalledOnce()
+        expect(appErrors).toEqual([])
+
+        await performLibraryMutation(mounted.host, action, entry.title, recoveredTitle)
+        await vi.waitFor(() => expect(mutationMock).toHaveBeenCalledTimes(2))
+        await vi.waitFor(() => {
+          if (action === 'rename') {
+            expect(hasLibraryEntry(mounted.host, recoveredTitle)).toBe(true)
+            expect(hasLibraryEntry(mounted.host, entry.title)).toBe(false)
+          }
+          else if (action === 'pin') {
+            expect(hasLibraryEntryAction(mounted.host, entry.title, '取消置顶')).toBe(true)
+          }
+          else {
+            expect(mounted.host.querySelector('[data-testid="library-empty"]')).not.toBeNull()
+          }
+          expect(libraryViewStatus(mounted.host)).toBeUndefined()
+        })
+
+        expect(libraryStoreMocks.listEntries).toHaveBeenCalledTimes(2)
+        expect(appErrors).toEqual([])
+      }
+      finally {
+        mounted.unmount()
+      }
+    },
+  )
+
+  test('does not restore an older library mutation error after a newer mutation succeeds', async () => {
+    const entry = createMarkdownEntry('mutation-stale-error', 'Mutation stale error')
+    const pinnedEntry: LibraryEntry = { ...entry, pinned: true }
+    const olderMutation = createDeferred<LibraryEntry>()
+    const appErrors: unknown[] = []
+    let visibleEntries = [entry]
+
+    libraryStoreMocks.listEntries.mockImplementation(async () => visibleEntries)
+    libraryStoreMocks.updateEntry
+      .mockReturnValueOnce(olderMutation.promise)
+      .mockImplementationOnce(async () => {
+        visibleEntries = [pinnedEntry]
+        return pinnedEntry
+      })
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+
+    const mounted = mountApp(error => appErrors.push(error))
+
+    try {
+      await showLibrary(mounted.host)
+      await performLibraryMutation(mounted.host, 'pin', entry.title)
+      await vi.waitFor(() => expect(libraryStoreMocks.updateEntry).toHaveBeenCalledOnce())
+
+      await performLibraryMutation(mounted.host, 'pin', entry.title)
+      await vi.waitFor(() => {
+        expect(libraryStoreMocks.updateEntry).toHaveBeenCalledTimes(2)
+        expect(hasLibraryEntryAction(mounted.host, entry.title, '取消置顶')).toBe(true)
+        expect(libraryViewStatus(mounted.host)).toBeUndefined()
+      })
+
+      olderMutation.reject(new Error('older mutation failed'))
+      await flushSettledWork()
+
+      expect(hasLibraryEntryAction(mounted.host, entry.title, '取消置顶')).toBe(true)
+      expect(libraryViewStatus(mounted.host)).toBeUndefined()
+      expect(libraryStoreMocks.listEntries).toHaveBeenCalledTimes(2)
+      expect(appErrors).toEqual([])
+    }
+    finally {
+      mounted.unmount()
+    }
+  })
+
+  test.each([
+    ['delete', '暂时无法删除这篇文档。当前内容已保留，请稍后重试。'],
+    ['clear', '暂时无法清空文库。当前内容已保留，请稍后重试。'],
+  ] as const)('keeps the active document after a failed library %s', async (action, errorStatus) => {
+    const entry = createMarkdownEntry(`active-mutation-${action}`, `Active mutation ${action}`)
+    const markdown = `# Active mutation ${action}\n\nBody stays available.`
+    const appErrors: unknown[] = []
+
+    libraryStoreMocks.listEntries.mockResolvedValue([entry])
+    libraryStoreMocks.openMarkdownDocument.mockResolvedValue(createOpenMarkdownDocument(entry, markdown))
+    libraryStoreMocks.deleteEntry.mockRejectedValue(new Error('delete failed'))
+    libraryStoreMocks.clearLibrary.mockRejectedValue(new Error('clear failed'))
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+
+    const mounted = mountApp(error => appErrors.push(error))
+
+    try {
+      await showLibrary(mounted.host)
+      await openLibraryEntry(mounted.host, entry.title, '打开')
+      await vi.waitFor(() => expect(readerTitle(mounted.host)).toBe(entry.title))
+      await showLibrary(mounted.host)
+
+      await performLibraryMutation(mounted.host, action, entry.title)
+      await vi.waitFor(() => expect(libraryViewStatus(mounted.host)).toBe(errorStatus))
+      expect(hasLibraryEntry(mounted.host, entry.title)).toBe(true)
+      expect(appErrors).toEqual([])
+
+      click(mounted.host, '[data-testid="library-open-button"]')
+      await vi.waitFor(() => {
+        expect(readerTitle(mounted.host)).toBe(entry.title)
+        expect(readerBody(mounted.host)).toBe(markdown)
+      })
+    }
+    finally {
+      mounted.unmount()
+    }
+  })
+
+  test('shows a library mutation error that settles while the reader is active', async () => {
+    const entry = createMarkdownEntry('mutation-hidden-error', 'Mutation hidden error')
+    const mutation = createDeferred<LibraryEntry>()
+    const appErrors: unknown[] = []
+
+    libraryStoreMocks.listEntries.mockResolvedValue([entry])
+    libraryStoreMocks.updateEntry.mockReturnValue(mutation.promise)
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+
+    const mounted = mountApp(error => appErrors.push(error))
+
+    try {
+      await showLibrary(mounted.host)
+      await performLibraryMutation(mounted.host, 'pin', entry.title)
+      await vi.waitFor(() => expect(libraryStoreMocks.updateEntry).toHaveBeenCalledOnce())
+
+      click(mounted.host, '[data-testid="library-open-button"]')
+      await vi.waitFor(() => expect(mounted.host.querySelector('[data-testid="library-view"]')).toBeNull())
+
+      mutation.reject(new Error('hidden mutation failed'))
+      await flushSettledWork()
+      expect(appErrors).toEqual([])
+
+      await showLibrary(mounted.host)
+      expect(libraryViewStatus(mounted.host)).toBe(
+        '置顶状态暂时无法更新。当前列表已保留，请稍后重试。',
+      )
+      expect(hasLibraryEntryAction(mounted.host, entry.title, '置顶')).toBe(true)
+    }
+    finally {
+      mounted.unmount()
+    }
+  })
+
   test('aborts a pending URL fetch when entering the library', async () => {
     let requestSignal: AbortSignal | undefined
     const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
@@ -3126,6 +3355,72 @@ async function clickLibraryEntryAction(host: HTMLElement, title: string, action:
     expect(openButton).toBeDefined()
   })
   openButton?.click()
+}
+
+type LibraryMutationAction = 'clear' | 'delete' | 'pin' | 'rename'
+
+async function performLibraryMutation(
+  host: HTMLElement,
+  action: LibraryMutationAction,
+  title: string,
+  renameTitle = title,
+): Promise<void> {
+  if (action === 'rename') {
+    await clickLibraryEntryAction(host, title, '重命名')
+    let input: HTMLInputElement | null = null
+    await vi.waitFor(() => {
+      input = host.querySelector<HTMLInputElement>('[data-library-rename-input]')
+      expect(input).not.toBeNull()
+    })
+    if (!input) {
+      return
+    }
+
+    input.value = renameTitle
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    await nextTick()
+    const saveButton = [...(input.closest('form')?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
+      .find(button => button.textContent?.trim() === '保存')
+    expect(saveButton).toBeDefined()
+    saveButton?.click()
+    return
+  }
+
+  if (action === 'pin') {
+    await clickLibraryEntryAction(host, title, '置顶')
+    return
+  }
+
+  if (action === 'delete') {
+    await clickLibraryEntryAction(host, title, '删除')
+  }
+  else {
+    click(host, '[data-testid="library-management-button"]')
+    await vi.waitFor(() => expect(
+      host.querySelector('[data-testid="library-clear-button"]'),
+    ).not.toBeNull())
+    click(host, '[data-testid="library-clear-button"]')
+  }
+
+  await vi.waitFor(() => expect(host.querySelector('.library-dialog__danger')).not.toBeNull())
+  click(host, '.library-dialog__danger')
+}
+
+function libraryMutationMock(action: LibraryMutationAction) {
+  if (action === 'rename' || action === 'pin') {
+    return libraryStoreMocks.updateEntry
+  }
+  if (action === 'delete') {
+    return libraryStoreMocks.deleteEntry
+  }
+  return libraryStoreMocks.clearLibrary
+}
+
+function hasLibraryEntryAction(host: HTMLElement, title: string, action: string): boolean {
+  const entry = [...host.querySelectorAll<HTMLElement>('[data-testid="library-entry"]')]
+    .find(candidate => candidate.textContent?.includes(title))
+  return [...(entry?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
+    .some(button => button.textContent?.trim() === action)
 }
 
 function dispatchPaste(host: HTMLElement, markdown: string): void {

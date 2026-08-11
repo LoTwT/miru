@@ -121,8 +121,9 @@ const libraryEntries = shallowRef<LibraryEntry[]>([])
 const librarySortMode = shallowRef<LibrarySortMode>('last-opened')
 const activeLibraryEntryId = shallowRef<string | null>(null)
 const libraryStatus = shallowRef('')
+const libraryMutationStatus = shallowRef('')
 const libraryRefreshStatus = shallowRef('')
-const libraryViewStatus = computed(() => [libraryStatus.value, libraryRefreshStatus.value]
+const libraryViewStatus = computed(() => [libraryStatus.value, libraryMutationStatus.value, libraryRefreshStatus.value]
   .filter(Boolean)
   .join(' '))
 const inputMenuStatus = shallowRef('')
@@ -172,6 +173,7 @@ let progressSyncFrame: number | undefined
 let findDebounceTimer: ReturnType<typeof setTimeout> | undefined
 let documentActivationController: AbortController | null = null
 let libraryWriteController = new AbortController()
+let libraryMutationSequence = 0
 let libraryRefreshSequence = 0
 let libraryRefreshSettledSequence = 0
 let pdfDocumentActivationSequence = 0
@@ -1635,8 +1637,34 @@ async function updateLibrarySortMode(mode: LibrarySortMode): Promise<void> {
   await refreshLibraryEntries()
 }
 
+async function attemptLibraryMutation<T>(
+  mutation: () => Promise<T>,
+  errorMessage: string,
+): Promise<{ value: T } | null> {
+  const sequence = ++libraryMutationSequence
+  libraryMutationStatus.value = ''
+
+  try {
+    return { value: await mutation() }
+  }
+  catch {
+    if (sequence === libraryMutationSequence) {
+      libraryMutationStatus.value = errorMessage
+    }
+    return null
+  }
+}
+
 async function renameLibraryEntry(entry: LibraryEntry, title: string): Promise<void> {
-  const updated = await libraryStore.updateEntry(entry.id, { title })
+  const result = await attemptLibraryMutation(
+    () => libraryStore.updateEntry(entry.id, { title }),
+    '重命名暂时无法保存。当前标题已保留，请稍后重试。',
+  )
+  if (!result) {
+    return
+  }
+
+  const updated = result.value
   if (activeLibraryEntryId.value === updated.id && documentState.source === 'paste') {
     documentState.label = updated.title
   }
@@ -1644,13 +1672,27 @@ async function renameLibraryEntry(entry: LibraryEntry, title: string): Promise<v
 }
 
 async function toggleLibraryPin(entry: LibraryEntry): Promise<void> {
-  await libraryStore.updateEntry(entry.id, { pinned: !entry.pinned })
+  const result = await attemptLibraryMutation(
+    () => libraryStore.updateEntry(entry.id, { pinned: !entry.pinned }),
+    '置顶状态暂时无法更新。当前列表已保留，请稍后重试。',
+  )
+  if (!result) {
+    return
+  }
+
   await refreshLibraryEntries()
 }
 
 async function deleteLibraryEntry(entry: LibraryEntry): Promise<void> {
   const operation = beginDocumentActivation()
-  await libraryStore.deleteEntry(entry.id)
+  const result = await attemptLibraryMutation(
+    () => libraryStore.deleteEntry(entry.id),
+    '暂时无法删除这篇文档。当前内容已保留，请稍后重试。',
+  )
+  if (!result) {
+    return
+  }
+
   persistReaderBookmarks(removeBookmarksForDocument(readerBookmarks.value, libraryBookmarkKey(entry.id)))
 
   if (activeLibraryEntryId.value === entry.id) {
@@ -1676,7 +1718,14 @@ async function clearLibrary(): Promise<void> {
   const activeEntryIdAtClear = activeLibraryEntryId.value
   invalidatePendingLibraryWrites()
   const operation = beginDocumentActivation()
-  await libraryStore.clearLibrary()
+  const result = await attemptLibraryMutation(
+    () => libraryStore.clearLibrary(),
+    '暂时无法清空文库。当前内容已保留，请稍后重试。',
+  )
+  if (!result) {
+    return
+  }
+
   persistReaderBookmarks(removeLibraryBookmarks(readerBookmarks.value))
   if (operation.isCurrent() || activeLibraryEntryId.value === activeEntryIdAtClear) {
     invalidateMarkdownPositionOwner(undefined, { discardSuspendedPosition: true })
