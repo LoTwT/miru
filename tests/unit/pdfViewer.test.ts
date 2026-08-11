@@ -6,8 +6,17 @@ import type { LibraryEntry } from '@/features/library/types'
 
 const pdfJsMocks = vi.hoisted(() => ({
   getDocument: vi.fn(),
+  renderTextLayer: vi.fn(),
   setWorkerSrc: vi.fn(),
 }))
+
+interface PdfSearchState {
+  activeIndex: number
+  announcement?: string
+  resultContext?: string
+  statusText?: string
+  total: number
+}
 
 vi.mock('pdfjs-dist', () => ({
   GlobalWorkerOptions: {
@@ -15,7 +24,13 @@ vi.mock('pdfjs-dist', () => ({
       pdfJsMocks.setWorkerSrc(value)
     },
   },
-  TextLayer: class {},
+  TextLayer: class {
+    cancel = vi.fn()
+    render = vi.fn(async () => {
+      await pdfJsMocks.renderTextLayer()
+    })
+    textDivs: HTMLElement[] = []
+  },
   getDocument: pdfJsMocks.getDocument,
   setLayerDimensions: vi.fn(),
 }))
@@ -24,15 +39,16 @@ vi.mock('pdfjs-dist/build/pdf.worker.mjs?url', () => ({
   default: '/pdf.worker.test.mjs',
 }))
 
-describe('PdfViewer loading lifecycle', () => {
-  afterEach(() => {
-    pdfJsMocks.getDocument.mockReset()
-    pdfJsMocks.setWorkerSrc.mockReset()
-    vi.restoreAllMocks()
-    vi.unstubAllGlobals()
-    Reflect.deleteProperty(HTMLElement.prototype, 'scrollTo')
-  })
+afterEach(() => {
+  pdfJsMocks.getDocument.mockReset()
+  pdfJsMocks.renderTextLayer.mockReset()
+  pdfJsMocks.setWorkerSrc.mockReset()
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
+  Reflect.deleteProperty(HTMLElement.prototype, 'scrollTo')
+})
 
+describe('PdfViewer loading lifecycle', () => {
   test('offers a page reload when the PDF runtime resources fail to initialize', async () => {
     pdfJsMocks.setWorkerSrc.mockImplementationOnce(() => {
       throw new Error('runtime chunk failed')
@@ -282,9 +298,371 @@ describe('PdfViewer loading lifecycle', () => {
   })
 })
 
-function mountPdfViewer(initialBlob: Blob, initialEntry: LibraryEntry) {
+describe('PdfViewer search extraction', () => {
+  test.each([
+    ['getPage', 'page read failed'],
+    ['getTextContent', 'text extraction failed'],
+  ] as const)('reports a retryable search error when %s rejects', async (failureStage, message) => {
+    const searchFixture = createSearchPdfLoadingTask({
+      getPageError: failureStage === 'getPage' ? new Error(message) : undefined,
+      getTextContentError: failureStage === 'getTextContent' ? new Error(message) : undefined,
+    })
+    pdfJsMocks.getDocument.mockReturnValue(searchFixture.loadingTask)
+    stubPdfViewerRuntime()
+    const viewer = mountPdfViewer(
+      new Blob([Uint8Array.of(1)], { type: 'application/pdf' }),
+      createPdfEntry(`search-${failureStage}`, `Search ${failureStage}`),
+    )
+
+    try {
+      await vi.waitFor(() => expect(viewer.host.textContent).toContain('1 / 1'))
+
+      viewer.searchQuery.value = 'needle'
+      await nextTick()
+
+      await vi.waitFor(() => {
+        expect(latestSearchState(viewer.searchStates)).toEqual({
+          activeIndex: -1,
+          announcement: 'PDF 搜索文本读取失败, 请重试。',
+          statusText: '搜索文本读取失败, 请重试',
+          total: 0,
+        })
+      })
+      expect(viewer.host.querySelector('[role="alert"]')).toBeNull()
+      expect(viewer.host.textContent).toContain('1 / 1')
+    }
+    finally {
+      viewer.unmount()
+    }
+  })
+
+  test('clears partial matches when a later PDF page cannot be extracted', async () => {
+    const firstPage = {
+      ...createPdfPage(),
+      getTextContent: vi.fn().mockResolvedValue(createPdfTextContent('needle on the first page')),
+    }
+    const secondPage = {
+      ...createPdfPage(),
+      getTextContent: vi.fn().mockRejectedValue(new Error('second page extraction failed')),
+    }
+    const loadingTask = {
+      destroy: vi.fn().mockResolvedValue(undefined),
+      promise: Promise.resolve<unknown>(undefined),
+    }
+    const pdfDocument = {
+      getPage: vi.fn((page: number) => Promise.resolve(page === 1 ? firstPage : secondPage)),
+      loadingTask,
+      numPages: 2,
+    }
+    loadingTask.promise = Promise.resolve(pdfDocument)
+    pdfJsMocks.getDocument.mockReturnValue(loadingTask)
+    stubPdfViewerRuntime()
+    const viewer = mountPdfViewer(
+      new Blob([Uint8Array.of(2)], { type: 'application/pdf' }),
+      createPdfEntry('search-partial', 'Search partial'),
+    )
+
+    try {
+      await vi.waitFor(() => expect(viewer.host.textContent).toContain('1 / 2'))
+
+      viewer.searchQuery.value = 'needle'
+      await nextTick()
+
+      await vi.waitFor(() => {
+        expect(viewer.searchStates.some(state => state.total === 1)).toBe(true)
+        expect(latestSearchState(viewer.searchStates)).toEqual({
+          activeIndex: -1,
+          announcement: 'PDF 搜索文本读取失败, 请重试。',
+          statusText: '搜索文本读取失败, 请重试',
+          total: 0,
+        })
+      })
+      expect(viewer.host.querySelectorAll('.pdf-viewer__search-match')).toHaveLength(0)
+      expect(viewer.host.querySelector('[role="alert"]')).toBeNull()
+      expect(viewer.host.textContent).toContain('1 / 2')
+
+      viewer.host.querySelector<HTMLButtonElement>('button[aria-label="下一页"]')?.click()
+      await vi.waitFor(() => expect(viewer.host.textContent).toContain('2 / 2'))
+      await flushSettledWork()
+
+      expect(viewer.host.querySelector('[role="alert"]')).toBeNull()
+      expect(viewer.host.textContent).not.toContain('这一页暂时无法显示')
+      expect(latestSearchState(viewer.searchStates).statusText)
+        .toBe('搜索文本读取失败, 请重试')
+    }
+    finally {
+      viewer.unmount()
+    }
+  })
+
+  test('keeps a current text-layer failure after the remaining pages finish indexing', async () => {
+    const secondPageText = createDeferred<ReturnType<typeof createPdfTextContent>>()
+    const textLayerRender = createDeferred<void>()
+    pdfJsMocks.renderTextLayer.mockImplementationOnce(() => textLayerRender.promise)
+    const firstPage = {
+      ...createPdfPage(),
+      getTextContent: vi.fn().mockResolvedValue(createPdfTextContent('needle on the first page')),
+    }
+    const secondPage = {
+      ...createPdfPage(),
+      getTextContent: vi.fn(() => secondPageText.promise),
+    }
+    const loadingTask = {
+      destroy: vi.fn().mockResolvedValue(undefined),
+      promise: Promise.resolve<unknown>(undefined),
+    }
+    const pdfDocument = {
+      getPage: vi.fn((page: number) => Promise.resolve(page === 1 ? firstPage : secondPage)),
+      loadingTask,
+      numPages: 2,
+    }
+    loadingTask.promise = Promise.resolve(pdfDocument)
+    pdfJsMocks.getDocument.mockReturnValue(loadingTask)
+    stubPdfViewerRuntime()
+    const viewer = mountPdfViewer(
+      new Blob([Uint8Array.of(2)], { type: 'application/pdf' }),
+      createPdfEntry('search-current-layer-error', 'Search current layer error'),
+    )
+
+    try {
+      await vi.waitFor(() => expect(viewer.host.textContent).toContain('1 / 2'))
+
+      viewer.searchQuery.value = 'needle'
+      await nextTick()
+      await vi.waitFor(() => {
+        expect(secondPage.getTextContent).toHaveBeenCalledOnce()
+        expect(pdfJsMocks.renderTextLayer).toHaveBeenCalledOnce()
+      })
+
+      textLayerRender.reject(new Error('current text-layer failed'))
+      await vi.waitFor(() => {
+        expect(latestSearchState(viewer.searchStates).statusText)
+          .toBe('搜索文本读取失败, 请重试')
+      })
+
+      secondPageText.resolve(createPdfTextContent('second page text'))
+      await flushSettledWork()
+
+      expect(latestSearchState(viewer.searchStates)).toEqual({
+        activeIndex: -1,
+        announcement: 'PDF 搜索文本读取失败, 请重试。',
+        statusText: '搜索文本读取失败, 请重试',
+        total: 0,
+      })
+      expect(viewer.host.querySelector('[role="alert"]')).toBeNull()
+      expect(viewer.host.textContent).toContain('1 / 2')
+      expect(pdfJsMocks.renderTextLayer).toHaveBeenCalledOnce()
+    }
+    finally {
+      viewer.unmount()
+    }
+  })
+
+  test('keeps the PDF page readable when initial search extraction fails', async () => {
+    const searchFixture = createSearchPdfLoadingTask({
+      getTextContent: () => Promise.reject(new Error('initial extraction failed')),
+    })
+    pdfJsMocks.getDocument.mockReturnValue(searchFixture.loadingTask)
+    stubPdfViewerRuntime()
+    const viewer = mountPdfViewer(
+      new Blob([Uint8Array.of(1)], { type: 'application/pdf' }),
+      createPdfEntry('search-initial', 'Search initial'),
+      'needle',
+    )
+
+    try {
+      await vi.waitFor(() => {
+        expect(latestSearchState(viewer.searchStates).statusText)
+          .toBe('搜索文本读取失败, 请重试')
+      })
+
+      expect(viewer.host.querySelector('[role="alert"]')).toBeNull()
+      expect(viewer.host.textContent).not.toContain('这一页暂时无法显示')
+      expect(viewer.host.querySelector('[data-testid="pdf-viewer-canvas"]')?.getAttribute('aria-label'))
+        .toBe('PDF 第 1 页, 共 1 页')
+    }
+    finally {
+      viewer.unmount()
+    }
+  })
+
+  test('retries text extraction after a failed search', async () => {
+    const searchFixture = createSearchPdfLoadingTask({
+      getTextContentError: new Error('temporary extraction failure'),
+      searchableText: 'available text',
+    })
+    pdfJsMocks.getDocument.mockReturnValue(searchFixture.loadingTask)
+    stubPdfViewerRuntime()
+    const viewer = mountPdfViewer(
+      new Blob([Uint8Array.of(1)], { type: 'application/pdf' }),
+      createPdfEntry('search-retry', 'Search retry'),
+    )
+
+    try {
+      await vi.waitFor(() => expect(viewer.host.textContent).toContain('1 / 1'))
+
+      viewer.searchQuery.value = 'first query'
+      await nextTick()
+      await vi.waitFor(() => {
+        expect(latestSearchState(viewer.searchStates).statusText)
+          .toBe('搜索文本读取失败, 请重试')
+      })
+
+      viewer.searchQuery.value = ''
+      await nextTick()
+      viewer.searchQuery.value = 'first query'
+      await nextTick()
+      await vi.waitFor(() => {
+        expect(latestSearchState(viewer.searchStates)).toEqual({
+          activeIndex: -1,
+          announcement: undefined,
+          resultContext: undefined,
+          statusText: undefined,
+          total: 0,
+        })
+      })
+      expect(searchFixture.getTextContent).toHaveBeenCalledTimes(2)
+      expect(viewer.host.textContent).toContain('1 / 1')
+    }
+    finally {
+      viewer.unmount()
+    }
+  })
+
+  test('does not let an earlier document search failure overwrite the latest search', async () => {
+    const staleExtraction = createDeferred<ReturnType<typeof createPdfTextContent>>()
+    const staleFixture = createSearchPdfLoadingTask({
+      getTextContent: () => staleExtraction.promise,
+    })
+    const currentFixture = createSearchPdfLoadingTask({ searchableText: 'current document text' })
+    pdfJsMocks.getDocument
+      .mockReturnValueOnce(staleFixture.loadingTask)
+      .mockReturnValueOnce(currentFixture.loadingTask)
+    stubPdfViewerRuntime()
+    const viewer = mountPdfViewer(
+      new Blob([Uint8Array.of(1)], { type: 'application/pdf' }),
+      createPdfEntry('search-stale', 'Search stale'),
+    )
+
+    try {
+      await vi.waitFor(() => expect(viewer.host.textContent).toContain('1 / 1'))
+      viewer.searchQuery.value = 'missing query'
+      await nextTick()
+      await vi.waitFor(() => expect(staleFixture.getTextContent).toHaveBeenCalledOnce())
+
+      viewer.entry.value = createPdfEntry('search-current', 'Search current')
+      viewer.blob.value = new Blob([Uint8Array.of(2)], { type: 'application/pdf' })
+      await nextTick()
+      await vi.waitFor(() => {
+        expect(viewer.host.textContent).toContain('Search current')
+        expect(currentFixture.getTextContent).toHaveBeenCalledOnce()
+        expect(latestSearchState(viewer.searchStates)).toEqual({
+          activeIndex: -1,
+          announcement: undefined,
+          resultContext: undefined,
+          statusText: undefined,
+          total: 0,
+        })
+      })
+      const successfulState = latestSearchState(viewer.searchStates)
+      const successfulStateCount = viewer.searchStates.length
+
+      staleExtraction.reject(new Error('stale extraction failed'))
+      await flushSettledWork()
+
+      expect(viewer.searchStates).toHaveLength(successfulStateCount)
+      expect(latestSearchState(viewer.searchStates)).toBe(successfulState)
+      expect(viewer.host.textContent).toContain('Search current')
+      expect(viewer.host.textContent).toContain('1 / 1')
+    }
+    finally {
+      viewer.unmount()
+    }
+  })
+
+  test('does not let an earlier text-layer failure overwrite a newer search', async () => {
+    const staleTextLayer = createDeferred<ReturnType<typeof createPdfTextContent>>()
+    const pages = Array.from({ length: 9 }, (_, index) => ({
+      ...createPdfPage(),
+      getTextContent: index === 0
+        ? vi.fn()
+            .mockResolvedValueOnce(createPdfTextContent('old query'))
+            .mockImplementationOnce(() => staleTextLayer.promise)
+        : vi.fn().mockResolvedValue(createPdfTextContent(`page ${index + 1}`)),
+    }))
+    const loadingTask = {
+      destroy: vi.fn().mockResolvedValue(undefined),
+      promise: Promise.resolve<unknown>(undefined),
+    }
+    const pdfDocument = {
+      getPage: vi.fn((page: number) => Promise.resolve(pages[page - 1]!)),
+      loadingTask,
+      numPages: pages.length,
+    }
+    loadingTask.promise = Promise.resolve(pdfDocument)
+    pdfJsMocks.getDocument.mockReturnValue(loadingTask)
+    stubPdfViewerRuntime()
+    const viewer = mountPdfViewer(
+      new Blob([Uint8Array.of(9)], { type: 'application/pdf' }),
+      createPdfEntry('search-stale-layer', 'Search stale layer'),
+    )
+
+    try {
+      await vi.waitFor(() => expect(viewer.host.textContent).toContain('1 / 9'))
+      viewer.searchQuery.value = 'old query'
+      await nextTick()
+      await vi.waitFor(() => {
+        expect(pages[8]!.getTextContent).toHaveBeenCalledOnce()
+        expect(latestSearchState(viewer.searchStates).total).toBe(1)
+        expect(latestSearchState(viewer.searchStates).resultContext).toBe('第 1 页')
+      })
+
+      for (let page = 2; page <= 9; page += 1) {
+        viewer.host.querySelector<HTMLButtonElement>('button[aria-label="下一页"]')?.click()
+        await vi.waitFor(() => {
+          expect(viewer.host.querySelector('.pdf-viewer__page-total')?.textContent).toBe(`${page} / 9`)
+        })
+      }
+
+      const pageInput = viewer.host.querySelector<HTMLInputElement>('input[aria-label="跳转页码"]')!
+      pageInput.value = '1'
+      pageInput.dispatchEvent(new Event('input', { bubbles: true }))
+      pageInput.dispatchEvent(new Event('change', { bubbles: true }))
+      await vi.waitFor(() => expect(pages[0]!.getTextContent).toHaveBeenCalledTimes(2))
+
+      viewer.searchQuery.value = 'new query'
+      await nextTick()
+      await vi.waitFor(() => {
+        expect(latestSearchState(viewer.searchStates)).toEqual({
+          activeIndex: -1,
+          announcement: undefined,
+          resultContext: undefined,
+          statusText: undefined,
+          total: 0,
+        })
+      })
+      const successfulState = latestSearchState(viewer.searchStates)
+      const successfulStateCount = viewer.searchStates.length
+
+      staleTextLayer.reject(new Error('stale text-layer extraction failed'))
+      await flushSettledWork()
+
+      expect(viewer.searchStates).toHaveLength(successfulStateCount)
+      expect(latestSearchState(viewer.searchStates)).toBe(successfulState)
+      expect(viewer.host.querySelector('[role="alert"]')).toBeNull()
+      expect(viewer.host.textContent).toContain('1 / 9')
+    }
+    finally {
+      viewer.unmount()
+    }
+  })
+})
+
+function mountPdfViewer(initialBlob: Blob, initialEntry: LibraryEntry, initialSearchQuery = '') {
   const entry = shallowRef(initialEntry)
   const blob = shallowRef<Blob>(initialBlob)
+  const searchQuery = shallowRef(initialSearchQuery)
+  const searchStates: PdfSearchState[] = []
   const host = document.createElement('div')
   document.body.append(host)
   const app = createApp(defineComponent({
@@ -293,7 +671,8 @@ function mountPdfViewer(initialBlob: Blob, initialEntry: LibraryEntry) {
         blob: blob.value,
         entry: entry.value,
         position: null,
-        searchQuery: '',
+        searchQuery: searchQuery.value,
+        onSearchChange: (state: PdfSearchState) => searchStates.push(state),
       })
     },
   }))
@@ -304,6 +683,8 @@ function mountPdfViewer(initialBlob: Blob, initialEntry: LibraryEntry) {
     blob,
     entry,
     host,
+    searchQuery,
+    searchStates,
     unmount() {
       if (isMounted) {
         app.unmount()
@@ -312,6 +693,12 @@ function mountPdfViewer(initialBlob: Blob, initialEntry: LibraryEntry) {
       host.remove()
     },
   }
+}
+
+function latestSearchState(states: PdfSearchState[]): PdfSearchState {
+  const state = states.at(-1)
+  expect(state).toBeDefined()
+  return state!
 }
 
 function stubPdfViewerRuntime(): void {
@@ -400,6 +787,58 @@ function createPdfPage(
       width: 612 * scale,
     }),
     render: vi.fn(() => renderTask),
+  }
+}
+
+function createSearchPdfLoadingTask(options: {
+  getPageError?: Error
+  getTextContent?: () => Promise<ReturnType<typeof createPdfTextContent>>
+  getTextContentError?: Error
+  searchableText?: string
+} = {}) {
+  const renderPage = createPdfPage()
+  const getTextContent = options.getTextContent ? vi.fn(options.getTextContent) : vi.fn()
+  if (!options.getTextContent) {
+    if (options.getTextContentError) {
+      getTextContent.mockRejectedValueOnce(options.getTextContentError)
+    }
+    getTextContent.mockResolvedValue(createPdfTextContent(options.searchableText ?? 'searchable text'))
+  }
+  const searchPage = {
+    ...createPdfPage(),
+    getTextContent,
+  }
+  const getPage = vi.fn()
+    .mockResolvedValueOnce(renderPage)
+    .mockImplementation(() => {
+      if (options.getPageError) {
+        return Promise.reject(options.getPageError)
+      }
+
+      return Promise.resolve(searchPage)
+    })
+  const loadingTask = {
+    destroy: vi.fn().mockResolvedValue(undefined),
+    promise: Promise.resolve<unknown>(undefined),
+  }
+  const pdfDocument = {
+    getPage,
+    loadingTask,
+    numPages: 1,
+  }
+  loadingTask.promise = Promise.resolve(pdfDocument)
+
+  return {
+    getPage,
+    getTextContent,
+    loadingTask,
+  }
+}
+
+function createPdfTextContent(text = '') {
+  return {
+    items: text ? [{ hasEOL: false, str: text }] : [],
+    styles: {},
   }
 }
 
