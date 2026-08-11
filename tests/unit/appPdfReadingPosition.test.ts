@@ -2805,6 +2805,282 @@ describe('App document activation and PDF reading position ownership', () => {
     },
   )
 
+  test('keeps the current PDF position active when its persistence fails and retries later', async () => {
+    const entry = createPdfEntry('pdf-position-save-retry', 'PDF position save retry')
+    const opened = createOpenPdfDocument(entry)
+    const saveError = new Error('PDF position save failed')
+    const appErrors: unknown[] = []
+
+    libraryStoreMocks.listEntries.mockResolvedValue([entry])
+    libraryStoreMocks.openPdfDocument.mockResolvedValue(opened)
+    libraryStoreMocks.saveReadingPosition.mockImplementation(async position => ({
+      ...position,
+      updatedAt: '2026-08-11T00:00:01.000Z',
+    }))
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+
+    const mounted = mountApp(error => appErrors.push(error))
+
+    try {
+      await showLibrary(mounted.host)
+      await openLibraryEntry(mounted.host, entry.title)
+      await vi.waitFor(() => {
+        expect(mounted.host.querySelector<HTMLButtonElement>('[aria-label="下一页"]')?.disabled).toBe(false)
+        expect(libraryStoreMocks.saveReadingPosition).toHaveBeenCalledWith(
+          expect.objectContaining({ documentId: entry.id, pageNumber: 1 }),
+        )
+      })
+      await flushSettledWork()
+
+      libraryStoreMocks.saveReadingPosition.mockClear()
+      libraryStoreMocks.saveReadingPosition.mockRejectedValueOnce(saveError)
+      click(mounted.host, '[aria-label="下一页"]')
+      await vi.waitFor(() => expect(libraryStoreMocks.saveReadingPosition).toHaveBeenCalledWith(
+        expect.objectContaining({ documentId: entry.id, pageNumber: 2 }),
+      ))
+      await flushSettledWork()
+
+      expect(mounted.host.querySelector('[aria-label="PDF 第 2 页, 共 5 页"]')).not.toBeNull()
+      expect(mounted.host.querySelector('[data-testid="pdf-position-save-status"]')?.textContent)
+        .toContain('PDF 阅读位置暂时无法保存')
+      expect(appErrors).toEqual([])
+
+      await showLibrary(mounted.host)
+      click(mounted.host, '[data-testid="library-open-button"]')
+      await vi.waitFor(() => {
+        expect(mounted.host.querySelector('[aria-label="PDF 第 2 页, 共 5 页"]')).not.toBeNull()
+        expect(libraryStoreMocks.saveReadingPosition).toHaveBeenCalledTimes(2)
+        expect(libraryStoreMocks.saveReadingPosition).toHaveBeenNthCalledWith(
+          2,
+          expect.objectContaining({ documentId: entry.id, pageNumber: 2, type: 'pdf' }),
+        )
+      })
+      await flushSettledWork()
+
+      expect(mounted.host.querySelector('[data-testid="pdf-position-save-status"]')?.textContent)
+        .not.toContain('PDF 阅读位置暂时无法保存')
+      expect(mounted.host.querySelector('[data-testid="pdf-position-save-status"]')?.textContent)
+        .toContain('PDF 阅读位置已恢复保存')
+      await bookmarkCurrentPdf(mounted.host)
+      expect(readBookmarks()).toEqual([
+        expect.objectContaining({
+          documentKey: `library:${entry.id}`,
+          kind: 'pdf-page',
+          target: { pageNumber: 2 },
+        }),
+      ])
+      expect(mounted.host.querySelector('.app-shell__live-status')?.textContent)
+        .toContain('已添加第 2 页书签')
+      expect(mounted.host.querySelector('[data-testid="pdf-position-save-status"]')?.textContent)
+        .toContain('PDF 阅读位置已恢复保存')
+      expect(appErrors).toEqual([])
+    }
+    finally {
+      mounted.unmount()
+    }
+  })
+
+  test('keeps a PDF position save warning when import completion publishes its status', async () => {
+    const entry = createPdfEntry('pdf-position-import-status', 'PDF position import status')
+    const activationRefresh = createDeferred<LibraryEntry[]>()
+    const appErrors: unknown[] = []
+
+    libraryStoreMocks.addPdfDocument.mockResolvedValue(entry)
+    libraryStoreMocks.listEntries.mockReturnValue(activationRefresh.promise)
+    libraryStoreMocks.saveReadingPosition.mockRejectedValue(new Error('PDF import position save failed'))
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+
+    const mounted = mountApp(error => appErrors.push(error))
+
+    try {
+      await dispatchFile(mounted.host, new File([Uint8Array.of(1)], 'PDF position import status.pdf', {
+        type: 'application/pdf',
+      }))
+      await vi.waitFor(() => {
+        expect(mounted.host.querySelector('[data-testid="pdf-viewer"]')).not.toBeNull()
+        expect(libraryStoreMocks.saveReadingPosition).toHaveBeenCalledWith(
+          expect.objectContaining({ documentId: entry.id, pageNumber: 1, type: 'pdf' }),
+        )
+        expect(mounted.host.querySelector('[data-testid="pdf-position-save-status"]')?.textContent)
+          .toContain('PDF 阅读位置暂时无法保存')
+      })
+
+      activationRefresh.resolve([entry])
+      await vi.waitFor(() => {
+        expect(mounted.host.querySelector('.app-shell__live-status')?.textContent)
+          .toContain('PDF 已加入文库')
+        expect(mounted.host.querySelector('[data-testid="pdf-position-save-status"]')?.textContent)
+          .toContain('PDF 阅读位置暂时无法保存')
+      })
+      expect(appErrors).toEqual([])
+    }
+    finally {
+      mounted.unmount()
+      activationRefresh.resolve([entry])
+      await flushSettledWork()
+    }
+  })
+
+  test('ignores a stale PDF position save failure after a newer position persists', async () => {
+    const entry = createPdfEntry('pdf-position-stale-rejection', 'PDF stale position rejection')
+    const opened = createOpenPdfDocument(entry)
+    const staleSave = createDeferred<PdfReadingPosition>()
+    const staleError = new Error('stale PDF position save failed')
+    const appErrors: unknown[] = []
+
+    libraryStoreMocks.listEntries.mockResolvedValue([entry])
+    libraryStoreMocks.openPdfDocument.mockResolvedValue(opened)
+    libraryStoreMocks.saveReadingPosition.mockImplementation(async position => ({
+      ...position,
+      updatedAt: '2026-08-11T00:00:01.000Z',
+    }))
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+
+    const mounted = mountApp(error => appErrors.push(error))
+
+    try {
+      await showLibrary(mounted.host)
+      await openLibraryEntry(mounted.host, entry.title)
+      await vi.waitFor(() => {
+        expect(mounted.host.querySelector<HTMLButtonElement>('[aria-label="下一页"]')?.disabled).toBe(false)
+        expect(libraryStoreMocks.saveReadingPosition).toHaveBeenCalledWith(
+          expect.objectContaining({ documentId: entry.id, pageNumber: 1 }),
+        )
+      })
+      await flushSettledWork()
+
+      libraryStoreMocks.saveReadingPosition.mockClear()
+      libraryStoreMocks.saveReadingPosition.mockImplementation(async (position) => {
+        if (position.pageNumber === 2) {
+          return staleSave.promise
+        }
+
+        return {
+          ...position,
+          updatedAt: '2026-08-11T00:00:02.000Z',
+        }
+      })
+      click(mounted.host, '[aria-label="下一页"]')
+      await vi.waitFor(() => expect(libraryStoreMocks.saveReadingPosition).toHaveBeenCalledWith(
+        expect.objectContaining({ documentId: entry.id, pageNumber: 2 }),
+      ))
+      click(mounted.host, '[aria-label="下一页"]')
+      await vi.waitFor(() => expect(libraryStoreMocks.saveReadingPosition).toHaveBeenCalledWith(
+        expect.objectContaining({ documentId: entry.id, pageNumber: 3 }),
+      ))
+      await flushSettledWork()
+
+      expect(libraryStoreMocks.saveReadingPosition).toHaveBeenCalledTimes(2)
+      expect(libraryStoreMocks.saveReadingPosition).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ documentId: entry.id, pageNumber: 2, type: 'pdf' }),
+      )
+      expect(libraryStoreMocks.saveReadingPosition).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ documentId: entry.id, pageNumber: 3, type: 'pdf' }),
+      )
+
+      const currentPositionStatus = mounted.host
+        .querySelector('[data-testid="pdf-position-save-status"]')?.textContent
+      staleSave.reject(staleError)
+      await flushSettledWork()
+
+      expect(mounted.host.querySelector('[aria-label="PDF 第 3 页, 共 5 页"]')).not.toBeNull()
+      expect(mounted.host.querySelector('[data-testid="pdf-position-save-status"]')?.textContent)
+        .toBe(currentPositionStatus)
+      expect(appErrors).toEqual([])
+      await bookmarkCurrentPdf(mounted.host)
+      expect(readBookmarks()).toEqual([
+        expect.objectContaining({
+          documentKey: `library:${entry.id}`,
+          kind: 'pdf-page',
+          target: { pageNumber: 3 },
+        }),
+      ])
+    }
+    finally {
+      mounted.unmount()
+      staleSave.resolve({
+        ...createPdfPosition(entry.id, 2),
+        updatedAt: '2026-08-11T00:00:03.000Z',
+      })
+      await flushSettledWork()
+    }
+  })
+
+  test('ignores a position save failure from an earlier activation of the same PDF', async () => {
+    const entry = createPdfEntry('pdf-position-stale-activation', 'PDF stale activation rejection')
+    const stalePosition = createPdfPosition(entry.id, 3)
+    const firstOpen = createOpenPdfDocument(entry, stalePosition)
+    const secondOpen = createOpenPdfDocument(entry)
+    const staleSave = createDeferred<PdfReadingPosition>()
+    const secondRead = createDeferred<ArrayBuffer>()
+    const appErrors: unknown[] = []
+
+    vi.spyOn(firstOpen.blob, 'arrayBuffer').mockResolvedValue(Uint8Array.of(5).buffer)
+    const secondBlobRead = vi.spyOn(secondOpen.blob, 'arrayBuffer')
+      .mockImplementation(() => secondRead.promise)
+    libraryStoreMocks.listEntries.mockResolvedValue([entry])
+    libraryStoreMocks.openPdfDocument
+      .mockResolvedValueOnce(firstOpen)
+      .mockResolvedValueOnce(secondOpen)
+    libraryStoreMocks.saveReadingPosition.mockImplementation(async (position) => {
+      if (position.pageNumber === stalePosition.pageNumber) {
+        return staleSave.promise
+      }
+
+      return {
+        ...position,
+        updatedAt: '2026-08-11T00:00:01.000Z',
+      }
+    })
+    libraryStoreMocks.close.mockResolvedValue(undefined)
+
+    const mounted = mountApp(error => appErrors.push(error))
+
+    try {
+      await showLibrary(mounted.host)
+      await openLibraryEntry(mounted.host, entry.title)
+      await vi.waitFor(() => expect(libraryStoreMocks.saveReadingPosition).toHaveBeenCalledWith(
+        expect.objectContaining({ documentId: entry.id, pageNumber: 3, type: 'pdf' }),
+      ))
+
+      await showLibrary(mounted.host)
+      await openLibraryEntry(mounted.host, entry.title)
+      await vi.waitFor(() => {
+        expect(mounted.host.textContent).toContain(entry.title)
+        expect(secondBlobRead).toHaveBeenCalledOnce()
+      })
+      expect(libraryStoreMocks.saveReadingPosition).toHaveBeenCalledTimes(1)
+
+      const currentPositionStatus = mounted.host
+        .querySelector('[data-testid="pdf-position-save-status"]')?.textContent
+      staleSave.reject(new Error('stale activation position save failed'))
+      await flushSettledWork()
+
+      expect(mounted.host.querySelector('[data-testid="pdf-position-save-status"]')?.textContent)
+        .toBe(currentPositionStatus)
+      expect(appErrors).toEqual([])
+      await bookmarkCurrentPdf(mounted.host)
+      expect(readBookmarks()).toEqual([
+        expect.objectContaining({
+          documentKey: `library:${entry.id}`,
+          kind: 'pdf-page',
+          target: { pageNumber: 1 },
+        }),
+      ])
+    }
+    finally {
+      mounted.unmount()
+      staleSave.resolve({
+        ...stalePosition,
+        updatedAt: '2026-08-11T00:00:02.000Z',
+      })
+      secondRead.resolve(Uint8Array.of(5).buffer)
+      await flushSettledWork()
+    }
+  })
+
   test('does not apply a completed save to a PDF opened while that save was pending', async () => {
     const slowEntry = createPdfEntry('slow-a', 'Slow A')
     const fastEntry = createPdfEntry('fast-b', 'Fast B')
