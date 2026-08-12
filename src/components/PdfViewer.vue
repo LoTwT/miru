@@ -58,6 +58,17 @@ interface PdfSearchContext {
   sequence: number
 }
 
+interface PdfSearchRevealContext {
+  generation: number
+  matchId: string
+  search: PdfSearchContext
+  viewMode: PdfViewMode
+}
+
+interface ScrollToPageOptions {
+  isCurrent?: () => boolean
+}
+
 const props = defineProps<{
   blob: Blob
   entry: LibraryEntry
@@ -118,6 +129,7 @@ let scrollPrepareSequence = 0
 let scrollRenderGeneration = 0
 let scrollPositionSyncTimer: ReturnType<typeof window.setTimeout> | undefined
 let programmaticScrollPage: number | null = null
+let programmaticScrollIsCurrent: (() => boolean) | null = null
 let scrollNavigationSequence = 0
 let sideControlFrame: number | undefined
 let pendingZoomDelta = 0
@@ -141,6 +153,7 @@ const pdfLoadingTaskDestructions = new WeakMap<PDFDocumentLoadingTask, Promise<v
 let pagedTextLayer: PdfTextLayer | null = null
 let pendingPagedTextLayer: PdfTextLayer | null = null
 let searchSequence = 0
+let searchRevealGeneration = 0
 let activeDocumentLoad: Promise<PdfDocumentLoadOutcome> | null = null
 
 const isReady = computed(() => loadState.value === 'ready' && totalPages.value > 0)
@@ -481,6 +494,7 @@ function clearTextLayerContent(container: HTMLDivElement | null | undefined): vo
 }
 
 function clearSearch(options: { emitState?: boolean } = {}): void {
+  invalidatePdfSearchReveal()
   searchSequence += 1
   searchMatches.value = []
   searchMatchesByPage.clear()
@@ -495,6 +509,7 @@ function clearSearch(options: { emitState?: boolean } = {}): void {
 }
 
 async function runPdfSearch(query = props.searchQuery): Promise<void> {
+  invalidatePdfSearchReveal()
   const normalizedQuery = query.trim()
   const sequence = ++searchSequence
   const document = pdfDocument
@@ -609,6 +624,7 @@ function isPdfSearchCurrent(
 }
 
 function reportPdfSearchExtractionError(): void {
+  invalidatePdfSearchReveal()
   searchSequence += 1
   searchMatches.value = []
   searchMatchesByPage.clear()
@@ -640,6 +656,35 @@ function capturePdfSearchContext(): PdfSearchContext | null {
 function isPdfSearchContextCurrent(context: PdfSearchContext): boolean {
   return shouldRenderPdfSearchTextLayer()
     && isPdfSearchCurrent(context.sequence, context.normalizedQuery, context.document)
+}
+
+function invalidatePdfSearchReveal(): void {
+  searchRevealGeneration += 1
+  if (programmaticScrollIsCurrent !== null) {
+    cancelProgrammaticScrollNavigation()
+  }
+}
+
+function beginPdfSearchReveal(match: PdfSearchMatch): PdfSearchRevealContext | null {
+  invalidatePdfSearchReveal()
+  const search = capturePdfSearchContext()
+  if (!search) {
+    return null
+  }
+
+  return {
+    generation: searchRevealGeneration,
+    matchId: match.id,
+    search,
+    viewMode: viewMode.value,
+  }
+}
+
+function isPdfSearchRevealCurrent(context: PdfSearchRevealContext): boolean {
+  return context.generation === searchRevealGeneration
+    && context.viewMode === viewMode.value
+    && context.matchId === searchMatches.value[activeSearchIndex.value]?.id
+    && isPdfSearchContextCurrent(context.search)
 }
 
 function publishPdfSearchProgress(
@@ -759,9 +804,14 @@ function goToSearchMatch(delta: number): void {
 }
 
 async function revealSearchMatch(match: PdfSearchMatch, options: { behavior?: ScrollBehavior } = {}): Promise<void> {
+  const context = beginPdfSearchReveal(match)
+  if (!context || !isPdfSearchRevealCurrent(context)) {
+    return
+  }
+
   const behavior = options.behavior ?? getPreferredScrollBehavior()
-  if (viewMode.value === 'scroll') {
-    await revealScrollSearchMatch(match, behavior)
+  if (context.viewMode === 'scroll') {
+    await revealScrollSearchMatch(match, behavior, context)
     return
   }
 
@@ -769,23 +819,58 @@ async function revealSearchMatch(match: PdfSearchMatch, options: { behavior?: Sc
   if (!hasCurrentTextLayer) {
     pageNumber.value = match.pageNumber
     await nextTick()
+    if (!isPdfSearchRevealCurrent(context)) {
+      return
+    }
+
     await renderCurrentPage()
+    if (!isPdfSearchRevealCurrent(context)) {
+      return
+    }
   }
+
+  if (!isPdfSearchRevealCurrent(context)) {
+    return
+  }
+
   updateActiveSearchHighlights(undefined, match)
   scrollActiveSearchElementIntoView(behavior)
   emitSearchState()
 }
 
-async function revealScrollSearchMatch(match: PdfSearchMatch, behavior: ScrollBehavior): Promise<void> {
+async function revealScrollSearchMatch(
+  match: PdfSearchMatch,
+  behavior: ScrollBehavior,
+  context: PdfSearchRevealContext,
+): Promise<void> {
+  const isCurrent = () => isPdfSearchRevealCurrent(context)
+  if (!isCurrent()) {
+    return
+  }
+
   pageNumber.value = clampPageNumber(match.pageNumber)
   ensureScrollPageBuffered(match.pageNumber)
-  await scrollToPage(match.pageNumber)
+  if (!await scrollToPage(match.pageNumber, { isCurrent }) || !isCurrent()) {
+    return
+  }
+
   await nextTick()
+  if (!isCurrent()) {
+    return
+  }
+
   await renderScrollPage(match.pageNumber, -1)
+  if (!isCurrent()) {
+    return
+  }
+
   updateActiveSearchHighlights(undefined, match)
 
   const target = getRenderedSearchMatchElement(match)
   const stage = pageStageRef.value
+  if (!isCurrent()) {
+    return
+  }
   if (!target || !stage) {
     emitSearchState()
     return
@@ -794,6 +879,9 @@ async function revealScrollSearchMatch(match: PdfSearchMatch, behavior: ScrollBe
   const stageRect = stage.getBoundingClientRect()
   const targetRect = target.getBoundingClientRect()
   const nextTop = stage.scrollTop + targetRect.top - stageRect.top - (stage.clientHeight * 0.35)
+  if (!isCurrent()) {
+    return
+  }
   stage.scrollTo({ top: Math.max(0, nextTop), behavior })
   emitPosition()
   emitSearchState()
@@ -1383,6 +1471,7 @@ function goToNextPage(): void {
 }
 
 function goToPage(nextPageNumber: number): void {
+  invalidatePdfSearchReveal()
   const nextPage = clampPageNumber(nextPageNumber)
 
   if (viewMode.value === 'scroll') {
@@ -1427,6 +1516,7 @@ function setViewMode(nextMode: PdfViewMode): void {
     return
   }
 
+  invalidatePdfSearchReveal()
   if (nextMode !== 'scroll') {
     cancelProgrammaticScrollNavigation()
   }
@@ -1704,11 +1794,21 @@ function getScrollBoundaryPage(): number | null {
   return null
 }
 
-function startProgrammaticScrollNavigation(page: number): number {
+function startProgrammaticScrollNavigation(
+  page: number,
+  isCurrent: (() => boolean) | null = null,
+): number {
   scrollNavigationSequence += 1
   programmaticScrollPage = page
+  programmaticScrollIsCurrent = isCurrent
   clearScrollPositionSyncTimer()
   return scrollNavigationSequence
+}
+
+function isProgrammaticScrollNavigationCurrent(sequence: number, page: number): boolean {
+  return sequence === scrollNavigationSequence
+    && programmaticScrollPage === page
+    && (programmaticScrollIsCurrent?.() ?? true)
 }
 
 function scheduleProgrammaticScrollRelease(): void {
@@ -1723,16 +1823,19 @@ function scheduleProgrammaticScrollRelease(): void {
   scrollPositionSyncTimer = window.setTimeout(() => {
     scrollPositionSyncTimer = undefined
     if (
-      navigationSequence !== scrollNavigationSequence
+      !isProgrammaticScrollNavigationCurrent(navigationSequence, targetPage)
       || prepareSequence !== scrollPrepareSequence
-      || programmaticScrollPage !== targetPage
       || viewMode.value !== 'scroll'
       || scrollModeStatus.value !== 'idle'
     ) {
+      if (navigationSequence === scrollNavigationSequence) {
+        cancelProgrammaticScrollNavigation()
+      }
       return
     }
 
     programmaticScrollPage = null
+    programmaticScrollIsCurrent = null
     pageNumber.value = targetPage
     updateBufferedScrollPages([targetPage])
     emitPosition()
@@ -1743,10 +1846,12 @@ function scheduleProgrammaticScrollRelease(): void {
 function cancelProgrammaticScrollNavigation(): void {
   scrollNavigationSequence += 1
   programmaticScrollPage = null
+  programmaticScrollIsCurrent = null
   clearScrollPositionSyncTimer()
 }
 
 function handleManualScrollIntent(): void {
+  invalidatePdfSearchReveal()
   if (programmaticScrollPage !== null) {
     cancelProgrammaticScrollNavigation()
   }
@@ -2169,14 +2274,18 @@ function updatePageSlot(page: number, patch: Partial<Omit<PdfPageSlot, 'pageNumb
   triggerRef(pageSlots)
 }
 
-async function scrollToPage(page: number): Promise<void> {
+async function scrollToPage(page: number, options: ScrollToPageOptions = {}): Promise<boolean> {
+  if (options.isCurrent && !options.isCurrent()) {
+    return false
+  }
+
   const previousPage = pageNumber.value
   const nextPage = clampPageNumber(page)
   if (nextPage !== previousPage) {
     cancelPendingZoomAdjustment()
   }
   pageNumber.value = nextPage
-  const navigationSequence = startProgrammaticScrollNavigation(nextPage)
+  const navigationSequence = startProgrammaticScrollNavigation(nextPage, options.isCurrent ?? null)
   updateBufferedScrollPages([nextPage])
   scrollVirtualizer.value.scrollToIndex(nextPage - 1, {
     align: 'start',
@@ -2185,14 +2294,17 @@ async function scrollToPage(page: number): Promise<void> {
   scheduleProgrammaticScrollRelease()
 
   await nextTick()
-  if (navigationSequence !== scrollNavigationSequence || programmaticScrollPage !== nextPage) {
-    return
+  if (!isProgrammaticScrollNavigationCurrent(navigationSequence, nextPage)) {
+    if (navigationSequence === scrollNavigationSequence) {
+      cancelProgrammaticScrollNavigation()
+    }
+    return false
   }
   const stage = pageStageRef.value
   const element = scrollPageElements.get(nextPage)
   if (!stage || !element) {
     emitPosition()
-    return
+    return true
   }
 
   const stageRect = stage.getBoundingClientRect()
@@ -2202,6 +2314,7 @@ async function scrollToPage(page: number): Promise<void> {
   scheduleProgrammaticScrollRelease()
   queueSideControlPositionUpdate()
   emitPosition()
+  return true
 }
 
 function getPreferredScrollBehavior(): ScrollBehavior {
