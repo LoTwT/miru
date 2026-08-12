@@ -46,6 +46,42 @@ test('adds pasted markdown to the local library and reopens it from the bookshel
   await expect(page.locator('.reader-surface')).toBeFocused()
 })
 
+test.describe('library view resource load recovery', () => {
+  test.use({ serviceWorkers: 'block' })
+
+  test('keeps the active reader available when the library view chunk fails to load', async ({ page }) => {
+    const libraryChunkPattern = /\/assets\/LibraryView-[^/?]+\.js(?:\?.*)?$/
+    let libraryChunkRequests = 0
+    await page.route(libraryChunkPattern, async (route) => {
+      libraryChunkRequests += 1
+      await route.abort('failed')
+    })
+    await page.goto('/')
+
+    await pasteText(page, '# Chunk-safe document\n\nStill readable while the bookshelf is unavailable.')
+    await waitForReaderReady(page, 'Chunk-safe document')
+    await page.getByTestId('library-open-button').click()
+
+    await expect.poll(() => libraryChunkRequests).toBeGreaterThan(0)
+    await expect(page.getByTestId('library-view')).toHaveCount(0)
+    await expect(page.locator('.reader-surface')).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Chunk-safe document' })).toBeVisible()
+    await expect(page.getByText('Still readable while the bookshelf is unavailable.')).toBeVisible()
+    await expect(page.getByTestId('library-open-button')).toContainText('文库')
+
+    const inputMenu = page.getByTestId('floating-affordance-menu')
+    await expect(inputMenu).toBeVisible()
+    await expect(inputMenu.getByRole('status')).toContainText('文库界面暂时无法加载')
+    await expect(inputMenu.getByRole('status')).toContainText('重新加载页面')
+
+    await page.unroute(libraryChunkPattern)
+    await page.reload()
+    await page.getByTestId('library-open-button').click()
+    await expect(page.getByTestId('library-view')).toBeVisible()
+    await expect(page.getByTestId('library-entry').filter({ hasText: 'Chunk-safe document' })).toBeVisible()
+  })
+})
+
 test('keeps a Markdown entry retryable after a transient body read failure', async ({ page }) => {
   await page.addInitScript(() => {
     const target = window as LibraryReadFaultWindow
