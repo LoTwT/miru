@@ -30,6 +30,44 @@ afterEach(() => {
 })
 
 describe('document input size limits', () => {
+  it('announces a new operation before validating an unsupported URL', async () => {
+    const onOperationStart = vi.fn()
+    const scope = effectScope()
+    activeScopes.push(scope)
+    const input = scope.run(() => useDocumentInput({
+      onDocument: vi.fn(),
+      onOperationStart,
+    }))
+
+    if (!input) {
+      throw new Error('Failed to create document input scope')
+    }
+
+    await input.loadFromUrl('ftp://example.com/unsupported.md')
+
+    expect(onOperationStart).toHaveBeenCalledOnce()
+    expect(input.error.value?.title).toBe('URL 格式不支持')
+  })
+
+  it('clears a previous validation error through its owner', async () => {
+    const scope = effectScope()
+    activeScopes.push(scope)
+    const input = scope.run(() => useDocumentInput({
+      onDocument: vi.fn(),
+    }))
+
+    if (!input) {
+      throw new Error('Failed to create document input scope')
+    }
+
+    await input.loadFromUrl('ftp://example.com/unsupported.md')
+    expect(input.error.value).not.toBeNull()
+
+    input.clearError()
+
+    expect(input.error.value).toBeNull()
+  })
+
   it('rejects an oversized paste before publishing a document', () => {
     const onDocument = vi.fn()
     const input = createDocumentInput(onDocument)

@@ -305,11 +305,15 @@ onMounted(() => {
       <small>回到示例文档 · 不影响文库</small>
     </button>
 
-    <p v-if="props.isFetchingUrl" class="floating-input__status" role="status">
-      正在拉取 URL…
-    </p>
-    <p v-else-if="props.status" class="floating-input__status" role="status" aria-live="polite">
-      {{ props.status }}
+    <p
+      v-if="props.isFetchingUrl || props.status"
+      class="floating-input__status"
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
+    >
+      <span v-if="props.isFetchingUrl">正在拉取 URL…</span>
+      <span v-if="props.status">{{ props.status }}</span>
     </p>
 
     <input
@@ -532,6 +536,14 @@ onMounted(() => {
   background: var(--surface-subtle);
   color: var(--text-secondary);
   font-size: 0.86rem;
+}
+
+.floating-input__status > span {
+  display: block;
+}
+
+.floating-input__status > span + span {
+  margin-block-start: 0.35rem;
 }
 
 .floating-input__file {
