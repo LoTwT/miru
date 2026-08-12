@@ -26,7 +26,13 @@ import {
 import { useReadingSettings } from '@/features/settings/useReadingSettings'
 import { loadDefaultReadingFonts } from '@/lib/theme/fonts'
 import { readPersistedReadingSettings } from '@/lib/theme/tokens'
-import type { LibraryEntry, LibrarySortMode, LibrarySource, PdfReadingLocation } from '@/features/library/types'
+import type {
+  LibraryEntry,
+  LibrarySortMode,
+  LibrarySource,
+  PdfReadingLocation,
+  ReadingPosition,
+} from '@/features/library/types'
 import type { ReaderDocument, RemoteImageMode } from '@/types/reader'
 import type { ReaderOutlineItem } from '@/features/reader/outlineNavigation'
 
@@ -34,6 +40,8 @@ type AppMode = 'reader' | 'library' | 'pdf'
 type CommandSurfaceId = 'actions' | 'outline' | 'settings'
 
 const libraryRefreshErrorMessage = '文库暂时无法刷新。已保留当前列表，请稍后重试。'
+const pdfPositionSaveErrorMessage = 'PDF 阅读位置暂时无法保存。当前阅读不受影响，之后调整阅读位置或返回阅读时会再次尝试。'
+const pdfPositionSaveRecoveredMessage = 'PDF 阅读位置已恢复保存。'
 const pdfViewerUnavailableMessage = 'PDF 已保存在文库，但阅读器资源暂时无法加载。请重新加载页面后从文库打开。'
 const pdfRuntimeUnavailableMessage = 'PDF 阅读器资源暂时无法加载。请重新加载页面后从文库打开。'
 const importedPdfRuntimeUnavailableMessage = 'PDF 已加入文库，但阅读器资源暂时无法加载。请重新加载页面后从文库打开。'
@@ -132,6 +140,7 @@ const activePdfDocument = shallowRef<ActivePdfDocument | null>(null)
 const isDragging = shallowRef(false)
 const openSurfaceId = shallowRef<CommandSurfaceId | null>(null)
 const liveStatus = shallowRef('')
+const pdfPositionSaveStatus = shallowRef('')
 const outlineItems = shallowRef<ReaderOutlineItem[]>([])
 const activeOutlineId = shallowRef('')
 const readerBookmarks = shallowRef<ReaderBookmark[]>(readPersistedReaderBookmarks())
@@ -1759,14 +1768,27 @@ async function savePdfReadingPosition(position: PdfReadingLocation): Promise<voi
     position,
   }
 
-  const saved = await libraryStore.saveReadingPosition(position)
+  const isCurrentSave = () => (
+    activationSequence === pdfDocumentActivationSequence
+    && saveSequence === pdfPositionSaveSequence
+    && activePdfDocument.value?.entry.id === position.documentId
+  )
+  let saved: ReadingPosition | null
+  try {
+    saved = await libraryStore.saveReadingPosition(position)
+  }
+  catch {
+    if (isCurrentSave()) {
+      pdfPositionSaveStatus.value = pdfPositionSaveErrorMessage
+    }
+    return
+  }
+
   if (
     !saved
     || saved.type !== 'pdf'
     || saved.documentId !== position.documentId
-    || activationSequence !== pdfDocumentActivationSequence
-    || saveSequence !== pdfPositionSaveSequence
-    || activePdfDocument.value?.entry.id !== position.documentId
+    || !isCurrentSave()
   ) {
     return
   }
@@ -1775,10 +1797,16 @@ async function savePdfReadingPosition(position: PdfReadingLocation): Promise<voi
     ...activePdfDocument.value,
     position: saved,
   }
+  if (pdfPositionSaveStatus.value === pdfPositionSaveErrorMessage) {
+    pdfPositionSaveStatus.value = pdfPositionSaveRecoveredMessage
+  }
 }
 
 function activatePdfDocument(document: ActivePdfDocument): void {
   pdfDocumentActivationSequence += 1
+  if (activePdfDocument.value?.entry.id !== document.entry.id) {
+    pdfPositionSaveStatus.value = ''
+  }
   activePdfDocument.value = document
 }
 
@@ -2285,6 +2313,14 @@ function monitorPdfLoadCompletion(
     <p class="app-shell__live-status" role="status" aria-live="polite">
       {{ liveStatus }}
     </p>
+    <p
+      class="app-shell__pdf-position-status"
+      data-testid="pdf-position-save-status"
+      role="status"
+      aria-live="polite"
+    >
+      {{ activePdfDocument ? pdfPositionSaveStatus : '' }}
+    </p>
 
     <div
       v-if="openSurfaceId"
@@ -2565,7 +2601,8 @@ function monitorPdfLoadCompletion(
   display: none;
 }
 
-.app-shell__live-status {
+.app-shell__live-status,
+.app-shell__pdf-position-status {
   position: absolute;
   width: 1px;
   height: 1px;
