@@ -5,9 +5,16 @@ import PdfViewer from '@/components/PdfViewer.vue'
 import type { LibraryEntry } from '@/features/library/types'
 
 const pdfJsMocks = vi.hoisted(() => ({
+  createTextDivs: vi.fn(),
   getDocument: vi.fn(),
   renderTextLayer: vi.fn(),
   setWorkerSrc: vi.fn(),
+}))
+const virtualizerMocks = vi.hoisted(() => ({
+  measure: vi.fn(),
+  measureElement: vi.fn(),
+  resizeItem: vi.fn(),
+  scrollToIndex: vi.fn(),
 }))
 
 interface PdfSearchState {
@@ -17,6 +24,35 @@ interface PdfSearchState {
   statusText?: string
   total: number
 }
+
+interface PdfViewerHandle {
+  goToSearchMatch: (delta: number) => void
+}
+
+vi.mock('@tanstack/vue-virtual', async () => {
+  const { computed } = await import('vue')
+
+  return {
+    useVirtualizer: (options: { value: { count: number } }) => computed(() => {
+      const count = options.value.count
+      return {
+        getTotalSize: () => count * 810,
+        getVirtualItems: () => Array.from({ length: count }, (_, index) => ({
+          end: ((index + 1) * 810) - 18,
+          index,
+          key: index + 1,
+          lane: 0,
+          size: 792,
+          start: index * 810,
+        })),
+        measure: virtualizerMocks.measure,
+        measureElement: virtualizerMocks.measureElement,
+        resizeItem: virtualizerMocks.resizeItem,
+        scrollToIndex: virtualizerMocks.scrollToIndex,
+      }
+    }),
+  }
+})
 
 vi.mock('pdfjs-dist', () => ({
   GlobalWorkerOptions: {
@@ -29,7 +65,11 @@ vi.mock('pdfjs-dist', () => ({
     render = vi.fn(async () => {
       await pdfJsMocks.renderTextLayer()
     })
-    textDivs: HTMLElement[] = []
+    textDivs: HTMLElement[]
+
+    constructor(options: { container: HTMLElement }) {
+      this.textDivs = pdfJsMocks.createTextDivs(options) ?? []
+    }
   },
   getDocument: pdfJsMocks.getDocument,
   setLayerDimensions: vi.fn(),
@@ -40,9 +80,14 @@ vi.mock('pdfjs-dist/build/pdf.worker.mjs?url', () => ({
 }))
 
 afterEach(() => {
+  pdfJsMocks.createTextDivs.mockReset()
   pdfJsMocks.getDocument.mockReset()
   pdfJsMocks.renderTextLayer.mockReset()
   pdfJsMocks.setWorkerSrc.mockReset()
+  virtualizerMocks.measure.mockReset()
+  virtualizerMocks.measureElement.mockReset()
+  virtualizerMocks.resizeItem.mockReset()
+  virtualizerMocks.scrollToIndex.mockReset()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   Reflect.deleteProperty(HTMLElement.prototype, 'scrollTo')
@@ -656,13 +701,188 @@ describe('PdfViewer search extraction', () => {
       viewer.unmount()
     }
   })
+
+  test('only reveals the latest match after rapid navigation within one search', async () => {
+    const fixture = createSearchPdfLoadingTask({ searchableText: 'needle and needle' })
+    pdfJsMocks.getDocument.mockReturnValue(fixture.loadingTask)
+    pdfJsMocks.createTextDivs.mockImplementation(({ container }: { container: HTMLElement }) => {
+      const textDiv = container.ownerDocument.createElement('span')
+      container.append(textDiv)
+      return [textDiv]
+    })
+    stubPdfViewerRuntime()
+    const viewer = mountPdfViewer(
+      new Blob([Uint8Array.of(2)], { type: 'application/pdf' }),
+      createPdfEntry('search-latest-reveal', 'Search latest reveal'),
+    )
+
+    try {
+      await vi.waitFor(() => expect(viewer.host.textContent).toContain('1 / 1'))
+      const scrollButton = [...viewer.host.querySelectorAll('button')]
+        .find(button => button.textContent?.trim() === '滚动')
+      expect(scrollButton).toBeDefined()
+
+      scrollButton?.click()
+      await vi.waitFor(() => expect(scrollButton?.getAttribute('aria-pressed')).toBe('true'))
+      await flushSettledWork()
+
+      const stage = viewer.host.querySelector<HTMLElement>('[data-testid="pdf-viewer-stage"]')!
+      const stageScrollTo = vi.fn()
+      Object.defineProperty(stage, 'scrollTo', {
+        configurable: true,
+        value: stageScrollTo,
+      })
+
+      viewer.searchQuery.value = 'needle'
+      await nextTick()
+      await vi.waitFor(() => {
+        expect(latestSearchState(viewer.searchStates)).toMatchObject({
+          activeIndex: 0,
+          resultContext: '第 1 页',
+          total: 2,
+        })
+        expect(pdfJsMocks.renderTextLayer).toHaveBeenCalled()
+        expect(stageScrollTo).toHaveBeenCalled()
+      })
+      await flushSettledWork()
+      stageScrollTo.mockClear()
+      viewer.positionChanges.length = 0
+
+      viewer.component.value?.goToSearchMatch(1)
+      viewer.component.value?.goToSearchMatch(1)
+      await flushSettledWork()
+
+      expect(latestSearchState(viewer.searchStates)).toMatchObject({
+        activeIndex: 0,
+        resultContext: '第 1 页',
+        total: 2,
+      })
+      expect(stageScrollTo).toHaveBeenCalledTimes(2)
+      expect(viewer.positionChanges).toHaveLength(2)
+    }
+    finally {
+      viewer.unmount()
+    }
+  })
+
+  test.each(['new-query', 'manual-scroll'] as const)(
+    'does not resume a pending search reveal after %s takes ownership',
+    async (nextIntent) => {
+      const scrollPageRender = createDeferred<void>()
+      const initialPage = createPdfPage()
+      const scrollPage = {
+        ...createPdfPage(() => {}, scrollPageRender.promise),
+        getTextContent: vi.fn().mockResolvedValue(createPdfTextContent('old result')),
+      }
+      const loadingTask = {
+        destroy: vi.fn().mockResolvedValue(undefined),
+        promise: Promise.resolve<unknown>(undefined),
+      }
+      const pdfDocument = {
+        getPage: vi.fn()
+          .mockResolvedValueOnce(initialPage)
+          .mockResolvedValue(scrollPage),
+        loadingTask,
+        numPages: 1,
+      }
+      loadingTask.promise = Promise.resolve(pdfDocument)
+      pdfJsMocks.getDocument.mockReturnValue(loadingTask)
+      pdfJsMocks.createTextDivs.mockImplementation(({ container }: { container: HTMLElement }) => {
+        const textDiv = container.ownerDocument.createElement('span')
+        container.append(textDiv)
+        return [textDiv]
+      })
+      stubPdfViewerRuntime()
+      const viewer = mountPdfViewer(
+        new Blob([Uint8Array.of(2)], { type: 'application/pdf' }),
+        createPdfEntry('search-stale-reveal', 'Search stale reveal'),
+      )
+
+      try {
+        await vi.waitFor(() => expect(viewer.host.textContent).toContain('1 / 1'))
+        const scrollButton = [...viewer.host.querySelectorAll('button')]
+          .find(button => button.textContent?.trim() === '滚动')
+        expect(scrollButton).toBeDefined()
+
+        scrollButton?.click()
+        await vi.waitFor(() => expect(scrollButton?.getAttribute('aria-pressed')).toBe('true'))
+        await vi.waitFor(() => expect(scrollPage.render).toHaveBeenCalledOnce())
+
+        const stage = viewer.host.querySelector<HTMLElement>('[data-testid="pdf-viewer-stage"]')!
+        const stageScrollTo = vi.fn()
+        Object.defineProperty(stage, 'scrollTo', {
+          configurable: true,
+          value: stageScrollTo,
+        })
+
+        viewer.searchQuery.value = 'old'
+        await nextTick()
+        await vi.waitFor(() => {
+          expect(latestSearchState(viewer.searchStates).resultContext).toBe('第 1 页')
+        })
+
+        if (nextIntent === 'new-query') {
+          viewer.searchQuery.value = 'missing'
+          await nextTick()
+          await vi.waitFor(() => {
+            expect(latestSearchState(viewer.searchStates)).toEqual({
+              activeIndex: -1,
+              announcement: undefined,
+              resultContext: undefined,
+              statusText: undefined,
+              total: 0,
+            })
+          })
+        }
+        else {
+          stage.dispatchEvent(new WheelEvent('wheel'))
+          await nextTick()
+          expect(latestSearchState(viewer.searchStates)).toMatchObject({
+            activeIndex: 0,
+            total: 1,
+          })
+        }
+        await flushSettledWork()
+        stageScrollTo.mockClear()
+        viewer.positionChanges.length = 0
+
+        scrollPageRender.resolve(undefined)
+        await flushSettledWork()
+
+        if (nextIntent === 'new-query') {
+          expect(latestSearchState(viewer.searchStates)).toEqual({
+            activeIndex: -1,
+            announcement: undefined,
+            resultContext: undefined,
+            statusText: undefined,
+            total: 0,
+          })
+        }
+        else {
+          expect(latestSearchState(viewer.searchStates)).toMatchObject({
+            activeIndex: 0,
+            total: 1,
+          })
+        }
+        expect(stageScrollTo).not.toHaveBeenCalled()
+        expect(viewer.positionChanges).toHaveLength(0)
+      }
+      finally {
+        viewer.unmount()
+        scrollPageRender.resolve(undefined)
+        await flushSettledWork()
+      }
+    },
+  )
 })
 
 function mountPdfViewer(initialBlob: Blob, initialEntry: LibraryEntry, initialSearchQuery = '') {
+  const component = shallowRef<PdfViewerHandle | null>(null)
   const entry = shallowRef(initialEntry)
   const blob = shallowRef<Blob>(initialBlob)
   const searchQuery = shallowRef(initialSearchQuery)
   const searchStates: PdfSearchState[] = []
+  const positionChanges: unknown[] = []
   const host = document.createElement('div')
   document.body.append(host)
   const app = createApp(defineComponent({
@@ -671,7 +891,9 @@ function mountPdfViewer(initialBlob: Blob, initialEntry: LibraryEntry, initialSe
         blob: blob.value,
         entry: entry.value,
         position: null,
+        ref: component,
         searchQuery: searchQuery.value,
+        onPositionChange: (position: unknown) => positionChanges.push(position),
         onSearchChange: (state: PdfSearchState) => searchStates.push(state),
       })
     },
@@ -681,8 +903,10 @@ function mountPdfViewer(initialBlob: Blob, initialEntry: LibraryEntry, initialSe
 
   return {
     blob,
+    component,
     entry,
     host,
+    positionChanges,
     searchQuery,
     searchStates,
     unmount() {
@@ -704,6 +928,7 @@ function latestSearchState(states: PdfSearchState[]): PdfSearchState {
 function stubPdfViewerRuntime(): void {
   vi.stubGlobal('ResizeObserver', ResizeObserverStub)
   vi.stubGlobal('IntersectionObserver', IntersectionObserverStub)
+  vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true })))
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
     callback(0)
     return 1
