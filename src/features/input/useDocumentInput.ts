@@ -12,6 +12,7 @@ import type { ReaderDocument, ReaderError } from '@/types/reader'
 
 interface UseDocumentInputOptions {
   createOperationGuard?: () => DocumentInputOperation
+  onOperationStart?: () => void
   onDocument: (document: ReaderDocument, operation: DocumentInputOperation) => void
   onPdf?: (file: File, operation: DocumentInputOperation) => void | Promise<void>
 }
@@ -247,7 +248,12 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
     cancelActiveUrlFetch()
   }
 
+  function clearError(): void {
+    error.value = null
+  }
+
   function beginInputOperation(): DocumentInputOperation {
+    options.onOperationStart?.()
     inputSequence += 1
     const sequence = inputSequence
     const externalGuard = options.createOperationGuard?.()
@@ -269,6 +275,7 @@ export function useDocumentInput(options: UseDocumentInputOptions) {
 
   return {
     cancelPendingOperation,
+    clearError,
     error: readonly(error),
     isFetchingUrl: readonly(isFetchingUrl),
     loadFromClipboard,

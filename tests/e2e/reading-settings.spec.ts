@@ -125,6 +125,285 @@ test('customizes reading settings, persists them, and resets to defaults', async
   expect(await page.evaluate(() => localStorage.getItem('miru:reading-settings:v2'))).toBeNull()
 })
 
+test.describe('reading settings resource load recovery', () => {
+  test.use({ serviceWorkers: 'block' })
+
+  test('keeps the active reader available when the reading settings chunk fails to load', async ({ page }) => {
+    const readingSettingsChunkPattern = /\/assets\/ReadingSettingsControl-[^/?]+\.js(?:\?.*)?$/
+    let readingSettingsChunkRequests = 0
+    await page.route(readingSettingsChunkPattern, async (route) => {
+      readingSettingsChunkRequests += 1
+      await route.abort('failed')
+    })
+    await page.goto('/')
+
+    await pasteText(page, [
+      '# Chunk-safe settings document',
+      '',
+      'Still readable while reading settings are unavailable.',
+      '',
+      ...Array.from({ length: 40 }, (_, index) => `Reading paragraph ${index + 1}.`),
+    ].join('\n\n'))
+    await waitForReaderReady(page, 'Chunk-safe settings document')
+    await page.evaluate(() => window.scrollTo({ top: 320, behavior: 'auto' }))
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0)
+    const readerScrollY = await page.evaluate(() => window.scrollY)
+
+    const actionsButton = page.getByTestId('floating-affordance-button')
+    await actionsButton.click()
+    const inputMenu = page.getByTestId('floating-affordance-menu')
+    await inputMenu.getByLabel('URL').fill('ftp://example.com/unsupported.md')
+    await inputMenu.getByRole('button', { name: '拉取' }).click()
+    await expect(inputMenu.getByRole('status')).toContainText('请使用 http/https')
+
+    const settingsButton = page.getByTestId('reading-settings-button')
+    await settingsButton.click()
+
+    await expect.poll(() => readingSettingsChunkRequests).toBeGreaterThan(0)
+    await expect(page.getByTestId('reading-settings-panel')).toHaveCount(0)
+    await expect(page.locator('.reader-surface')).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Chunk-safe settings document' })).toBeVisible()
+    await expect(page.getByText('Still readable while reading settings are unavailable.')).toBeVisible()
+    await expect(settingsButton).toHaveAttribute('aria-expanded', 'false')
+
+    await expect(inputMenu).toBeVisible()
+    await expect(actionsButton).toHaveAttribute('aria-expanded', 'true')
+    await expect(actionsButton).toHaveAttribute('aria-controls', 'floating-input-menu')
+    await expect(inputMenu).toHaveAttribute('id', 'floating-input-menu')
+    const resourceStatus = inputMenu.getByRole('status')
+    await expect(resourceStatus).toBeVisible()
+    await expect(resourceStatus).toContainText('阅读设置')
+    await expect(resourceStatus).toContainText('资源暂时无法加载')
+    await expect(resourceStatus).toContainText('重新加载页面')
+    await expect(inputMenu.getByRole('button', { name: '关闭文档操作' })).toBeFocused()
+
+    await page.route('https://example.com/newer-settings-error.md', async route => route.fulfill({
+      body: 'Not found',
+      headers: { 'Access-Control-Allow-Origin': '*' },
+      status: 404,
+    }))
+    await inputMenu.getByLabel('URL').fill('https://example.com/newer-settings-error.md')
+    await inputMenu.getByRole('button', { name: '拉取' }).click()
+    await expect(resourceStatus).toContainText('404 或不存在')
+    await expect(resourceStatus).not.toContainText('阅读设置资源暂时无法加载')
+
+    if ((page.viewportSize()?.width ?? Number.POSITIVE_INFINITY) <= 640) {
+      await expect.poll(() => page.evaluate(() => document.body.style.position)).toBe('fixed')
+    }
+
+    await page.getByRole('button', { name: '关闭文档操作' }).click()
+    await expect(inputMenu).toHaveCount(0)
+    await expect(actionsButton).toHaveAttribute('aria-expanded', 'false')
+    await expect.poll(() => page.evaluate(() => document.body.style.position)).not.toBe('fixed')
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(readerScrollY)
+
+    await page.unroute(readingSettingsChunkPattern)
+    await page.reload()
+    await page.getByTestId('reading-settings-button').click()
+    await expect(page.getByTestId('reading-settings-panel')).toBeVisible()
+  })
+
+  test('keeps the settings recovery visible without cancelling a pending URL fetch', async ({ page }) => {
+    const readingSettingsChunkPattern = /\/assets\/ReadingSettingsControl-[^/?]+\.js(?:\?.*)?$/
+    const pendingUrl = 'https://example.com/pending-settings-input.md'
+    let readingSettingsChunkRequests = 0
+    let pendingUrlRequests = 0
+    let releasePendingUrl: (() => void) | undefined
+    const pendingUrlGate = new Promise<void>((resolve) => {
+      releasePendingUrl = resolve
+    })
+
+    await page.route(readingSettingsChunkPattern, async (route) => {
+      readingSettingsChunkRequests += 1
+      await route.abort('failed')
+    })
+    await page.route(pendingUrl, async (route) => {
+      pendingUrlRequests += 1
+      await pendingUrlGate
+      await route.fulfill({
+        body: 'Not found',
+        contentType: 'text/markdown',
+        headers: { 'Access-Control-Allow-Origin': '*' },
+        status: 404,
+      })
+    })
+    await page.goto('/')
+
+    try {
+      await page.getByTestId('floating-affordance-button').click()
+      const inputMenu = page.getByTestId('floating-affordance-menu')
+      const visibleStatus = inputMenu.getByRole('status')
+      await inputMenu.getByLabel('URL').fill(pendingUrl)
+      await inputMenu.getByRole('button', { name: '拉取' }).click()
+      await expect.poll(() => pendingUrlRequests).toBeGreaterThan(0)
+      await expect(visibleStatus).toContainText('正在拉取 URL')
+
+      await page.getByTestId('reading-settings-button').click()
+      await expect.poll(() => readingSettingsChunkRequests).toBeGreaterThan(0)
+      await expect(inputMenu).toBeVisible()
+      await expect(visibleStatus).toContainText('正在拉取 URL')
+      await expect(visibleStatus).toContainText('阅读设置资源暂时无法加载')
+      await expect(visibleStatus).toContainText('重新加载页面')
+
+      const pendingUrlResponse = page.waitForResponse(
+        response => response.url() === pendingUrl && response.status() === 404,
+      )
+      releasePendingUrl?.()
+      await pendingUrlResponse
+      await expect(visibleStatus).toContainText('404 或不存在')
+      await expect(visibleStatus).not.toContainText('阅读设置资源暂时无法加载')
+    }
+    finally {
+      releasePendingUrl?.()
+    }
+  })
+
+  test('does not erase a URL error that settles before the settings chunk failure', async ({ page }) => {
+    const readingSettingsChunkPattern = /\/assets\/ReadingSettingsControl-[^/?]+\.js(?:\?.*)?$/
+    const pendingUrl = 'https://example.com/url-error-before-settings-failure.md'
+    let releasePendingUrl: (() => void) | undefined
+    let releaseSettingsChunk: (() => void) | undefined
+    let readingSettingsChunkRequests = 0
+    const pendingUrlGate = new Promise<void>((resolve) => {
+      releasePendingUrl = resolve
+    })
+    const settingsChunkGate = new Promise<void>((resolve) => {
+      releaseSettingsChunk = resolve
+    })
+
+    await page.route(readingSettingsChunkPattern, async (route) => {
+      readingSettingsChunkRequests += 1
+      await settingsChunkGate
+      await route.abort('failed')
+    })
+    await page.route(pendingUrl, async (route) => {
+      await pendingUrlGate
+      await route.fulfill({
+        body: 'Not found',
+        contentType: 'text/markdown',
+        headers: { 'Access-Control-Allow-Origin': '*' },
+        status: 404,
+      })
+    })
+    await page.goto('/')
+
+    try {
+      await page.getByTestId('floating-affordance-button').click()
+      const inputMenu = page.getByTestId('floating-affordance-menu')
+      const visibleStatus = inputMenu.getByRole('status')
+      await inputMenu.getByLabel('URL').fill(pendingUrl)
+      const pendingUrlRequest = page.waitForRequest(request => request.url() === pendingUrl)
+      await inputMenu.getByRole('button', { name: '拉取' }).click()
+      await pendingUrlRequest
+
+      await page.getByTestId('reading-settings-button').click()
+      await expect.poll(() => readingSettingsChunkRequests).toBeGreaterThan(0)
+
+      const pendingUrlResponse = page.waitForResponse(
+        response => response.url() === pendingUrl && response.status() === 404,
+      )
+      releasePendingUrl?.()
+      await pendingUrlResponse
+      await expect(visibleStatus).toContainText('404 或不存在')
+
+      const settingsChunkFailure = page.waitForEvent(
+        'requestfailed',
+        request => readingSettingsChunkPattern.test(request.url()),
+      )
+      releaseSettingsChunk?.()
+      await settingsChunkFailure
+      await expect(visibleStatus).toContainText('404 或不存在')
+      await expect(visibleStatus).not.toContainText('阅读设置资源暂时无法加载')
+    }
+    finally {
+      releasePendingUrl?.()
+      releaseSettingsChunk?.()
+    }
+  })
+
+  test('does not let a delayed settings chunk override a newer command surface', async ({ page }) => {
+    const readingSettingsChunkPattern = /\/assets\/ReadingSettingsControl-[^/?]+\.js(?:\?.*)?$/
+    let continueChunkRequest: (() => void) | undefined
+    let readingSettingsChunkRequests = 0
+    const chunkRequestBlocked = new Promise<void>((resolve) => {
+      continueChunkRequest = resolve
+    })
+    await page.route(readingSettingsChunkPattern, async (route) => {
+      readingSettingsChunkRequests += 1
+      await chunkRequestBlocked
+      await route.continue()
+    })
+    await page.goto('/')
+
+    try {
+      const settingsButton = page.getByTestId('reading-settings-button')
+      await settingsButton.click()
+      await expect.poll(() => readingSettingsChunkRequests).toBeGreaterThan(0)
+      await expect(settingsButton).toHaveAttribute('aria-expanded', 'false')
+      if ((page.viewportSize()?.width ?? Number.POSITIVE_INFINITY) <= 640) {
+        await expect.poll(() => page.evaluate(() => document.body.style.position)).not.toBe('fixed')
+      }
+
+      await page.getByTestId('floating-affordance-button').click()
+      const inputMenu = page.getByTestId('floating-affordance-menu')
+      await expect(inputMenu).toBeVisible()
+
+      const chunkResponse = page.waitForResponse(response => readingSettingsChunkPattern.test(response.url()) && response.ok())
+      continueChunkRequest?.()
+      await chunkResponse
+      await page.waitForLoadState('networkidle')
+
+      await expect(inputMenu).toBeVisible()
+      await expect(page.getByTestId('floating-affordance-button')).toHaveAttribute('aria-expanded', 'true')
+      await expect(settingsButton).toHaveAttribute('aria-expanded', 'false')
+      await expect(page.getByTestId('reading-settings-panel')).toHaveCount(0)
+    }
+    finally {
+      continueChunkRequest?.()
+    }
+  })
+
+  test('does not let a delayed settings failure override a newer document', async ({ page }) => {
+    const readingSettingsChunkPattern = /\/assets\/ReadingSettingsControl-[^/?]+\.js(?:\?.*)?$/
+    let continueChunkRequest: (() => void) | undefined
+    let readingSettingsChunkRequests = 0
+    const chunkRequestBlocked = new Promise<void>((resolve) => {
+      continueChunkRequest = resolve
+    })
+    await page.route(readingSettingsChunkPattern, async (route) => {
+      readingSettingsChunkRequests += 1
+      await chunkRequestBlocked
+      await route.abort('failed')
+    })
+    await page.goto('/')
+
+    try {
+      const settingsButton = page.getByTestId('reading-settings-button')
+      await settingsButton.click()
+      await expect.poll(() => readingSettingsChunkRequests).toBeGreaterThan(0)
+
+      await pasteText(page, '# Newer document\n\nThe newer reading intent stays active.')
+      await waitForReaderReady(page, 'Newer document')
+      await expect(page.locator('.app-shell__live-status')).toContainText('文档已加载')
+
+      const chunkFailure = page.waitForEvent('requestfailed', request => readingSettingsChunkPattern.test(request.url()))
+      continueChunkRequest?.()
+      await chunkFailure
+      await page.waitForLoadState('networkidle')
+
+      await expect(page.getByRole('heading', { name: 'Newer document' })).toBeVisible()
+      await expect(page.getByText('The newer reading intent stays active.')).toBeVisible()
+      await expect(settingsButton).toHaveAttribute('aria-expanded', 'false')
+      await expect(page.getByTestId('reading-settings-panel')).toHaveCount(0)
+      await expect(page.getByTestId('floating-affordance-menu')).toHaveCount(0)
+      await expect.poll(() => page.evaluate(() => document.body.style.position)).not.toBe('fixed')
+    }
+    finally {
+      continueChunkRequest?.()
+    }
+  })
+})
+
 test('loads curated optional reading fonts only after selection', async ({ page }) => {
   const optionalFontRequests: string[] = []
   page.on('request', (request) => {

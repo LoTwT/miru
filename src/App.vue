@@ -41,6 +41,7 @@ type CommandSurfaceId = 'actions' | 'outline' | 'settings'
 
 const libraryRefreshErrorMessage = '文库暂时无法刷新。已保留当前列表，请稍后重试。'
 const libraryViewUnavailableMessage = '文库界面暂时无法加载。当前文档仍可阅读。请重新加载页面后再试。'
+const readingSettingsUnavailableMessage = '阅读设置资源暂时无法加载。当前文档仍可阅读。请重新加载页面后再试。'
 const pdfPositionSaveErrorMessage = 'PDF 阅读位置暂时无法保存。当前阅读不受影响，之后调整阅读位置或返回阅读时会再次尝试。'
 const pdfPositionSaveRecoveredMessage = 'PDF 阅读位置已恢复保存。'
 const pdfViewerUnavailableMessage = 'PDF 已保存在文库，但阅读器资源暂时无法加载。请重新加载页面后从文库打开。'
@@ -83,6 +84,10 @@ interface ActivePdfDocument {
 interface OperationGuard extends DocumentInputOperation {
   readonly libraryWriteSignal: AbortSignal
   readonly signal: AbortSignal
+}
+
+interface SurfaceIntent {
+  readonly isCurrent: () => boolean
 }
 
 interface OpenLibraryEntryOptions {
@@ -177,6 +182,8 @@ let systemDarkThemeMediaQuery: MediaQueryList | undefined
 let reducedMotionMediaQuery: MediaQueryList | undefined
 let progressSyncFrame: number | undefined
 let findDebounceTimer: ReturnType<typeof setTimeout> | undefined
+let pendingSurfaceId: CommandSurfaceId | null = null
+let surfaceIntentSequence = 0
 let documentActivationController: AbortController | null = null
 let libraryWriteController = new AbortController()
 let libraryMutationSequence = 0
@@ -187,6 +194,7 @@ let pdfPositionSaveSequence = 0
 
 const {
   cancelPendingOperation: cancelPendingDocumentInput,
+  clearError: clearDocumentInputError,
   error,
   isFetchingUrl,
   loadFromClipboard,
@@ -195,6 +203,9 @@ const {
   loadFromUrl,
 } = useDocumentInput({
   createOperationGuard: beginInputDocumentActivation,
+  onOperationStart() {
+    inputMenuStatus.value = ''
+  },
   onDocument(document, operation) {
     void loadIncomingDocument(document, operation)
   },
@@ -331,6 +342,10 @@ watch([hasNavigationSurface, isNarrowOutlineViewport], () => {
 })
 
 watch(appMode, (value, previousValue) => {
+  if (!isReadingSettingsAvailable.value && (pendingSurfaceId === 'settings' || openSurfaceId.value === 'settings')) {
+    closeSurface()
+  }
+
   if (value === 'library' || (previousValue && value !== previousValue)) {
     closeFindBar({ restoreFocus: false })
   }
@@ -359,6 +374,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  invalidatePendingSurfaceIntent()
   invalidatePendingLibraryWrites()
   invalidatePendingDocumentActivation()
   disposeMarkdownPositionOwnership()
@@ -489,9 +505,36 @@ function printDocument(): void {
   window.print()
 }
 
+function beginSurfaceIntent(surfaceId: CommandSurfaceId): SurfaceIntent {
+  const sequence = ++surfaceIntentSequence
+  pendingSurfaceId = surfaceId
+
+  return {
+    isCurrent: () => sequence === surfaceIntentSequence && pendingSurfaceId === surfaceId,
+  }
+}
+
+function invalidatePendingSurfaceIntent(): void {
+  surfaceIntentSequence += 1
+  pendingSurfaceId = null
+}
+
 function toggleSurface(surfaceId: CommandSurfaceId): void {
+  if (pendingSurfaceId === surfaceId) {
+    invalidatePendingSurfaceIntent()
+    if (openSurfaceId.value) {
+      void nextTick(() => getCommandSurfaceFocusableElements()[0]?.focus())
+    }
+    return
+  }
+
   if (openSurfaceId.value === surfaceId) {
     closeSurface({ restoreFocus: true, previousSurfaceId: surfaceId })
+    return
+  }
+
+  if (surfaceId === 'settings') {
+    void openReadingSettingsSurface()
     return
   }
 
@@ -499,12 +542,38 @@ function toggleSurface(surfaceId: CommandSurfaceId): void {
 }
 
 function openSurface(surfaceId: CommandSurfaceId): void {
-  if (surfaceId === 'settings') {
-    preloadReadingSettings()
-    void readingSettings.initializeLocalFonts().catch(() => undefined)
-  }
+  invalidatePendingSurfaceIntent()
   openSurfaceId.value = surfaceId
   setPageScrollLocked(shouldLockPageForSurface(surfaceId))
+}
+
+async function openReadingSettingsSurface(): Promise<void> {
+  const inputErrorAtStart = error.value
+  const intent = beginSurfaceIntent('settings')
+  const preparation = await prepareReadingSettings(intent)
+
+  if (preparation === 'stale' || !isReadingSettingsAvailable.value) {
+    if (intent.isCurrent()) {
+      invalidatePendingSurfaceIntent()
+    }
+    return
+  }
+
+  if (preparation === 'unavailable') {
+    if (error.value === inputErrorAtStart) {
+      clearDocumentInputError()
+    }
+    inputMenuStatus.value = readingSettingsUnavailableMessage
+    openSurface('actions')
+    if (status.value === readingSettingsUnavailableMessage) {
+      liveStatus.value = readingSettingsUnavailableMessage
+    }
+    void nextTick(() => getCommandSurfaceFocusableElements()[0]?.focus())
+    return
+  }
+
+  openSurface('settings')
+  void readingSettings.initializeLocalFonts().catch(() => undefined)
 }
 
 function setActionsSurfaceOpen(value: boolean): void {
@@ -518,6 +587,7 @@ function setActionsSurfaceOpen(value: boolean): void {
 
 function closeSurface(options: { restoreFocus?: boolean, previousSurfaceId?: CommandSurfaceId | null } = {}): void {
   const previousSurfaceId = options.previousSurfaceId ?? openSurfaceId.value
+  invalidatePendingSurfaceIntent()
   openSurfaceId.value = null
   setPageScrollLocked(false)
 
@@ -715,7 +785,7 @@ function syncReducedMotion(): void {
 }
 
 function onDocumentPointerDown(event: PointerEvent): void {
-  if (!openSurfaceId.value) {
+  if (!openSurfaceId.value && !pendingSurfaceId) {
     return
   }
 
@@ -1628,6 +1698,13 @@ function beginDocumentActivation(options: { cancelInput?: boolean } = {}): Opera
     cancelPendingDocumentInput()
   }
 
+  if (openSurfaceId.value === 'settings') {
+    closeSurface()
+  }
+  else {
+    invalidatePendingSurfaceIntent()
+  }
+
   documentActivationController?.abort()
   const controller = new AbortController()
   documentActivationController = controller
@@ -2068,6 +2145,27 @@ async function prepareLibraryView(
   }
 
   return operation.isCurrent() ? 'ready' : 'stale'
+}
+
+async function prepareReadingSettings(
+  intent: SurfaceIntent,
+): Promise<'ready' | 'stale' | 'unavailable'> {
+  if (!intent.isCurrent()) {
+    return 'stale'
+  }
+
+  try {
+    await loadReadingSettingsControl()
+  }
+  catch {
+    if (!intent.isCurrent()) {
+      return 'stale'
+    }
+
+    return 'unavailable'
+  }
+
+  return intent.isCurrent() ? 'ready' : 'stale'
 }
 
 function focusLibraryView(): void {
