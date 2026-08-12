@@ -40,6 +40,7 @@ type AppMode = 'reader' | 'library' | 'pdf'
 type CommandSurfaceId = 'actions' | 'outline' | 'settings'
 
 const libraryRefreshErrorMessage = '文库暂时无法刷新。已保留当前列表，请稍后重试。'
+const libraryViewUnavailableMessage = '文库界面暂时无法加载。当前文档仍可阅读。请重新加载页面后再试。'
 const pdfPositionSaveErrorMessage = 'PDF 阅读位置暂时无法保存。当前阅读不受影响，之后调整阅读位置或返回阅读时会再次尝试。'
 const pdfPositionSaveRecoveredMessage = 'PDF 阅读位置已恢复保存。'
 const pdfViewerUnavailableMessage = 'PDF 已保存在文库，但阅读器资源暂时无法加载。请重新加载页面后从文库打开。'
@@ -104,10 +105,6 @@ const loadReadingSettingsControl = () => import('@/components/ReadingSettingsCon
 const LibraryView = defineAsyncComponent({ loader: loadLibraryView, timeout: 30_000 })
 const PdfViewer = defineAsyncComponent({ loader: loadPdfViewer, timeout: 30_000 })
 const ReadingSettingsControl = defineAsyncComponent({ loader: loadReadingSettingsControl, timeout: 30_000 })
-
-function preloadLibraryView(): void {
-  void loadLibraryView().catch(() => undefined)
-}
 
 function preloadReadingSettings(): void {
   void loadReadingSettingsControl().catch(() => undefined)
@@ -388,7 +385,7 @@ function resetToSample(): void {
 
 async function showLibrary(): Promise<void> {
   const operation = beginDocumentActivation()
-  preloadLibraryView()
+  const libraryViewPreparation = prepareLibraryView(operation)
   const currentScrollY = getCurrentScrollY()
   const restorePause = pauseMarkdownPositionRestore()
   try {
@@ -407,6 +404,17 @@ async function showLibrary(): Promise<void> {
 
     await flushPendingActiveReadingPosition()
     if (!operation.isCurrent()) {
+      return
+    }
+
+    const preparation = await libraryViewPreparation
+    if (preparation === 'stale') {
+      return
+    }
+    if (preparation === 'unavailable') {
+      inputMenuStatus.value = libraryViewUnavailableMessage
+      liveStatus.value = libraryViewUnavailableMessage
+      openSurface('actions')
       return
     }
 
@@ -2039,6 +2047,27 @@ function safeDomain(value: string): string {
   catch {
     return ''
   }
+}
+
+async function prepareLibraryView(
+  operation: DocumentInputOperation,
+): Promise<'ready' | 'stale' | 'unavailable'> {
+  if (!operation.isCurrent()) {
+    return 'stale'
+  }
+
+  try {
+    await loadLibraryView()
+  }
+  catch {
+    if (!operation.isCurrent()) {
+      return 'stale'
+    }
+
+    return 'unavailable'
+  }
+
+  return operation.isCurrent() ? 'ready' : 'stale'
 }
 
 function focusLibraryView(): void {
