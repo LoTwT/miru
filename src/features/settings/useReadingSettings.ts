@@ -63,6 +63,11 @@ import type { ReadingPreset, ReadingPresetSnapshot } from './readingPresets'
 import type { createLocalFontStore, LocalFontOption, LocalFontRecord } from './localFonts'
 
 type LocalFontStore = ReturnType<typeof createLocalFontStore>
+type LocalFontsModule = typeof import('./localFonts')
+type LocalFontRegistrationResult =
+  | { status: 'ready', option: LocalFontOption }
+  | { status: 'invalid' | 'unavailable' }
+type EnsuredLocalFontResult = 'ready' | 'missing' | 'invalid' | 'unavailable' | 'stale'
 
 export interface ReadingCustomizationState {
   fontSize: ReadingFontSizeId
@@ -88,11 +93,13 @@ export function useReadingSettings(options: {
   root?: HTMLElement
   storage?: Storage
   localFontStore?: LocalFontStore
+  loadLocalFontsModule?: () => Promise<LocalFontsModule>
   systemDark?: boolean
 } = {}) {
   const root = options.root ?? document.documentElement
   const storage = options.storage ?? localStorage
   const providedLocalFontStore = options.localFontStore
+  const loadLocalFonts = options.loadLocalFontsModule ?? loadLocalFontsModule
   const systemDark = shallowRef(options.systemDark ?? resolveSystemDarkScheme())
   const persisted = readPersistedReadingSettings(storage)
   const remoteImageMode = persisted?.remoteImageMode
@@ -101,11 +108,14 @@ export function useReadingSettings(options: {
   const localFonts = shallowRef<LocalFontOption[]>([])
   const localFontMessage = shallowRef<ReadingSettingsMessage | null>(null)
   const registeredLocalFontIds = new Set<string>()
-  const pendingLocalFontRegistrations = new Map<string, Promise<boolean>>()
+  const pendingLocalFontRegistrations = new Map<string, Promise<EnsuredLocalFontResult>>()
   const localFontRegistrationGenerations = new Map<string, number>()
   let localFontStorePromise: Promise<LocalFontStore> | null = null
   let localFontsInitializationPromise: Promise<void> | null = null
   let fontFamilyLoadSequence = 0
+  let localFontCollectionRevision = 0
+  let localFontOperationSequence = 0
+  let localFontUploadSequence = 0
   const resolvedTheme = computed(() => resolveReadingThemeState({
     version: 2,
     themeStyle: state.themeStyle,
@@ -139,13 +149,24 @@ export function useReadingSettings(options: {
     return presets.value.find(preset => arePresetSnapshotsEqual(preset.settings, currentSnapshot))?.name ?? '自定义（未保存）'
   })
 
-  function getLocalFontStore(): Promise<LocalFontStore> {
+  function getLocalFontStore(localFontsModule?: LocalFontsModule): Promise<LocalFontStore> {
     if (providedLocalFontStore) {
       return Promise.resolve(providedLocalFontStore)
     }
 
-    localFontStorePromise ??= loadLocalFontsModule().then(({ createLocalFontStore }) => createLocalFontStore())
-    return localFontStorePromise
+    if (localFontStorePromise) {
+      return localFontStorePromise
+    }
+
+    const loading = (localFontsModule ? Promise.resolve(localFontsModule) : loadLocalFonts())
+      .then(({ createLocalFontStore }) => createLocalFontStore())
+    localFontStorePromise = loading
+    void loading.catch(() => {
+      if (localFontStorePromise === loading) {
+        localFontStorePromise = null
+      }
+    })
+    return loading
   }
 
   function initializeLocalFonts(): Promise<void> {
@@ -153,9 +174,14 @@ export function useReadingSettings(options: {
       return localFontsInitializationPromise
     }
 
-    const initialization = performLocalFontInitialization()
+    const result = performLocalFontInitialization()
+    const initialization = result.then(() => undefined)
     localFontsInitializationPromise = initialization
-    void initialization.catch(() => {
+    void result.then((initialized) => {
+      if (!initialized && localFontsInitializationPromise === initialization) {
+        localFontsInitializationPromise = null
+      }
+    }, () => {
       if (localFontsInitializationPromise === initialization) {
         localFontsInitializationPromise = null
       }
@@ -163,49 +189,108 @@ export function useReadingSettings(options: {
     return initialization
   }
 
-  async function performLocalFontInitialization(): Promise<void> {
+  async function performLocalFontInitialization(): Promise<boolean> {
+    const operationSequence = beginLocalFontOperation()
     const loadSequence = ++fontFamilyLoadSequence
-    const [localFontStore, { createLocalFontOption }] = await Promise.all([
-      getLocalFontStore(),
-      loadLocalFontsModule(),
-    ])
-    const records = await localFontStore.listFonts()
-    localFonts.value = records.map(createLocalFontOption)
+    let localFontsModule: LocalFontsModule
+
+    try {
+      localFontsModule = await loadLocalFonts()
+    }
+    catch {
+      setLocalFontMessage(operationSequence, {
+        kind: 'error',
+        text: '本地字体资源暂时无法加载。当前阅读不受影响,请重新加载页面后再试。',
+      })
+      return false
+    }
+
+    let localFontStore: LocalFontStore
+
+    try {
+      localFontStore = await getLocalFontStore(localFontsModule)
+    }
+    catch {
+      setLocalFontMessage(operationSequence, {
+        kind: 'error',
+        text: '本地字体暂时无法读取。已保留当前字体设置,请稍后重试。',
+      })
+      return false
+    }
+
+    while (true) {
+      const collectionRevision = localFontCollectionRevision
+      let nextLocalFonts: LocalFontOption[]
+
+      try {
+        const records = await localFontStore.listFonts()
+        nextLocalFonts = records.map(localFontsModule.createLocalFontOption)
+      }
+      catch {
+        setLocalFontMessage(operationSequence, {
+          kind: 'error',
+          text: '本地字体暂时无法读取。已保留当前字体设置,请稍后重试。',
+        })
+        return false
+      }
+
+      if (collectionRevision !== localFontCollectionRevision) {
+        continue
+      }
+
+      localFonts.value = nextLocalFonts
+      break
+    }
+
     if (loadSequence !== fontFamilyLoadSequence) {
-      return
+      return true
     }
 
     let normalizedFontFamily = fallbackMissingLocalFont(state.fontFamily, localFonts.value)
 
     if (isLocalFontFamilyId(normalizedFontFamily)) {
       const localFontId = localFontIdFromFamilyId(normalizedFontFamily)
-      const registered = await ensureLocalFontRegistered(localFontId)
+      const registration = await ensureLocalFontRegistered(localFontId)
       if (loadSequence !== fontFamilyLoadSequence) {
         if (state.fontFamily !== normalizedFontFamily) {
           unloadLocalFontFace(localFontId)
           registeredLocalFontIds.delete(localFontId)
         }
-        return
+        return true
       }
 
-      if (!registered) {
+      if (registration === 'unavailable') {
+        setLocalFontMessage(operationSequence, {
+          kind: 'error',
+          text: '本地字体暂时无法读取。已保留当前字体设置,请稍后重试。',
+        })
+        return false
+      }
+
+      if (registration === 'stale') {
+        return true
+      }
+
+      if (registration !== 'ready') {
         normalizedFontFamily = defaultReadingSettings.fontFamily
-        localFontMessage.value = { kind: 'error', text: '当前字体无法加载,已恢复默认字体。' }
+        setLocalFontMessage(operationSequence, { kind: 'error', text: '当前字体无法加载,已恢复默认字体。' })
       }
     }
 
     await loadOptionalReadingFont(normalizedFontFamily)
     if (loadSequence !== fontFamilyLoadSequence) {
-      return
+      return true
     }
 
     if (normalizedFontFamily !== state.fontFamily) {
       state.fontFamily = normalizedFontFamily
       commit()
-      return
+      return true
     }
 
     applyCurrent()
+    clearLocalFontMessage(operationSequence)
+    return true
   }
 
   function applyCurrent(): void {
@@ -251,13 +336,14 @@ export function useReadingSettings(options: {
   }
 
   function updateFontFamily(value: ReadingFontFamilyId): void {
+    const operationSequence = beginLocalFontOperation()
     const loadSequence = ++fontFamilyLoadSequence
     state.fontFamily = fallbackMissingLocalFont(value, localFonts.value)
     void loadOptionalReadingFont(state.fontFamily)
     commit()
 
     if (isLocalFontFamilyId(state.fontFamily)) {
-      void activateLocalFontFamily(state.fontFamily, loadSequence)
+      void activateLocalFontFamily(state.fontFamily, loadSequence, operationSequence)
     }
   }
 
@@ -352,45 +438,60 @@ export function useReadingSettings(options: {
       return false
     }
 
+    const operationSequence = beginLocalFontOperation()
     const loadSequence = ++fontFamilyLoadSequence
     applySnapshotToState(state, preset.settings, localFonts.value)
     void loadOptionalReadingFont(state.fontFamily)
     commit()
 
     if (isLocalFontFamilyId(state.fontFamily)) {
-      void activateLocalFontFamily(state.fontFamily, loadSequence)
+      void activateLocalFontFamily(state.fontFamily, loadSequence, operationSequence)
     }
     return true
   }
 
   async function uploadLocalFont(file: File): Promise<boolean> {
-    const {
-      normalizeLocalFontName,
-      validateLocalFontFile,
-    } = await loadLocalFontsModule()
+    const operationSequence = beginLocalFontOperation()
+    const familyLoadSequence = fontFamilyLoadSequence
+    const uploadSequence = ++localFontUploadSequence
+    let localFontsModule: LocalFontsModule
+
+    try {
+      localFontsModule = await loadLocalFonts()
+    }
+    catch {
+      setLocalFontMessage(operationSequence, {
+        kind: 'error',
+        text: '本地字体资源暂时无法加载。当前阅读不受影响,请重新加载页面后再试。',
+      })
+      return false
+    }
+
+    const { normalizeLocalFontName, validateLocalFontFile } = localFontsModule
     const validation = validateLocalFontFile(file)
 
     if (!validation.ok) {
-      localFontMessage.value = { kind: 'error', text: validation.error }
+      setLocalFontMessage(operationSequence, { kind: 'error', text: validation.error })
       return false
     }
 
     const name = normalizeLocalFontName(file.name)
 
     if (!name) {
-      localFontMessage.value = { kind: 'error', text: '字体名称不能为空。' }
+      setLocalFontMessage(operationSequence, { kind: 'error', text: '字体名称不能为空。' })
       return false
     }
 
     if (hasLocalFontName(name)) {
-      localFontMessage.value = { kind: 'error', text: '已有同名字体,请先重命名或删除。' }
+      setLocalFontMessage(operationSequence, { kind: 'error', text: '已有同名字体,请先重命名或删除。' })
       return false
     }
 
     let record: LocalFontRecord
+    let localFontStore: LocalFontStore
 
     try {
-      const localFontStore = await getLocalFontStore()
+      localFontStore = await getLocalFontStore(localFontsModule)
       record = await localFontStore.addFont({
         file,
         fileName: file.name,
@@ -399,70 +500,133 @@ export function useReadingSettings(options: {
       })
     }
     catch {
-      localFontMessage.value = { kind: 'error', text: '字体无法保存到本机,请稍后再试。' }
+      setLocalFontMessage(operationSequence, {
+        kind: 'error',
+        text: '字体无法保存到本机,请稍后再试。',
+      })
       return false
     }
 
-    const registered = await registerLocalFont(record)
+    const registrationGeneration = localFontRegistrationGenerations.get(record.id) ?? 0
+    const registration = await registerLocalFont(record, localFontsModule)
 
-    if (!registered) {
-      const localFontStore = await getLocalFontStore()
-      await localFontStore.deleteFont(record.id)
-      localFontMessage.value = { kind: 'error', text: '字体无法解析,请换一个字体文件。' }
+    if ((localFontRegistrationGenerations.get(record.id) ?? 0) !== registrationGeneration) {
+      unloadLocalFontFace(record.id)
+      registeredLocalFontIds.delete(record.id)
       return false
     }
 
+    if (registration.status !== 'ready') {
+      try {
+        await localFontStore.deleteFont(record.id)
+        localFonts.value = localFonts.value.filter(font => font.id !== record.id)
+        localFontCollectionRevision += 1
+        setLocalFontMessage(operationSequence, { kind: 'error', text: '字体无法解析,请换一个字体文件。' })
+      }
+      catch {
+        localFonts.value = upsertLocalFontOption(localFonts.value, localFontsModule.createLocalFontOption(record))
+        localFontCollectionRevision += 1
+        setLocalFontMessage(operationSequence, {
+          kind: 'error',
+          text: '字体无法解析,且暂时无法从本机删除。已保留在「管理我的字体」中,请稍后删除。',
+        })
+      }
+      return false
+    }
+
+    const option = localFonts.value.find(font => font.id === record.id) ?? registration.option
     registeredLocalFontIds.add(record.id)
-    localFonts.value = [...localFonts.value, registered]
-    fontFamilyLoadSequence += 1
-    state.fontFamily = createLocalFontFamilyId(registered.id)
-    localFontMessage.value = validation.warning
+    localFonts.value = upsertLocalFontOption(localFonts.value, option)
+    localFontCollectionRevision += 1
+    if (uploadSequence === localFontUploadSequence && familyLoadSequence === fontFamilyLoadSequence) {
+      fontFamilyLoadSequence += 1
+      state.fontFamily = createLocalFontFamilyId(option.id)
+      commit()
+    }
+    setLocalFontMessage(operationSequence, validation.warning
       ? { kind: 'warning', text: validation.warning }
-      : { kind: 'info', text: `已添加字体「${registered.name}」。` }
-    commit()
+      : { kind: 'info', text: `已添加字体「${option.name}」。` })
     return true
   }
 
   async function renameLocalFont(id: string, name: string): Promise<boolean> {
-    const { createLocalFontOption, normalizeLocalFontName } = await loadLocalFontsModule()
+    const operationSequence = beginLocalFontOperation()
+    let localFontsModule: LocalFontsModule
+
+    try {
+      localFontsModule = await loadLocalFonts()
+    }
+    catch {
+      setLocalFontMessage(operationSequence, {
+        kind: 'error',
+        text: '本地字体资源暂时无法加载。当前阅读不受影响,请重新加载页面后再试。',
+      })
+      return false
+    }
+
+    const { createLocalFontOption, normalizeLocalFontName } = localFontsModule
     const normalizedName = normalizeLocalFontName(name)
 
     if (!normalizedName) {
-      localFontMessage.value = { kind: 'error', text: '字体名称不能为空。' }
+      setLocalFontMessage(operationSequence, { kind: 'error', text: '字体名称不能为空。' })
       return false
     }
 
     if (hasLocalFontName(normalizedName, id)) {
-      localFontMessage.value = { kind: 'error', text: '已有同名字体,不会覆盖。' }
+      setLocalFontMessage(operationSequence, { kind: 'error', text: '已有同名字体,不会覆盖。' })
       return false
     }
 
-    const localFontStore = await getLocalFontStore()
-    const nextRecord = await localFontStore.renameFont(id, normalizedName)
+    let nextRecord: Awaited<ReturnType<LocalFontStore['renameFont']>>
+
+    try {
+      const localFontStore = await getLocalFontStore(localFontsModule)
+      nextRecord = await localFontStore.renameFont(id, normalizedName)
+    }
+    catch {
+      setLocalFontMessage(operationSequence, {
+        kind: 'error',
+        text: '字体名称暂时无法保存。原名称已保留,请稍后重试。',
+      })
+      return false
+    }
 
     if (!nextRecord) {
-      localFontMessage.value = { kind: 'error', text: '没有找到这个字体。' }
+      setLocalFontMessage(operationSequence, { kind: 'error', text: '没有找到这个字体。' })
       return false
     }
 
     const nextOption = createLocalFontOption(nextRecord)
     localFonts.value = localFonts.value.map(font => font.id === id ? nextOption : font)
-    localFontMessage.value = { kind: 'info', text: `已重命名为「${nextOption.name}」。` }
+    localFontCollectionRevision += 1
+    setLocalFontMessage(operationSequence, { kind: 'info', text: `已重命名为「${nextOption.name}」。` })
     return true
   }
 
   async function deleteLocalFont(id: string): Promise<boolean> {
+    const operationSequence = beginLocalFontOperation()
     const existing = localFonts.value.find(font => font.id === id)
 
     if (!existing) {
-      localFontMessage.value = { kind: 'error', text: '没有找到这个字体。' }
+      setLocalFontMessage(operationSequence, { kind: 'error', text: '没有找到这个字体。' })
       return false
     }
 
-    const localFontStore = await getLocalFontStore()
-    await localFontStore.deleteFont(id)
+    try {
+      const localFontStore = await getLocalFontStore()
+      await localFontStore.deleteFont(id)
+    }
+    catch {
+      setLocalFontMessage(operationSequence, {
+        kind: 'error',
+        text: '字体暂时无法删除。当前字体已保留,请稍后重试。',
+      })
+      return false
+    }
+
     invalidateLocalFontRegistration(id)
     localFonts.value = localFonts.value.filter(font => font.id !== id)
+    localFontCollectionRevision += 1
 
     if (state.fontFamily === createLocalFontFamilyId(id)) {
       fontFamilyLoadSequence += 1
@@ -470,7 +634,7 @@ export function useReadingSettings(options: {
       commit()
     }
 
-    localFontMessage.value = { kind: 'info', text: `已删除字体「${existing.name}」。` }
+    setLocalFontMessage(operationSequence, { kind: 'info', text: `已删除字体「${existing.name}」。` })
     return true
   }
 
@@ -539,6 +703,7 @@ export function useReadingSettings(options: {
   async function activateLocalFontFamily(
     fontFamily: ReadingFontFamilyId,
     loadSequence: number,
+    operationSequence: number,
   ): Promise<void> {
     if (!isLocalFontFamilyId(fontFamily)) {
       return
@@ -546,15 +711,25 @@ export function useReadingSettings(options: {
 
     const localFontId = localFontIdFromFamilyId(fontFamily)
 
-    const registered = await ensureLocalFontRegistered(localFontId)
+    const registration = await ensureLocalFontRegistered(localFontId)
 
     if (loadSequence !== fontFamilyLoadSequence || state.fontFamily !== fontFamily) {
       return
     }
 
-    if (!registered) {
+    if (registration === 'unavailable' || registration === 'stale') {
+      if (registration === 'unavailable') {
+        setLocalFontMessage(operationSequence, {
+          kind: 'error',
+          text: '本地字体暂时无法读取。已保留当前字体设置,请稍后重试。',
+        })
+      }
+      return
+    }
+
+    if (registration !== 'ready') {
       state.fontFamily = defaultReadingSettings.fontFamily
-      localFontMessage.value = { kind: 'error', text: '这个字体无法加载,已恢复默认字体。' }
+      setLocalFontMessage(operationSequence, { kind: 'error', text: '这个字体无法加载,已恢复默认字体。' })
       commit()
       return
     }
@@ -562,10 +737,10 @@ export function useReadingSettings(options: {
     applyCurrent()
   }
 
-  function ensureLocalFontRegistered(id: string): Promise<boolean> {
+  function ensureLocalFontRegistered(id: string): Promise<EnsuredLocalFontResult> {
     if (registeredLocalFontIds.has(id) || hasRegisteredLocalFontFace(id)) {
       registeredLocalFontIds.add(id)
-      return Promise.resolve(true)
+      return Promise.resolve('ready')
     }
 
     const pendingRegistration = pendingLocalFontRegistrations.get(id)
@@ -581,13 +756,13 @@ export function useReadingSettings(options: {
         const record = await localFontStore.getFont(id)
 
         if (!record) {
-          return false
+          return 'missing'
         }
 
-        const registered = await registerLocalFont(record)
+        const registration = await registerLocalFont(record, undefined, loadLocalFonts)
 
-        if (!registered) {
-          return false
+        if (registration.status !== 'ready') {
+          return registration.status
         }
 
         if (
@@ -596,14 +771,14 @@ export function useReadingSettings(options: {
         ) {
           unloadLocalFontFace(id)
           registeredLocalFontIds.delete(id)
-          return false
+          return 'stale'
         }
 
         registeredLocalFontIds.add(id)
-        return true
+        return 'ready'
       }
       catch {
-        return false
+        return 'unavailable'
       }
     })().finally(() => pendingLocalFontRegistrations.delete(id))
 
@@ -615,6 +790,24 @@ export function useReadingSettings(options: {
     localFontRegistrationGenerations.set(id, (localFontRegistrationGenerations.get(id) ?? 0) + 1)
     registeredLocalFontIds.delete(id)
     unloadLocalFontFace(id)
+  }
+
+  function beginLocalFontOperation(): number {
+    localFontOperationSequence += 1
+    localFontMessage.value = null
+    return localFontOperationSequence
+  }
+
+  function setLocalFontMessage(sequence: number, message: ReadingSettingsMessage): void {
+    if (sequence === localFontOperationSequence) {
+      localFontMessage.value = message
+    }
+  }
+
+  function clearLocalFontMessage(sequence: number): void {
+    if (sequence === localFontOperationSequence) {
+      localFontMessage.value = null
+    }
   }
 
   function persist(): void {
@@ -692,16 +885,41 @@ export function useReadingSettings(options: {
   }
 }
 
-async function registerLocalFont(record: LocalFontRecord): Promise<LocalFontOption | null> {
+async function registerLocalFont(
+  record: LocalFontRecord,
+  providedModule?: LocalFontsModule,
+  loadModule: () => Promise<LocalFontsModule> = loadLocalFontsModule,
+): Promise<LocalFontRegistrationResult> {
+  let localFontsModule: LocalFontsModule
+
   try {
-    const { createLocalFontFace, createLocalFontOption } = await loadLocalFontsModule()
-    const fontFace = await createLocalFontFace(record)
-    document.fonts.add(fontFace)
-    return createLocalFontOption(record)
+    localFontsModule = providedModule ?? await loadModule()
   }
   catch {
-    return null
+    return { status: 'unavailable' }
   }
+
+  try {
+    const fontFace = await localFontsModule.createLocalFontFace(record)
+    document.fonts.add(fontFace)
+    return { status: 'ready', option: localFontsModule.createLocalFontOption(record) }
+  }
+  catch {
+    return { status: 'invalid' }
+  }
+}
+
+function upsertLocalFontOption(
+  localFonts: readonly LocalFontOption[],
+  option: LocalFontOption,
+): LocalFontOption[] {
+  const existingIndex = localFonts.findIndex(font => font.id === option.id)
+
+  if (existingIndex === -1) {
+    return [...localFonts, option]
+  }
+
+  return localFonts.map(font => font.id === option.id ? option : font)
 }
 
 function hasRegisteredLocalFontFace(id: string): boolean {

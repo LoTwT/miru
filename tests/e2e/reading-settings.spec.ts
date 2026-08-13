@@ -128,6 +128,48 @@ test('customizes reading settings, persists them, and resets to defaults', async
 test.describe('reading settings resource load recovery', () => {
   test.use({ serviceWorkers: 'block' })
 
+  test('keeps reading settings usable when the local font resource fails to load', async ({ page }) => {
+    const localFontsChunkPattern = /\/assets\/localFonts-[^/?]+\.js(?:\?.*)?$/
+    const pageErrors: Error[] = []
+    let localFontsChunkRequests = 0
+    page.on('pageerror', error => pageErrors.push(error))
+    await page.route(localFontsChunkPattern, async (route) => {
+      localFontsChunkRequests += 1
+      await route.abort('failed')
+    })
+    await page.goto('/')
+
+    await page.getByTestId('reading-settings-button').click()
+
+    await expect.poll(() => localFontsChunkRequests).toBeGreaterThan(0)
+    const settingsPanel = page.getByTestId('reading-settings-panel')
+    await expect(settingsPanel).toBeVisible()
+    await expect(page.getByTestId('reading-settings-main-panel')).toBeVisible()
+    await expect(page.getByRole('radio', { name: '正文字体 Newsreader' })).toBeVisible()
+    const resourceStatus = settingsPanel.getByTestId('local-font-message')
+    await expect(resourceStatus).toBeVisible()
+    await expect(resourceStatus).toHaveAttribute('role', 'alert')
+    await expect(resourceStatus).toContainText('本地字体资源暂时无法加载')
+    await expect(resourceStatus).toContainText('重新加载页面')
+
+    const fontSizeSlider = page.getByRole('slider', { name: '字号' })
+    await fontSizeSlider.press('ArrowRight')
+    await expect(fontSizeSlider).toHaveAttribute('aria-valuetext', '字号 19px')
+
+    const fontPath = fileURLToPath(import.meta.resolve('@ayingott/theme/fonts/space-mono-latin-400-normal.woff2'))
+    await page.getByTestId('local-font-file-input').setInputFiles(fontPath)
+    await expect(resourceStatus).toContainText('本地字体资源暂时无法加载')
+    expect(pageErrors).toEqual([])
+
+    await page.unroute(localFontsChunkPattern)
+    await page.reload()
+    await page.getByTestId('reading-settings-button').click()
+    await expect(page.getByTestId('reading-settings-panel')).toBeVisible()
+    await page.getByTestId('local-font-file-input').setInputFiles(fontPath)
+    await expect(page.getByRole('radio', { name: '正文字体 space-mono-latin-400-normal' })).toHaveAttribute('aria-checked', 'true')
+    await expect(page.getByTestId('reading-settings-panel').getByRole('alert')).toHaveCount(0)
+  })
+
   test('keeps the active reader available when the reading settings chunk fails to load', async ({ page }) => {
     const readingSettingsChunkPattern = /\/assets\/ReadingSettingsControl-[^/?]+\.js(?:\?.*)?$/
     let readingSettingsChunkRequests = 0
@@ -580,10 +622,126 @@ test('uploads, persists, and safely deletes local reading fonts without third-pa
   expect([...requestHosts].every(host => host === devServerHost)).toBe(true)
 })
 
+test('keeps local font management retryable when IndexedDB mutations fail', async ({ page }) => {
+  const pageErrors: string[] = []
+  page.on('pageerror', error => pageErrors.push(error.message))
+  await page.addInitScript(() => {
+    type LocalFontFaultWindow = Window & {
+      __miruLocalFontMutationFault?: 'rename' | 'delete' | null
+    }
+
+    const faultWindow = window as LocalFontFaultWindow
+    const originalPut = IDBObjectStore.prototype.put
+    const originalDelete = IDBObjectStore.prototype.delete
+    faultWindow.__miruLocalFontMutationFault = null
+
+    IDBObjectStore.prototype.put = function (value: unknown, key?: IDBValidKey): IDBRequest<IDBValidKey> {
+      if (this.name === 'fonts' && faultWindow.__miruLocalFontMutationFault === 'rename') {
+        faultWindow.__miruLocalFontMutationFault = null
+        throw new DOMException('Injected local font rename failure', 'UnknownError')
+      }
+
+      return Reflect.apply(originalPut, this, key === undefined ? [value] : [value, key]) as IDBRequest<IDBValidKey>
+    }
+
+    IDBObjectStore.prototype.delete = function (query: IDBValidKey | IDBKeyRange): IDBRequest<undefined> {
+      if (this.name === 'fonts' && faultWindow.__miruLocalFontMutationFault === 'delete') {
+        faultWindow.__miruLocalFontMutationFault = null
+        throw new DOMException('Injected local font delete failure', 'UnknownError')
+      }
+
+      return Reflect.apply(originalDelete, this, [query]) as IDBRequest<undefined>
+    }
+  })
+  await page.goto('/')
+  await page.getByTestId('reading-settings-button').click()
+
+  const uploadedFontName = 'space-mono-latin-400-normal'
+  const renamedFontName = 'Retry Serif'
+  const fontPath = fileURLToPath(import.meta.resolve('@ayingott/theme/fonts/space-mono-latin-400-normal.woff2'))
+  await page.getByTestId('local-font-file-input').setInputFiles(fontPath)
+  await expect(page.getByRole('radio', { name: `正文字体 ${uploadedFontName}` })).toHaveAttribute('aria-checked', 'true')
+  await page.getByRole('button', { name: /管理我的字体/ }).click()
+
+  const uploadedFontRow = page.locator('.reading-settings__saved-preset').filter({ hasText: uploadedFontName })
+  await uploadedFontRow.getByRole('button', { name: '重命名' }).click()
+  const renameInput = page.getByLabel(`重命名字体 ${uploadedFontName}`)
+  await renameInput.fill(renamedFontName)
+  await page.evaluate(() => {
+    const faultWindow = window as Window & { __miruLocalFontMutationFault?: 'rename' | 'delete' | null }
+    faultWindow.__miruLocalFontMutationFault = 'rename'
+  })
+  await renameInput.press('Enter')
+
+  const settingsPanel = page.getByTestId('reading-settings-panel')
+  const localFontAlert = settingsPanel.getByTestId('local-font-message')
+  await expect(localFontAlert).toHaveAttribute('role', 'alert')
+  await expect(localFontAlert).toContainText('字体名称暂时无法保存')
+  await expect(uploadedFontRow).toBeVisible()
+  await expect(page.getByRole('button', { name: '返回阅读设置' })).toBeFocused()
+  expect(pageErrors).toEqual([])
+
+  await uploadedFontRow.getByRole('button', { name: '重命名' }).click()
+  await page.getByLabel(`重命名字体 ${uploadedFontName}`).fill(renamedFontName)
+  await page.getByLabel(`重命名字体 ${uploadedFontName}`).press('Enter')
+  const renamedFontRow = page.locator('.reading-settings__saved-preset').filter({ hasText: renamedFontName })
+  await expect(renamedFontRow).toBeVisible()
+  await page.evaluate(() => {
+    const faultWindow = window as Window & { __miruLocalFontMutationFault?: 'rename' | 'delete' | null }
+    faultWindow.__miruLocalFontMutationFault = 'delete'
+  })
+  await renamedFontRow.getByRole('button', { name: '删除' }).click()
+  await renamedFontRow.getByRole('button', { name: '确认删除' }).click()
+
+  await expect(localFontAlert).toHaveAttribute('role', 'alert')
+  await expect(localFontAlert).toContainText('字体暂时无法删除')
+  await expect(renamedFontRow).toBeVisible()
+  await expect(renamedFontRow.getByRole('button', { name: '删除' })).toBeVisible()
+  await expect.poll(() => readInlineReadingTokens(page)).toMatchObject({
+    fontBody: expect.stringContaining('MiruLocalFont'),
+  })
+  expect(pageErrors).toEqual([])
+
+  await renamedFontRow.getByRole('button', { name: '删除' }).click()
+  await renamedFontRow.getByRole('button', { name: '确认删除' }).click()
+  await expect(renamedFontRow).toHaveCount(0)
+  expect(pageErrors).toEqual([])
+})
+
+test('cancels local font renaming with Escape before closing reading settings', async ({ page }) => {
+  await page.goto('/')
+  await page.getByTestId('reading-settings-button').click()
+
+  const uploadedFontName = 'space-mono-latin-400-normal'
+  const fontPath = fileURLToPath(import.meta.resolve('@ayingott/theme/fonts/space-mono-latin-400-normal.woff2'))
+  await page.getByTestId('local-font-file-input').setInputFiles(fontPath)
+  await page.getByRole('button', { name: /管理我的字体/ }).click()
+  const fontRow = page.locator('.reading-settings__saved-preset').filter({ hasText: uploadedFontName })
+  await fontRow.getByRole('button', { name: '重命名' }).click()
+  const renameInput = page.getByLabel(`重命名字体 ${uploadedFontName}`)
+  await renameInput.fill('Cancelled rename')
+
+  await renameInput.press('Escape')
+
+  await expect(page.getByTestId('reading-settings-panel')).toBeVisible()
+  await expect(renameInput).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '返回阅读设置' })).toBeFocused()
+
+  await page.keyboard.press('Escape')
+  await expect(page.getByTestId('reading-settings-panel')).toHaveCount(0)
+  await expect(page.getByTestId('reading-settings-button')).toBeFocused()
+})
+
 test('rejects malformed local font uploads without changing the current font', async ({ page }) => {
   await page.emulateMedia({ colorScheme: 'dark' })
   await page.goto('/')
   await page.getByTestId('reading-settings-button').click()
+
+  const uploadedFontName = 'space-mono-latin-400-normal'
+  const fontPath = fileURLToPath(import.meta.resolve('@ayingott/theme/fonts/space-mono-latin-400-normal.woff2'))
+  await page.getByTestId('local-font-file-input').setInputFiles(fontPath)
+  await expect(page.getByRole('radio', { name: `正文字体 ${uploadedFontName}` })).toHaveAttribute('aria-checked', 'true')
+  await page.getByRole('radio', { name: '正文字体 Newsreader' }).click()
 
   await page.getByTestId('local-font-file-input').setInputFiles({
     name: 'broken.woff2',
@@ -602,6 +760,11 @@ test('rejects malformed local font uploads without changing the current font', a
   })
   expect(contrastRatio(fontErrorColors.fg, fontErrorColors.bg)).toBeGreaterThanOrEqual(4.5)
   await expect(page.getByRole('radio', { name: '正文字体 Newsreader' })).toHaveAttribute('aria-checked', 'true')
+  await page.getByRole('button', { name: /管理我的字体/ }).click()
+  const managementStatus = page.getByTestId('reading-settings-panel').getByTestId('local-font-message')
+  await expect(managementStatus).toBeVisible()
+  await expect(managementStatus).toHaveAttribute('role', 'alert')
+  await expect(managementStatus).toContainText('字体无法解析,请换一个字体文件。')
   expect(await page.evaluate(() => localStorage.getItem('miru:reading-settings:v2'))).toBeNull()
 })
 
