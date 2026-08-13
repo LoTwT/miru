@@ -144,10 +144,17 @@ function focusFirstPanelItem(): void {
 }
 
 function onPanelKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Escape') {
-    event.preventDefault()
-    emit('close')
+  if (event.key !== 'Escape') {
+    return
   }
+
+  if (event.defaultPrevented) {
+    focusFirstPanelItem()
+    return
+  }
+
+  event.preventDefault()
+  emit('close')
 }
 
 function openPanel(panel: typeof activePanel.value): void {
@@ -171,6 +178,7 @@ function forwardRenamePreset(id: string, name: string): void {
 
 function forwardRenameLocalFont(id: string, name: string): void {
   emit('renameLocalFont', id, name)
+  focusFirstPanelItem()
 }
 
 function openLocalFontPicker(): void {
@@ -423,6 +431,17 @@ function syncOutlineViewport(): void {
         </button>
       </header>
 
+      <p
+        v-if="props.localFontMessage"
+        class="reading-settings__subpanel-note reading-settings__font-message"
+        :data-kind="props.localFontMessage.kind"
+        data-testid="local-font-message"
+        :role="props.localFontMessage.kind === 'error' ? 'alert' : 'status'"
+        aria-atomic="true"
+      >
+        {{ props.localFontMessage.text }}
+      </p>
+
       <div
         v-if="activePanel === 'main'"
         class="reading-settings__content"
@@ -534,13 +553,6 @@ function syncOutlineViewport(): void {
                 <span aria-hidden="true">→</span>
               </button>
             </div>
-            <p
-              v-if="props.localFontMessage"
-              class="reading-settings__subpanel-note reading-settings__font-message"
-              :data-kind="props.localFontMessage.kind"
-            >
-              {{ props.localFontMessage.text }}
-            </p>
           </fieldset>
 
           <fieldset class="reading-settings__field">
@@ -1298,6 +1310,10 @@ function syncOutlineViewport(): void {
 
 .reading-settings__subpanel-note {
   margin: 0.65rem 0 0;
+}
+
+.reading-settings__font-message {
+  margin: 0 0 0.65rem;
 }
 
 .reading-settings__font-message[data-kind="info"] {

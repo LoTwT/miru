@@ -837,6 +837,10 @@ function isEditableSearchShortcutTarget(target: EventTarget | null): boolean {
 
 function onCommandSurfaceKeydown(event: KeyboardEvent): void {
   if (event.key === 'Escape') {
+    if (isSettingsSurfaceOpen.value) {
+      return
+    }
+
     event.preventDefault()
     closeSurface({ restoreFocus: true })
     return

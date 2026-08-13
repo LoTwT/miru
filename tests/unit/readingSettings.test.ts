@@ -1,3 +1,5 @@
+import 'fake-indexeddb/auto'
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
@@ -10,7 +12,7 @@ import {
   sepiaContrastTokenOverrides,
   sepiaThemeTokenOverrides,
 } from '@/features/settings/readingSettingsOptions'
-import { createLocalFontStore } from '@/features/settings/localFonts'
+import { createLocalFontStore, deleteLocalFontsDatabase } from '@/features/settings/localFonts'
 import type { LocalFontMetadata, LocalFontRecord } from '@/features/settings/localFonts'
 import { useReadingSettings } from '@/features/settings/useReadingSettings'
 import {
@@ -962,6 +964,343 @@ describe('reading customization settings', () => {
     expect(addFont.mock.calls[0]?.[0].file).toBe(file)
   })
 
+  it('reports a local font initialization failure and retries it', async () => {
+    const localFont = createLocalFontRecord('font-retry', 'Retry Serif')
+    const { store, listFonts } = createMockLocalFontStore([localFont])
+    listFonts.mockRejectedValueOnce(new Error('simulated list failure'))
+    installFontFaceMock()
+    writePersistedReadingSettings({
+      version: 2,
+      themeStyle: 'brutal',
+      colorScheme: 'system',
+      fontFamily: createLocalFontFamilyId(localFont.id),
+    }, storage)
+    const settings = useReadingSettings({ root, storage, localFontStore: store })
+
+    await expect(settings.initializeLocalFonts()).resolves.toBeUndefined()
+
+    expect(settings.localFonts.value).toEqual([])
+    expect(settings.state.fontFamily).toBe(createLocalFontFamilyId(localFont.id))
+    expect(readPersistedReadingSettings(storage)?.fontFamily).toBe(createLocalFontFamilyId(localFont.id))
+    expect(settings.localFontMessage.value).toEqual({
+      kind: 'error',
+      text: '本地字体暂时无法读取。已保留当前字体设置,请稍后重试。',
+    })
+
+    await expect(settings.initializeLocalFonts()).resolves.toBeUndefined()
+
+    expect(listFonts).toHaveBeenCalledTimes(2)
+    expect(settings.localFonts.value.map(font => font.id)).toEqual([localFont.id])
+    expect(settings.state.fontFamily).toBe(createLocalFontFamilyId(localFont.id))
+    expect(root.style.getPropertyValue('--reading-font-body')).toContain('MiruLocalFont-font-retry')
+    expect(settings.localFontMessage.value).toBeNull()
+  })
+
+  it('retries local font initialization after the resource module becomes available', async () => {
+    const localFont = createLocalFontRecord('font-module-retry', 'Module Retry')
+    const { store, listFonts } = createMockLocalFontStore([localFont])
+    const localFontsModule = await import('@/features/settings/localFonts')
+    const loadLocalFontsModule = vi.fn()
+      .mockRejectedValueOnce(new Error('simulated module failure'))
+      .mockResolvedValueOnce(localFontsModule)
+    const settings = useReadingSettings({
+      root,
+      storage,
+      localFontStore: store,
+      loadLocalFontsModule,
+    })
+
+    await expect(settings.initializeLocalFonts()).resolves.toBeUndefined()
+
+    expect(listFonts).not.toHaveBeenCalled()
+    expect(settings.localFontMessage.value).toEqual({
+      kind: 'error',
+      text: '本地字体资源暂时无法加载。当前阅读不受影响,请重新加载页面后再试。',
+    })
+
+    await expect(settings.initializeLocalFonts()).resolves.toBeUndefined()
+
+    expect(loadLocalFontsModule).toHaveBeenCalledTimes(2)
+    expect(listFonts).toHaveBeenCalledOnce()
+    expect(settings.localFonts.value.map(font => font.id)).toEqual([localFont.id])
+    expect(settings.localFontMessage.value).toBeNull()
+  })
+
+  it('reconciles a slow local font snapshot after a newer upload', async () => {
+    const storedFont = createLocalFontRecord('font-stored', 'Stored Serif')
+    const uploadedFont = createLocalFontRecord('font-uploaded-later', 'Uploaded Later')
+    const storedMetadata = stripLocalFontBlob(storedFont)
+    const uploadedMetadata = stripLocalFontBlob(uploadedFont)
+    const firstList = createDeferred<LocalFontMetadata[]>()
+    const { store, listFonts } = createMockLocalFontStore([storedFont])
+    listFonts
+      .mockImplementationOnce(() => firstList.promise)
+      .mockResolvedValueOnce([storedMetadata, uploadedMetadata])
+    vi.mocked(store.addFont).mockResolvedValueOnce(uploadedFont)
+    installFontFaceMock()
+    const settings = useReadingSettings({ root, storage, localFontStore: store })
+
+    const initialization = settings.initializeLocalFonts()
+    await vi.waitFor(() => expect(listFonts).toHaveBeenCalledOnce())
+    await expect(settings.uploadLocalFont(new File(['font'], 'Uploaded Later.woff2', {
+      type: 'font/woff2',
+    }))).resolves.toBe(true)
+    firstList.resolve([storedMetadata])
+    await initialization
+
+    expect(listFonts).toHaveBeenCalledTimes(2)
+    expect(settings.localFonts.value.map(font => font.id)).toEqual([storedFont.id, uploadedFont.id])
+    expect(settings.state.fontFamily).toBe(createLocalFontFamilyId(uploadedFont.id))
+  })
+
+  it('does not let a slow upload override a newer font choice', async () => {
+    const uploadedFont = createLocalFontRecord('font-slow-upload', 'Slow Upload')
+    const { store } = createMockLocalFontStore([])
+    vi.mocked(store.addFont).mockResolvedValueOnce(uploadedFont)
+    const fontLoading = installDeferredFontFaceMock()
+    const settings = useReadingSettings({ root, storage, localFontStore: store })
+
+    const upload = settings.uploadLocalFont(new File(['font'], 'Slow Upload.woff2', {
+      type: 'font/woff2',
+    }))
+    await vi.waitFor(() => expect(fontLoading.pendingLoads).toHaveLength(1))
+    settings.updateFontFamily('system-sans')
+    fontLoading.resolveNext()
+    await expect(upload).resolves.toBe(true)
+
+    expect(settings.localFonts.value.map(font => font.id)).toEqual([uploadedFont.id])
+    expect(settings.state.fontFamily).toBe('system-sans')
+    expect(root.style.getPropertyValue('--reading-font-body')).toContain('Segoe UI')
+    expect(readPersistedReadingSettings(storage)?.fontFamily).toBeUndefined()
+  })
+
+  it('keeps a local font unchanged when renaming fails and allows retrying', async () => {
+    const localFont = createLocalFontRecord('font-rename', 'Original Serif')
+    const { blob: _blob, ...renamedMetadata } = {
+      ...localFont,
+      name: 'Renamed Serif',
+      updatedAt: '2026-01-02T00:00:00.000Z',
+    }
+    const { store } = createMockLocalFontStore([localFont])
+    const renameFont = vi.mocked(store.renameFont)
+    renameFont
+      .mockRejectedValueOnce(new Error('simulated rename failure'))
+      .mockResolvedValueOnce(renamedMetadata)
+    const settings = useReadingSettings({ root, storage, localFontStore: store })
+    await settings.initializeLocalFonts()
+
+    await expect(settings.renameLocalFont(localFont.id, 'Renamed Serif')).resolves.toBe(false)
+
+    expect(settings.localFonts.value.map(font => font.name)).toEqual(['Original Serif'])
+    expect(settings.localFontMessage.value).toEqual({
+      kind: 'error',
+      text: '字体名称暂时无法保存。原名称已保留,请稍后重试。',
+    })
+
+    await expect(settings.renameLocalFont(localFont.id, 'Renamed Serif')).resolves.toBe(true)
+
+    expect(renameFont).toHaveBeenCalledTimes(2)
+    expect(settings.localFonts.value.map(font => font.name)).toEqual(['Renamed Serif'])
+    expect(settings.localFontMessage.value).toEqual({
+      kind: 'info',
+      text: '已重命名为「Renamed Serif」。',
+    })
+  })
+
+  it('does not let an older font activation failure overwrite newer mutation feedback', async () => {
+    const localFont = createLocalFontRecord('font-stale-message', 'Original Name')
+    const renamedMetadata = {
+      ...stripLocalFontBlob(localFont),
+      name: 'New Name',
+      updatedAt: '2026-01-02T00:00:00.000Z',
+    }
+    const { store } = createMockLocalFontStore([localFont])
+    vi.mocked(store.renameFont).mockResolvedValueOnce(renamedMetadata)
+    const settings = useReadingSettings({ root, storage, localFontStore: store })
+    await settings.initializeLocalFonts()
+    const fontLoading = installDeferredFontFaceMock()
+
+    settings.updateFontFamily(createLocalFontFamilyId(localFont.id))
+    await vi.waitFor(() => expect(fontLoading.pendingLoads).toHaveLength(1))
+    await expect(settings.renameLocalFont(localFont.id, 'New Name')).resolves.toBe(true)
+    fontLoading.rejectNext(new Error('simulated stale font failure'))
+    await vi.waitFor(() => expect(settings.state.fontFamily).toBe('serif'))
+
+    expect(settings.localFontMessage.value).toEqual({
+      kind: 'info',
+      text: '已重命名为「New Name」。',
+    })
+  })
+
+  it('keeps a local font available when deletion fails and allows retrying', async () => {
+    const localFont = createLocalFontRecord('font-delete', 'Persistent Serif')
+    const { store } = createMockLocalFontStore([localFont])
+    const deleteFont = vi.mocked(store.deleteFont)
+    deleteFont
+      .mockRejectedValueOnce(new Error('simulated delete failure'))
+      .mockResolvedValueOnce(undefined)
+    const settings = useReadingSettings({ root, storage, localFontStore: store })
+    await settings.initializeLocalFonts()
+    const fontFaces = installFontFaceMock()
+    settings.updateFontFamily(createLocalFontFamilyId(localFont.id))
+    await vi.waitFor(() => expect(fontFaces.size).toBe(1))
+
+    await expect(settings.deleteLocalFont(localFont.id)).resolves.toBe(false)
+
+    expect(settings.localFonts.value.map(font => font.id)).toEqual([localFont.id])
+    expect(settings.state.fontFamily).toBe(createLocalFontFamilyId(localFont.id))
+    expect(readPersistedReadingSettings(storage)?.fontFamily).toBe(createLocalFontFamilyId(localFont.id))
+    expect(root.style.getPropertyValue('--reading-font-body')).toContain('MiruLocalFont-font-delete')
+    expect(fontFaces.size).toBe(1)
+    expect(settings.localFontMessage.value).toEqual({
+      kind: 'error',
+      text: '字体暂时无法删除。当前字体已保留,请稍后重试。',
+    })
+
+    await expect(settings.deleteLocalFont(localFont.id)).resolves.toBe(true)
+
+    expect(deleteFont).toHaveBeenCalledTimes(2)
+    expect(settings.localFonts.value).toEqual([])
+    expect(settings.state.fontFamily).toBe('serif')
+    expect(root.style.getPropertyValue('--reading-font-body')).toBe('')
+    expect(fontFaces.size).toBe(0)
+    expect(settings.localFontMessage.value).toEqual({
+      kind: 'info',
+      text: '已删除字体「Persistent Serif」。',
+    })
+  })
+
+  it('reports when an invalid uploaded font cannot be removed from local storage', async () => {
+    const localFont = createLocalFontRecord('font-orphan', 'Broken Serif')
+    const { store } = createMockLocalFontStore([])
+    vi.mocked(store.addFont).mockResolvedValueOnce(localFont)
+    vi.mocked(store.deleteFont).mockRejectedValueOnce(new Error('simulated cleanup failure'))
+    installRejectedFontFaceMock()
+    const settings = useReadingSettings({ root, storage, localFontStore: store })
+    const file = new File([new Uint8Array([0, 1, 2, 3])], 'Broken Serif.woff2', {
+      type: 'font/woff2',
+    })
+
+    await expect(settings.uploadLocalFont(file)).resolves.toBe(false)
+
+    expect(store.deleteFont).toHaveBeenCalledWith(localFont.id)
+    expect(settings.localFonts.value.map(font => font.id)).toEqual([localFont.id])
+    expect(settings.state.fontFamily).toBe('serif')
+    expect(settings.localFontMessage.value).toEqual({
+      kind: 'error',
+      text: '字体无法解析,且暂时无法从本机删除。已保留在「管理我的字体」中,请稍后删除。',
+    })
+  })
+
+  it('removes an invalid upload discovered by concurrent initialization after cleanup succeeds', async () => {
+    const invalidFont = createLocalFontRecord('font-invalid-concurrent', 'Invalid Concurrent')
+    const invalidMetadata = stripLocalFontBlob(invalidFont)
+    const { store, listFonts } = createMockLocalFontStore([])
+    vi.mocked(store.addFont).mockResolvedValueOnce(invalidFont)
+    listFonts.mockResolvedValueOnce([invalidMetadata])
+    vi.mocked(store.deleteFont).mockResolvedValueOnce(undefined)
+    const fontLoading = installDeferredFontFaceMock()
+    const settings = useReadingSettings({ root, storage, localFontStore: store })
+
+    const upload = settings.uploadLocalFont(new File(['invalid'], 'Invalid Concurrent.woff2', {
+      type: 'font/woff2',
+    }))
+    await vi.waitFor(() => expect(fontLoading.pendingLoads).toHaveLength(1))
+    await settings.initializeLocalFonts()
+    expect(settings.localFonts.value.map(font => font.id)).toEqual([invalidFont.id])
+
+    fontLoading.rejectNext(new Error('simulated invalid font'))
+    await expect(upload).resolves.toBe(false)
+
+    expect(store.deleteFont).toHaveBeenCalledWith(invalidFont.id)
+    expect(settings.localFonts.value).toEqual([])
+    expect(settings.state.fontFamily).toBe('serif')
+  })
+
+  it('does not revive an in-flight upload deleted before font registration finishes', async () => {
+    const uploadedFont = createLocalFontRecord('font-deleted-upload', 'Deleted Upload')
+    const uploadedMetadata = stripLocalFontBlob(uploadedFont)
+    const { store, listFonts } = createMockLocalFontStore([])
+    vi.mocked(store.addFont).mockResolvedValueOnce(uploadedFont)
+    listFonts.mockResolvedValueOnce([uploadedMetadata])
+    vi.mocked(store.deleteFont).mockResolvedValueOnce(undefined)
+    const fontLoading = installDeferredFontFaceMock()
+    const settings = useReadingSettings({ root, storage, localFontStore: store })
+
+    const upload = settings.uploadLocalFont(new File(['font'], 'Deleted Upload.woff2', {
+      type: 'font/woff2',
+    }))
+    await vi.waitFor(() => expect(fontLoading.pendingLoads).toHaveLength(1))
+    await settings.initializeLocalFonts()
+    expect(settings.localFonts.value.map(font => font.id)).toEqual([uploadedFont.id])
+
+    await expect(settings.deleteLocalFont(uploadedFont.id)).resolves.toBe(true)
+    fontLoading.resolveNext()
+    await expect(upload).resolves.toBe(false)
+
+    expect(settings.localFonts.value).toEqual([])
+    expect(settings.state.fontFamily).toBe('serif')
+    expect(fontLoading.fontFaces.size).toBe(0)
+    expect(store.deleteFont).toHaveBeenCalledWith(uploadedFont.id)
+  })
+
+  it('does not overwrite a newer rename when an in-flight upload finishes', async () => {
+    const uploadedFont = createLocalFontRecord('font-renamed-upload', 'Original Upload')
+    const uploadedMetadata = stripLocalFontBlob(uploadedFont)
+    const renamedMetadata = {
+      ...uploadedMetadata,
+      name: 'Renamed Upload',
+      updatedAt: '2026-01-02T00:00:00.000Z',
+    }
+    const { store, listFonts } = createMockLocalFontStore([])
+    vi.mocked(store.addFont).mockResolvedValueOnce(uploadedFont)
+    listFonts.mockResolvedValueOnce([uploadedMetadata])
+    vi.mocked(store.renameFont).mockResolvedValueOnce(renamedMetadata)
+    const fontLoading = installDeferredFontFaceMock()
+    const settings = useReadingSettings({ root, storage, localFontStore: store })
+
+    const upload = settings.uploadLocalFont(new File(['font'], 'Original Upload.woff2', {
+      type: 'font/woff2',
+    }))
+    await vi.waitFor(() => expect(fontLoading.pendingLoads).toHaveLength(1))
+    await settings.initializeLocalFonts()
+    await expect(settings.renameLocalFont(uploadedFont.id, 'Renamed Upload')).resolves.toBe(true)
+
+    fontLoading.resolveNext()
+    await expect(upload).resolves.toBe(true)
+
+    expect(settings.localFonts.value.map(font => font.name)).toEqual(['Renamed Upload'])
+    expect(settings.localFontMessage.value).toEqual({
+      kind: 'info',
+      text: '已重命名为「Renamed Upload」。',
+    })
+  })
+
+  it('does not restore font metadata when a rename overlaps deletion', async () => {
+    const dbName = `miru:test-reading-settings-fonts:${crypto.randomUUID()}`
+    const store = createLocalFontStore({ dbName })
+
+    try {
+      const font = await store.addFont({
+        file: new Blob(['font'], { type: 'font/woff2' }),
+        fileName: 'Concurrent Serif.woff2',
+        mimeType: 'font/woff2',
+        name: 'Concurrent Serif',
+      })
+      const renaming = store.renameFont(font.id, 'Renamed Too Late')
+      const deleting = store.deleteFont(font.id)
+
+      await Promise.all([renaming, deleting])
+
+      expect(await store.listFonts()).toEqual([])
+      expect(await store.getFont(font.id)).toBeNull()
+    }
+    finally {
+      await store.close().catch(() => undefined)
+      await deleteLocalFontsDatabase(dbName)
+    }
+  })
+
   it('loads only the selected local font at startup and lazily loads another on selection', async () => {
     const first = createLocalFontRecord('font-one', 'Quiet Serif')
     const second = createLocalFontRecord('font-two', 'Reading Sans')
@@ -1154,6 +1493,22 @@ function createLocalFontRecord(id: string, name: string): LocalFontRecord {
   }
 }
 
+function stripLocalFontBlob(record: LocalFontRecord): LocalFontMetadata {
+  const { blob: _blob, ...metadata } = record
+  return metadata
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+
+  return { promise, reject, resolve }
+}
+
 function createMockLocalFontStore(records: LocalFontRecord[]) {
   const metadata = records.map(({ blob: _blob, ...record }) => record satisfies LocalFontMetadata)
   const recordsById = new Map(records.map(record => [record.id, record]))
@@ -1209,7 +1564,10 @@ function installFontFaceMock(): Set<FontFace> {
 
 function installDeferredFontFaceMock() {
   const fontFaces = new Set<FontFace>()
-  const pendingLoads: Array<() => void> = []
+  const pendingLoads: Array<{
+    reject: (reason?: unknown) => void
+    resolve: () => void
+  }> = []
   const fontSet = {
     add(fontFace: FontFace) {
       fontFaces.add(fontFace)
@@ -1231,7 +1589,10 @@ function installDeferredFontFaceMock() {
     }
 
     load(): Promise<this> {
-      return new Promise(resolve => pendingLoads.push(() => resolve(this)))
+      return new Promise((resolve, reject) => pendingLoads.push({
+        reject,
+        resolve: () => resolve(this),
+      }))
     }
   }
 
@@ -1245,13 +1606,52 @@ function installDeferredFontFaceMock() {
     fontFaces,
     pendingLoads,
     resolveNext() {
-      const resolve = pendingLoads.shift()
-      if (!resolve) {
+      const pending = pendingLoads.shift()
+      if (!pending) {
         throw new Error('No pending font load')
       }
-      resolve()
+      pending.resolve()
+    },
+    rejectNext(reason?: unknown) {
+      const pending = pendingLoads.shift()
+      if (!pending) {
+        throw new Error('No pending font load')
+      }
+      pending.reject(reason)
     },
   }
+}
+
+function installRejectedFontFaceMock(): void {
+  const fontSet = {
+    add() {
+      return fontSet
+    },
+    delete() {
+      return false
+    },
+    [Symbol.iterator]() {
+      return [][Symbol.iterator]()
+    },
+  } as unknown as FontFaceSet
+
+  class RejectedFontFace {
+    family: string
+
+    constructor(family: string) {
+      this.family = family
+    }
+
+    async load(): Promise<this> {
+      throw new Error('simulated font parse failure')
+    }
+  }
+
+  vi.stubGlobal('FontFace', RejectedFontFace)
+  Object.defineProperty(document, 'fonts', {
+    configurable: true,
+    value: fontSet,
+  })
 }
 
 function contrastRatio(colorA: string, colorB: string): number {

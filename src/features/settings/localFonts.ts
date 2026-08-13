@@ -212,9 +212,12 @@ export function createLocalFontStore(options: LocalFontStoreOptions = {}) {
 
   async function renameFont(id: string, name: string): Promise<LocalFontMetadata | null> {
     const db = await getDb()
-    const record = await db.get('fonts', id)
+    const transaction = db.transaction('fonts', 'readwrite')
+    const fonts = transaction.objectStore('fonts')
+    const record = await fonts.get(id)
 
     if (!record) {
+      await transaction.done
       return null
     }
 
@@ -223,7 +226,10 @@ export function createLocalFontStore(options: LocalFontStoreOptions = {}) {
       name: normalizeLocalFontName(name),
       updatedAt: now(),
     }
-    await db.put('fonts', nextRecord)
+    await Promise.all([
+      fonts.put(nextRecord),
+      transaction.done,
+    ])
     return nextRecord
   }
 
